@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Study Assistant Hub</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: #f5f7fa;
+            min-height: 100vh;
+            padding: 2rem;
+            color: #2d3748;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding: 2rem;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        h1 {
+            color: #2d3748;
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .subtitle {
+            color: #4a5568;
+            font-size: 1.1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .welcome-section {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .welcome-section h2 {
+            color: #2d3748;
+            margin-bottom: 1rem;
+            font-size: 1.5rem;
+        }
+
+        .welcome-section p {
+            color: #4a5568;
+            line-height: 1.6;
+            margin-bottom: 1rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 2rem;
+            padding: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .card-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .card h2 {
+            color: #2d3748;
+            margin-bottom: 1rem;
+        }
+
+        .card p {
+            color: #4a5568;
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
+        }
+
+        .card-link {
+            text-decoration: none;
+            color: inherit;
+        }
+
+        .status-indicator {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #48bb78;
+        }
+
+        footer {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        footer p {
+            color: #4a5568;
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 1rem;
+            }
+
+            h1 {
+                font-size: 2rem;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Study Assistant Hub</h1>
+            <p class="subtitle">Your all-in-one learning companion</p>
+        </header>
+
+        <section class="welcome-section">
+            <h2>Welcome to Your Study Assistant</h2>
+            <p>The Study Assistant Hub is a powerful suite of AI-powered tools designed to enhance your learning experience. Our platform combines cutting-edge technology with proven learning methods to help you study more effectively and efficiently.</p>
+            <p>Whether you're preparing for exams, learning new concepts, or reviewing materials, our tools are here to support your educational journey.</p>
+        </section>
+
+        <div class="grid">
+            <a href="http://localhost:8501/" class="card-link" target="_blank">
+                <div class="card">
+                    <div class="status-indicator"></div>
+                    <div class="card-icon">💬</div>
+                    <h2>Chat Assistant</h2>
+                    <p>Engage in interactive conversations about your study materials. Get instant answers and explanations to your questions.</p>
+                </div>
+            </a>
+
+            <a href="http://localhost:8502/" class="card-link" target="_blank">
+                <div class="card">
+                    <div class="status-indicator"></div>
+                    <div class="card-icon">📝</div>
+                    <h2>Quiz Generator</h2>
+                    <p>Test your knowledge with automatically generated quizzes based on your study content. Track your progress and identify areas for improvement.</p>
+                </div>
+            </a>
+
+            <a href="http://localhost:8503/" class="card-link" target="_blank">
+                <div class="card">
+                    <div class="status-indicator"></div>
+                    <div class="card-icon">🎴</div>
+                    <h2>Flashcards</h2>
+                    <p>Create and study with AI-generated flashcards. Perfect for memorization and quick revision of key concepts.</p>
+                </div>
+            </a>
+
+            <a href="http://localhost:8504/" class="card-link" target="_blank">
+                <div class="card">
+                    <div class="status-indicator"></div>
+                    <div class="card-icon">📅</div>
+                    <h2>Study Planner</h2>
+                    <p>Generate personalized study schedules and track your learning progress. Stay organized and achieve your study goals.</p>
+                </div>
+            </a>
+        </div>
+
+        <footer>
+            <p>Made by TEAM404 as a part of hackathon conducted at IIITT</p>
+        </footer>
+    </div>
+</body>
+</html>
