@@ -45,4 +45,3 @@ The complete project zip file is attached as **Hackathon_Final_Gemini.zip**.
 **Gandra Praneeth Reddy**  
 - LinkedIn: [linkedin.com/in/praneeth-gandra-411ab3309](https://www.linkedin.com/in/praneeth-gandra-411ab3309/)  
 - GitHub: [gpr-27](https://github.com/gpr-27)  
-- Email: [231116@iiitt.ac.in](mailto:231116@iiitt.ac.in)
