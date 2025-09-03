@@ -7,7 +7,7 @@ You can watch the demo video here:
 # Hackathon Project - AI-Powered Study Assistant
 
 ## 📌 Overview
-This project was developed as part of a hackathon, where our team built an **AI-powered study assistant** designed to help students organize their learning more effectively.  
+This project was developed as part of a hackathon, where I built an **AI-powered study assistant** designed to help students organize their learning more effectively.  
 The platform integrates multiple AI-driven tools such as a study planner, chatbot, quiz generator, and flashcards, providing an interactive and personalized learning experience.
 
 ## 🚀 Features
