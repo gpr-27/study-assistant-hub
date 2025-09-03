@@ -4,7 +4,7 @@ You can watch the demo video here:
 👉 [Demo Video on Loom](https://www.loom.com/share/c085008c95e24905bdfb80574da06bba?sid=2ebc1e06-a936-459d-af67-b7f1a16d8f88)
 
 
-# Hackathon Project - AI-Powered Study Assistant
+# AI-Powered Study Assistant
 
 ## 📌 Overview
 This project was developed as part of a hackathon, where I built an **AI-powered study assistant** designed to help students organize their learning more effectively.  
