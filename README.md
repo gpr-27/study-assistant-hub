@@ -37,11 +37,7 @@ The platform integrates multiple AI-driven tools such as a study planner, chatbo
    ```bash
    streamlit run app.py
    ```
-   
-## 📦 Project Files
-The complete project zip file is attached as **Hackathon_Final_Gemini.zip**.
 
 ## 👤 Author
 **Gandra Praneeth Reddy**  
 - LinkedIn: [linkedin.com/in/praneeth-gandra-411ab3309](https://www.linkedin.com/in/praneeth-gandra-411ab3309/)  
-- GitHub: [gpr-27](https://github.com/gpr-27)  
