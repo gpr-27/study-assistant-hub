@@ -26,3 +26,4 @@ faiss_index/
 
 # Claude Code local tooling (personal settings + installed skills)
 .claude/
+.vercel

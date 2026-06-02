@@ -405,9 +405,9 @@ The mode flips on a single flag — `RAG_ENABLED` (defaults to **off** when the 
 
 ### Deploy to Vercel (lite mode)
 
-The repo is Vercel-ready: a root `app.py` exposes the FastAPI app, `vercel.json` configures
-the Python function (bundling `frontend/` + `documents/`), and the slim `requirements.txt`
-keeps the function under the size limit.
+The repo is Vercel-ready: `api/index.py` exposes the FastAPI app to the `@vercel/python`
+runtime, `vercel.json` rewrites every path to it and bundles `frontend/` + `documents/`,
+and the slim `requirements.txt` keeps the function under the size limit.
 
 ```bash
 vercel            # preview deploy (or: vercel --prod)
