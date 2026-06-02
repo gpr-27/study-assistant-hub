@@ -15,7 +15,16 @@ committed to the repository.
 
 Every embedding/index object is created lazily inside a function so that
 importing this module never downloads a model and never needs a Groq key.
+
+The heavy retrieval dependencies (``faiss-cpu``, ``fastembed``/onnxruntime,
+``langchain-community``) are imported *inside* the functions that use them — not
+at module load — so this module imports fine on a slim install that omits them
+(e.g. the serverless build, which runs in direct-text mode with RAG disabled).
+``from __future__ import annotations`` keeps the FAISS type hints from being
+evaluated at import time for the same reason.
 """
+from __future__ import annotations
+
 import contextlib
 import json
 import logging
@@ -26,11 +35,6 @@ try:
     import fcntl  # POSIX advisory file locks (Linux container, macOS dev).
 except ImportError:  # pragma: no cover — non-POSIX (e.g. Windows): no cross-process lock.
     fcntl = None
-
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.embeddings import FastEmbedEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from backend.config import EMBEDDING_MODEL, FAISS_INDEX_DIR
 from backend.documents import list_pdf_paths
@@ -53,8 +57,10 @@ class VectorStoreError(Exception):
     """Raised when an index cannot be built (e.g. no readable text in the PDFs)."""
 
 
-def _embeddings() -> FastEmbedEmbeddings:
+def _embeddings() -> "FastEmbedEmbeddings":
     """Build the local (keyless) embedding model used for FAISS retrieval."""
+    from langchain_community.embeddings import FastEmbedEmbeddings
+
     return FastEmbedEmbeddings(model_name=EMBEDDING_MODEL)
 
 
@@ -68,11 +74,15 @@ def warm_embeddings() -> None:
         log.debug("Embedding warmup failed (non-fatal).", exc_info=True)
 
 
-def build_index_from_paths(paths: list[Path]) -> FAISS:
+def build_index_from_paths(paths: list[Path]) -> "FAISS":
     """Load every PDF, split into chunks, and build an in-memory FAISS store.
 
     Used both to persist a subject index and for one-off uploaded-PDF chat.
     """
+    from langchain_community.document_loaders import PyPDFLoader
+    from langchain_community.vectorstores import FAISS
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=_CHUNK_SIZE,
         chunk_overlap=_CHUNK_OVERLAP,
@@ -144,12 +154,14 @@ def _index_is_fresh(subject: str) -> bool:
     return _read_manifest(subject) == _fingerprint(subject)
 
 
-def _load_from_disk(subject: str) -> FAISS:
+def _load_from_disk(subject: str) -> "FAISS":
     """Load a previously saved FAISS index for a subject.
 
     ``allow_dangerous_deserialization`` is safe here: these files are written by
     this app on the local machine, never fetched from an untrusted source.
     """
+    from langchain_community.vectorstores import FAISS
+
     return FAISS.load_local(
         str(_subject_index_dir(subject)),
         _embeddings(),

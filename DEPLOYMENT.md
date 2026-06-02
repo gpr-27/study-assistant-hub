@@ -33,24 +33,31 @@ with **fastembed** (no API key), and optionally persists per‑user history in
 
 ---
 
-## Why a container (and not serverless / Vercel)
+## Two runtime modes: full (container) vs. lite (serverless)
 
-This backend is a poor fit for serverless platforms (Vercel Functions, Lambda,
-etc.) and a great fit for a long‑lived container, because it:
+The app runs in one of two modes, selected automatically by `backend/config.py`
+(`RAG_ENABLED` — off when the platform sets `VERCEL`, on otherwise):
 
-- **Bundles heavy native dependencies** — `onnxruntime`, `faiss-cpu`, `numpy`,
-  the full LangChain stack. The installed footprint (~hundreds of MB) blows past
-  typical serverless bundle limits.
-- **Loads a local embedding model into memory** and keeps **per‑subject FAISS
-  indexes** cached in‑process. Serverless functions are ephemeral and would
-  rebuild/reload this on every cold start.
-- **Runs background threads** — a startup warmup (embeddings + indexes) and a
-  guest‑cleanup janitor — that need a process that stays alive.
-- **Holds a persistent MongoDB connection** and writes to disk (built indexes,
-  uploaded PDFs), which wants a writable, persistent filesystem.
+- **Full mode (this guide — container / VPS).** Chat uses **RAG**: local
+  `fastembed` embeddings + per‑subject **FAISS** retrieval. This needs the heavy
+  native stack (`onnxruntime`, `faiss-cpu`, the langchain‑community loaders),
+  background warmup/janitor threads, and a writable, persistent filesystem for the
+  built indexes and uploaded PDFs — all of which want a **long‑lived process**.
+- **Lite mode (serverless / Vercel).** The heavy retrieval stack is dropped
+  (`requirements.txt` is the slim base; `requirements-rag.txt` holds the extras),
+  no background threads run, and writable state lives under `/tmp`. Chat still
+  works — it grounds answers on the document **text** directly (clipped to
+  `MAX_CONTENT_TOKENS`), exactly like the quiz/flashcards/planner/mind‑map tools.
+  This is what makes the app fit a serverless function. See the
+  [Deploy to Vercel](README.md#deploy-to-vercel-lite-mode) section in the README.
 
-So: deploy the Docker image to any container host — **Render, Railway, Fly.io,
-Google Cloud Run, AWS App Runner/ECS, a plain VPS**, etc.
+**Pick full mode (a container) when** you want the richest grounded Chat (real
+retrieval over large corpora), persistent FAISS indexes, and uploaded subjects
+that survive restarts. Deploy the Docker image to any container host — **Render,
+Railway, Fly.io, Google Cloud Run, AWS App Runner/ECS, a plain VPS** — as below.
+
+**Pick lite mode (Vercel)** for a one‑command, autoscaling, zero‑server deploy
+where ephemeral uploaded subjects and direct‑text Chat grounding are acceptable.
 
 ## What the image contains
 

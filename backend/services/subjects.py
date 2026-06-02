@@ -8,8 +8,8 @@ only the affected subject is embedded.
 """
 from dataclasses import dataclass
 
-from backend import vector_store
-from backend.documents import DocumentError, save_pdf
+from backend import config, vector_store
+from backend.documents import DocumentError, list_pdf_names, read_pdf, save_pdf
 
 
 class SubjectError(Exception):
@@ -43,14 +43,24 @@ def add_subject(name: str, files: list[tuple[str, bytes]]) -> AddSubjectResult:
     if not saved:
         raise SubjectError("None of the uploaded files were valid PDFs.")
 
-    try:
-        chunk_count = vector_store.build_subject_index(name)
-    except vector_store.VectorStoreError as exc:
-        # The PDFs are saved, but nothing could be embedded (e.g. scanned images
-        # with no extractable text). Surface that clearly; the files remain.
-        raise SubjectError(
-            f"Saved {len(saved)} PDF(s), but no readable text was found to embed. "
-            "If these are scanned documents, they need a text layer (OCR)."
-        ) from exc
+    if config.RAG_ENABLED:
+        try:
+            chunk_count = vector_store.build_subject_index(name)
+        except vector_store.VectorStoreError as exc:
+            # The PDFs are saved, but nothing could be embedded (e.g. scanned images
+            # with no extractable text). Surface that clearly; the files remain.
+            raise SubjectError(
+                f"Saved {len(saved)} PDF(s), but no readable text was found to embed. "
+                "If these are scanned documents, they need a text layer (OCR)."
+            ) from exc
+    else:
+        # Lite mode (no embeddings): nothing to index, but still reject text-less PDFs so the
+        # subject is actually usable by the tools, which read this text directly.
+        if not any(read_pdf(name, n).strip() for n in list_pdf_names(name)):
+            raise SubjectError(
+                f"Saved {len(saved)} PDF(s), but no readable text was found. "
+                "If these are scanned documents, they need a text layer (OCR)."
+            )
+        chunk_count = 0
 
     return AddSubjectResult(subject=name, saved_pdfs=saved, chunk_count=chunk_count)

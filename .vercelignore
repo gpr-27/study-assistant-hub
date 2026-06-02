@@ -1,0 +1,36 @@
+# Keep the Vercel upload lean and secret-free. The serverless function needs only:
+# app.py, backend/**, frontend/** + documents/** (bundled via vercel.json includeFiles),
+# and requirements.txt. Everything below is irrelevant to the serverless runtime.
+
+# Virtualenvs & caches (the .venv is huge — never upload it)
+.venv
+venv
+env
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+
+# Rebuildable / unused-on-serverless artifacts
+faiss_index
+
+# Container & local-server tooling (Vercel uses its own runtime)
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-entrypoint.sh
+gunicorn.conf.py
+run.py
+frontend_server.py
+requirements-rag.txt
+requirements-dev.txt
+
+# Repo meta / dev assets / secrets
+.git
+.github
+.screens
+.claude
+tests
+*.md
+.env
+.env.*
