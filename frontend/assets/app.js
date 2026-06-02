@@ -24,11 +24,24 @@
   // defined in config.js which loads before this script). No API URL is hardcoded
   // here — config.js seeds apiBase synchronously and the server may override it.
   const apiUrl = (p) => window.AppConfig.apiBase + p;
+  // Auth readiness. The Clerk SDK (auth.js — a deferred ES module) only resolves the
+  // session AFTER this classic script has already run and mounted the first view. Any
+  // authenticated call made during first paint (notably the history panel) must not race
+  // ahead of it, or it fires with no token and 401s ("Sign in or continue as a guest…").
+  // auth.js calls window.__authReady() once the session is settled (immediately when there
+  // is no Clerk gate); the timeout is a backstop so requests can never hang if auth.js
+  // never loads. authHeaders() awaits this before reading the token.
+  const authReady = new Promise((resolve) => {
+    window.__authReady = resolve;
+    setTimeout(resolve, 4000);
+  });
   async function handle(res) {
     if (!res.ok) {
       let detail;
       try { detail = (await res.json()).detail; } catch (_) {}
-      throw new Error(detail || `${res.status} ${res.statusText}`);
+      const err = new Error(detail || `${res.status} ${res.statusText}`);
+      err.status = res.status;     // let callers special-case auth (401) vs real failures
+      throw err;
     }
     const ct = res.headers.get("content-type") || "";
     return ct.includes("application/json") ? res.json() : res.text();
@@ -42,6 +55,9 @@
   // Both are harmless no-ops when absent; the server prefers a valid Clerk session over a
   // guest id, so sending both during the brief upgrade window is safe.
   async function authHeaders(extra) {
+    // Wait until the auth layer has settled so first-paint requests carry the Clerk token
+    // instead of racing ahead of sign-in and 401ing. Resolves fast when there's no gate.
+    try { await authReady; } catch (_) {}
     const headers = Object.assign({}, extra);
     try {
       const token = window.Auth && window.Auth.getToken ? await window.Auth.getToken() : null;
@@ -356,8 +372,15 @@
         }
         items.forEach((item) => listEl.append(row(item)));
       } catch (e) {
-        listEl.replaceChildren(el(`<div class="muted hist-empty">Couldn’t load history.</div>`));
-        toast(e.message, "error");
+        // 401 = the session isn't established (signed out, or — pre auth-ready-gating —
+        // the token hadn't loaded yet). Show a quiet hint, never an error toast: this is
+        // what used to flash "Sign in or continue as a guest…" on every reload.
+        if (e.status === 401) {
+          listEl.replaceChildren(el(`<div class="muted hist-empty">Sign in to see your saved items.</div>`));
+        } else {
+          listEl.replaceChildren(el(`<div class="muted hist-empty">Couldn’t load history.</div>`));
+          toast(e.message, "error");
+        }
       }
     }
 

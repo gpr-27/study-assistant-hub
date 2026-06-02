@@ -80,9 +80,16 @@ function hideGuestCta() {
 async function boot() {
   const cfg = await window.AppConfig.ready;
 
+  // Tell the API layer (app.js) the session is settled, so authenticated first-paint
+  // requests stop waiting and fire WITH the token. Must run on every exit path below —
+  // once Clerk has loaded (or right away when there's no gate / Clerk can't load), the
+  // token situation is final and further blocking would only stall the UI.
+  const signalAuthReady = () => { try { window.__authReady && window.__authReady(); } catch (_) {} };
+
   // Graceful path: no Clerk key -> the app runs open, exactly as before. (Guests are only
   // meaningful as an alternative to a Clerk gate; with no gate everyone is already "local".)
   if (!cfg.clerkPublishableKey) {
+    signalAuthReady();
     revealApp();
     return;
   }
@@ -93,6 +100,7 @@ async function boot() {
   } catch (e) {
     console.error("Failed to load the Clerk SDK:", e);
     gateMessage("⚠ Couldn’t load the sign-in module. Check your connection and reload.");
+    signalAuthReady();
     return;
   }
 
@@ -102,6 +110,7 @@ async function boot() {
   } catch (e) {
     console.error("Clerk failed to initialize:", e);
     gateMessage("⚠ Sign-in is misconfigured — verify CLERK_PUBLISHABLE_KEY in your .env.");
+    signalAuthReady();
     return;
   }
 
@@ -113,6 +122,11 @@ async function boot() {
     getGuestId,
     isGuest: () => !clerk.user && !!getGuestId(),
   };
+
+  // Clerk has loaded and window.Auth is in place: clerk.session (if any) is restored, so
+  // getToken() returns the real token. Release the API layer's first-paint requests now —
+  // after this, authHeaders() will attach the token instead of racing ahead and 401ing.
+  signalAuthReady();
 
   let migrating = false;
   let mountedUserId = null;     // Clerk user id whose <UserButton> is currently mounted
@@ -254,7 +268,9 @@ async function boot() {
 }
 
 boot().catch((e) => {
-  // Never trap the user on the loader: if anything unexpected fails, reveal the app.
+  // Never trap the user on the loader: if anything unexpected fails, reveal the app and
+  // release the API layer (it also has its own timeout backstop).
   console.error("Auth gate error:", e);
+  try { window.__authReady && window.__authReady(); } catch (_) {}
   revealApp();
 });
