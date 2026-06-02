@@ -21,7 +21,7 @@ from uuid import uuid4
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 
-from backend import config, db, documents, vector_store
+from backend import db, vector_store
 from backend.auth import LOCAL_OWNER
 from backend.config import model_for, require_groq_key
 
@@ -60,21 +60,6 @@ def _new_chat_model(model: str | None = None) -> ChatGroq:
     return ChatGroq(model=model_for("chat", model), temperature=0.3)
 
 
-def _subject_context(subject: str) -> str:
-    """Concatenate a subject's PDF text, clipped to the single-call token budget.
-
-    The direct-text grounding used when RAG retrieval is disabled (lite/serverless mode):
-    instead of embedding + retrieving chunks, Chat sends one bounded slice of the subject's
-    documents to the LLM — the same strategy quiz/flashcards/planner/mind-map already use.
-    """
-    parts = [text for name in documents.list_pdf_names(subject)
-             if (text := documents.read_pdf(subject, name).strip())]
-    combined = "\n\n".join(parts)
-    if not combined:
-        raise ChatSessionError("No readable text was found in this subject's PDFs.")
-    return documents.clip_to_tokens(combined, config.MAX_CONTENT_TOKENS)
-
-
 def _register(session: dict) -> str:
     """Store a session and return its new id, evicting the oldest if over cap."""
     session_id = uuid4().hex
@@ -91,16 +76,13 @@ def start_subject_session(subject: str, model: str | None = None, owner: str = L
     The index is built once and reloaded from disk on later runs (see
     backend.vector_store), so reopening a subject is fast.
     """
-    # RAG mode retrieves per-question; lite mode grounds on the subject's text directly.
-    retriever = vector_store.get_subject_retriever(subject, _RETRIEVE_K) if config.RAG_ENABLED else None
-    context = None if config.RAG_ENABLED else _subject_context(subject)
+    retriever = vector_store.get_subject_retriever(subject, _RETRIEVE_K)
     label = f"Subject · {subject}"
     chat_id = db.create_chat(owner, {"mode": "subject", "subject": subject, "label": label,
                                      "model": model_for("chat", model)})
     session_id = _register({
         "mode": "subject",
         "retriever": retriever,
-        "context": context,
         "llm": _new_chat_model(model),
         "history": [],
         "label": label,
@@ -120,7 +102,6 @@ def start_topic_session(topic: str, model: str | None = None, owner: str = LOCAL
     session_id = _register({
         "mode": "topic",
         "retriever": None,
-        "context": None,
         "llm": _new_chat_model(model),
         "history": [],
         "label": label,
@@ -134,32 +115,22 @@ def start_topic_session(topic: str, model: str | None = None, owner: str = LOCAL
 
 def start_pdf_session(file_bytes: bytes, filename: str, model: str | None = None, owner: str = LOCAL_OWNER) -> tuple[str, str, str | None]:
     """Start a session backed by a single uploaded PDF (its bytes)."""
-    if config.RAG_ENABLED:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-        try:
-            tmp.write(file_bytes)
-            tmp.close()
-            store = vector_store.build_index_from_paths([Path(tmp.name)])
-        except vector_store.VectorStoreError as exc:
-            raise ChatSessionError(str(exc)) from exc
-        finally:
-            Path(tmp.name).unlink(missing_ok=True)
-        retriever = store.as_retriever(search_kwargs={"k": _RETRIEVE_K})
-        context = None
-    else:
-        # Lite mode: ground on the uploaded PDF's text directly (no embeddings).
-        text = documents.extract_pdf_text(file_bytes).strip()
-        if not text:
-            raise ChatSessionError("No readable text was found in the uploaded PDF.")
-        retriever = None
-        context = documents.clip_to_tokens(text, config.MAX_CONTENT_TOKENS)
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    try:
+        tmp.write(file_bytes)
+        tmp.close()
+        store = vector_store.build_index_from_paths([Path(tmp.name)])
+    except vector_store.VectorStoreError as exc:
+        raise ChatSessionError(str(exc)) from exc
+    finally:
+        Path(tmp.name).unlink(missing_ok=True)
 
+    retriever = store.as_retriever(search_kwargs={"k": _RETRIEVE_K})
     label = f"PDF · {filename}"
     chat_id = db.create_chat(owner, {"mode": "pdf", "label": label, "model": model_for("chat", model)})
     session_id = _register({
         "mode": "pdf",
         "retriever": retriever,
-        "context": context,
         "llm": _new_chat_model(model),
         "history": [],
         "label": label,
@@ -221,18 +192,11 @@ def ask(session_id: str, message: str) -> str:
 
     history: list[tuple[str, str]] = session["history"]
     retriever = session["retriever"]
-    context = session.get("context")
     first_turn = not history
 
     if retriever is not None:
-        # RAG mode: retrieve the most relevant chunks for this question.
         docs = retriever.invoke(message)
-        grounding = "\n\n".join(doc.page_content for doc in docs)
-        messages = [SystemMessage(content=_SUBJECT_PERSONA)]
-        messages.extend(_history_messages(history))
-        messages.append(HumanMessage(content=f"Context:\n{grounding}\n\nQuestion: {message}"))
-    elif context:
-        # Lite mode: ground on the fixed slice of document text captured at session start.
+        context = "\n\n".join(doc.page_content for doc in docs)
         messages = [SystemMessage(content=_SUBJECT_PERSONA)]
         messages.extend(_history_messages(history))
         messages.append(HumanMessage(content=f"Context:\n{context}\n\nQuestion: {message}"))
@@ -279,16 +243,8 @@ def resume_session(owner: str, chat_id: str) -> tuple[str, str, str, str, list[d
     stored = doc.get("messages", []) or []
 
     retriever = None
-    context = None
     if mode == "subject" and subject:
-        if config.RAG_ENABLED:
-            retriever = vector_store.get_subject_retriever(subject, _RETRIEVE_K)
-        else:
-            # Lite mode: re-derive the subject's text grounding (best-effort).
-            try:
-                context = _subject_context(subject)
-            except ChatSessionError:
-                context = None
+        retriever = vector_store.get_subject_retriever(subject, _RETRIEVE_K)
 
     # Rebuild the (question, answer) history from stored alternating messages.
     history: list[tuple[str, str]] = []
@@ -303,7 +259,6 @@ def resume_session(owner: str, chat_id: str) -> tuple[str, str, str, str, list[d
     session_id = _register({
         "mode": mode,
         "retriever": retriever,
-        "context": context,
         "llm": _new_chat_model(model),
         "history": history,
         "label": label,

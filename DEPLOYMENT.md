@@ -6,7 +6,11 @@ app is a single FastAPI server that serves both the vanilla‑JS SPA and the
 with **fastembed** (no API key), and optionally persists per‑user history in
 **MongoDB**.
 
-> **TL;DR**
+> **TL;DR — Render (recommended):** push to GitHub → Render dashboard → **New +
+> → Blueprint** → connect the repo → set `GROQ_API_KEY` → done. One Web Service
+> serves the SPA **and** the API.
+>
+> **TL;DR — local Docker:**
 > ```bash
 > cp .env.production.example .env     # fill in GROQ_API_KEY (+ optional Mongo/Clerk)
 > docker compose up --build -d        # build + run
@@ -17,6 +21,7 @@ with **fastembed** (no API key), and optionally persists per‑user history in
 
 ## Table of contents
 
+- [Deploy to Render (one-click Blueprint)](#deploy-to-render-one-click-blueprint)
 - [Why a container (and not serverless / Vercel)](#why-a-container-and-not-serverless--vercel)
 - [What the image contains](#what-the-image-contains)
 - [Configuration & secrets](#configuration--secrets)
@@ -33,31 +38,58 @@ with **fastembed** (no API key), and optionally persists per‑user history in
 
 ---
 
-## Two runtime modes: full (container) vs. lite (serverless)
+## Deploy to Render (one-click Blueprint)
 
-The app runs in one of two modes, selected automatically by `backend/config.py`
-(`RAG_ENABLED` — off when the platform sets `VERCEL`, on otherwise):
+The repo ships a [`render.yaml`](render.yaml) Blueprint that provisions a single
+Render **Web Service** building the production `Dockerfile`. One service serves the
+SPA and the `/api/*` routes on one origin, with full RAG (local embeddings + FAISS).
 
-- **Full mode (this guide — container / VPS).** Chat uses **RAG**: local
-  `fastembed` embeddings + per‑subject **FAISS** retrieval. This needs the heavy
-  native stack (`onnxruntime`, `faiss-cpu`, the langchain‑community loaders),
-  background warmup/janitor threads, and a writable, persistent filesystem for the
-  built indexes and uploaded PDFs — all of which want a **long‑lived process**.
-- **Lite mode (serverless / Vercel).** The heavy retrieval stack is dropped
-  (`requirements.txt` is the slim base; `requirements-rag.txt` holds the extras),
-  no background threads run, and writable state lives under `/tmp`. Chat still
-  works — it grounds answers on the document **text** directly (clipped to
-  `MAX_CONTENT_TOKENS`), exactly like the quiz/flashcards/planner/mind‑map tools.
-  This is what makes the app fit a serverless function. See the
-  [Deploy to Vercel](README.md#deploy-to-vercel-lite-mode) section in the README.
+1. Push the repo to GitHub.
+2. Open <https://dashboard.render.com> → **New + → Blueprint** and connect the repo.
+3. Render reads `render.yaml` and shows the service → **Apply**.
+4. Set the env vars it marks as required-at-deploy (`sync: false`): **`GROQ_API_KEY`**
+   is the only required one. Add `CLERK_PUBLISHABLE_KEY` (+ optional `CLERK_SECRET_KEY`)
+   to enable the sign-in gate, and `MONGODB_URI` to enable saved history.
+5. Render builds the image (~5–10 min — it installs FAISS/fastembed and pre-bakes the
+   embedding model) and serves at `https://<service-name>.onrender.com`. The health
+   check hits `/api/health`.
 
-**Pick full mode (a container) when** you want the richest grounded Chat (real
-retrieval over large corpora), persistent FAISS indexes, and uploaded subjects
-that survive restarts. Deploy the Docker image to any container host — **Render,
-Railway, Fly.io, Google Cloud Run, AWS App Runner/ECS, a plain VPS** — as below.
+**Notes & gotchas:**
 
-**Pick lite mode (Vercel)** for a one‑command, autoscaling, zero‑server deploy
-where ephemeral uploaded subjects and direct‑text Chat grounding are acceptable.
+- **Memory.** The `free` instance is **512 MB**; the embedding model loads per worker
+  (`WEB_CONCURRENCY=1` in the blueprint keeps that to one copy). If the first chat OOMs
+  or the service restarts, change `plan: free` → `plan: standard` (2 GB) in `render.yaml`
+  or the dashboard.
+- **Cold starts.** Free services sleep after ~15 min idle and take ~30–60 s to wake.
+- **FAISS indexes** rebuild from the bundled PDFs on each start (free tier has no
+  persistent disk). Uncomment the `disk:` block in `render.yaml` (paid plans) to cache
+  them at `/app/faiss_index` across restarts.
+- **History/MongoDB.** Add `0.0.0.0/0` to **Atlas → Network Access** so Render's dynamic
+  egress IPs can connect (RAG chat itself works without Mongo).
+- **`PORT`.** Render injects `PORT`; the app binds `0.0.0.0:$PORT` automatically — only
+  `HOST=0.0.0.0` is set in the blueprint.
+
+The same image runs on **Railway / Fly.io / Cloud Run / a VPS** — see
+[Deploying to a managed platform](#deploying-to-a-managed-platform).
+
+## Why a container (and not serverless / Vercel)
+
+This backend is a poor fit for serverless platforms (Vercel Functions, Lambda,
+etc.) and a great fit for a long‑lived container, because it:
+
+- **Bundles heavy native dependencies** — `onnxruntime`, `faiss-cpu`, `numpy`,
+  the full LangChain stack. The installed footprint (~hundreds of MB) blows past
+  typical serverless bundle limits.
+- **Loads a local embedding model into memory** and keeps **per‑subject FAISS
+  indexes** cached in‑process. Serverless functions are ephemeral and would
+  rebuild/reload this on every cold start.
+- **Runs background threads** — a startup warmup (embeddings + indexes) and a
+  guest‑cleanup janitor — that need a process that stays alive.
+- **Holds a persistent MongoDB connection** and writes to disk (built indexes,
+  uploaded PDFs), which wants a writable, persistent filesystem.
+
+So: deploy the Docker image to any container host — **Render, Railway, Fly.io,
+Google Cloud Run, AWS App Runner/ECS, a plain VPS**, etc.
 
 ## What the image contains
 

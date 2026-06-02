@@ -41,24 +41,19 @@ async def lifespan(_app: "FastAPI"):
 
     # In the background, warm the local embedding model (one-time download) and
     # build any missing/stale per-subject indexes, so the first chat session is
-    # instant and later runs just load saved indexes from disk. Only relevant when
-    # RAG retrieval is enabled — skipped in lite/serverless mode (no embeddings).
+    # instant and later runs just load saved indexes from disk.
     def _warm() -> None:
         log.info("Warming embeddings and per-subject indexes in the background…")
         warm_embeddings()
         warm_all_subjects()
         log.info("Embedding/index warmup complete.")
 
-    if config.RAG_ENABLED:
-        threading.Thread(target=_warm, daemon=True).start()
+    threading.Thread(target=_warm, daemon=True).start()
 
     # Start the guest janitor: it reaps artifacts orphaned when an inactive guest is
     # removed by MongoDB's TTL index (TTL drops the guest record but can't cascade to its
-    # chats/quizzes/etc). No-op when persistence is disabled. Skipped on serverless, where a
-    # long-lived daemon can't run (the function freezes between requests); Mongo's TTL index
-    # still expires idle guests, and orphan-sweeping isn't time-critical.
-    if not config.IS_SERVERLESS:
-        db.start_guest_janitor()
+    # chats/quizzes/etc). No-op when persistence is disabled.
+    db.start_guest_janitor()
     yield
     # Shutdown: release the Mongo client if persistence was used.
     db.close()

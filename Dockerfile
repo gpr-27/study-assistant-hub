@@ -39,12 +39,10 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install dependencies in their own layer so editing app code never busts the
-# (slow) dependency cache. The container runs the FULL app, so it installs the RAG
-# extras (FAISS + fastembed) on top of the base set — requirements-rag.txt pulls in
-# requirements.txt. (The serverless/Vercel build installs ONLY requirements.txt.)
-COPY requirements.txt requirements-rag.txt ./
+# (slow) dependency cache.
+COPY requirements.txt ./
 RUN pip install --upgrade pip \
- && pip install -r requirements-rag.txt
+ && pip install -r requirements.txt
 
 # -----------------------------------------------------------------------------
 # Stage 2 — runtime
