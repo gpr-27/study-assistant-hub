@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Secrets / local config
+.env
+.env.local
+
+# Generated artifacts (rebuildable)
+faiss_index/
+
+# Dev screenshots
+.screens/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local tooling (personal settings + installed skills)
+.claude/
