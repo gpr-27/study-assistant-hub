@@ -18,7 +18,7 @@ An AI study companion with **five tools** — **Chat**, **Quiz**, **Flashcards**
 9. [Project structure](#-project-structure)
 10. [API reference](#-api-reference)
 11. [Running the tests](#-running-the-tests)
-12. [Deploy to production (Docker)](#-deploy-to-production-docker)
+12. [Deploy to production](#-deploy-to-production)
 13. [Troubleshooting](#-troubleshooting)
 14. [Author](#-author)
 
@@ -67,11 +67,8 @@ Plus: a **light/dark theme** toggle (defaults to light; your choice is remembere
    ```bash
    python3 -m venv .venv
    source .venv/bin/activate          # Windows: .venv\Scripts\activate
-   pip install -r requirements-rag.txt   # full app: base deps + the local retrieval stack
+   pip install -r requirements.txt
    ```
-   > `requirements.txt` is the **slim** base (used by the serverless/Vercel build and CI);
-   > `requirements-rag.txt` adds the heavy local-embeddings + FAISS stack and pulls the base
-   > in, so the one command above installs everything for the full local app.
 3. **Create your `.env`**
    ```bash
    cp .env.example .env               # then edit .env and fill it in
@@ -309,6 +306,7 @@ faiss_index/<Subject>/          gitignored, rebuildable embedding indexes
 tests/                          pytest suite
 run.py                          launcher (re-execs into .venv, runs uvicorn; also starts the SPA server in split-origin mode)
 frontend_server.py              static SPA server for split-origin mode (serves the SPA on FRONTEND_PORT)
+render.yaml                     one-click Render Blueprint (one Web Service serves SPA + API, full RAG)
 Dockerfile                      production image (multi-stage; gunicorn+uvicorn; pre-baked models; non-root)
 docker-compose.yml              production-style run (app + optional MongoDB profile; volumes for indexes/uploads)
 docker-entrypoint.sh            seeds the documents dir, then execs gunicorn
@@ -370,12 +368,32 @@ It covers document/path-safety, the vector store, chat session errors, mind-map 
 
 ---
 
-## 🐳 Deploy to production (Docker)
+## 🚀 Deploy to production
 
-The repo is production-ready and containerized. The image runs the app in
-**single-server mode** (one FastAPI process serves the SPA **and** the API) with
-**Gunicorn + Uvicorn workers**, a **non-root** user, **pre-baked local models**
-(no first-request download), and a `/api/health` healthcheck.
+The app runs in **single-server mode** — one FastAPI process (Gunicorn + Uvicorn
+workers, non-root, pre-baked models, `/api/health` healthcheck) serves the SPA
+**and** the API on one origin, with full RAG (local embeddings + FAISS). It's a
+long-lived process by design (in-memory embedding model, on-disk indexes,
+background warmup), so deploy it to a **container host** — not a serverless
+function.
+
+### Render (one-click) — recommended
+
+The repo ships a [`render.yaml`](render.yaml) Blueprint: a single Render **Web
+Service** builds the Dockerfile and serves the whole app.
+
+1. Push to GitHub, then open <https://dashboard.render.com> → **New + → Blueprint**.
+2. Connect this repo → **Apply**.
+3. Set the prompted secrets — only **`GROQ_API_KEY`** is required; add
+   `CLERK_PUBLISHABLE_KEY` + `MONGODB_URI` for the sign-in gate and saved history.
+4. Render builds the image (~5–10 min) and serves at `https://<name>.onrender.com`.
+
+> Free tier = 512 MB and sleeps after ~15 min idle (cold start ~30–60 s); bump to a
+> 2 GB instance if the embedding model OOMs. For saved history, allow `0.0.0.0/0` in
+> **MongoDB Atlas → Network Access** (cloud hosts use dynamic IPs). The same image
+> runs on **Railway / Fly.io / Cloud Run / a VPS** too.
+
+### Docker (local or any host)
 
 ```bash
 cp .env.production.example .env     # fill in GROQ_API_KEY (+ optional Mongo/Clerk)
@@ -383,52 +401,15 @@ docker compose up --build -d        # build + run
 # open http://localhost:8000   ·   health: http://localhost:8000/api/health
 ```
 
-Your secrets come from `.env` at **run time** (never baked into the image);
-production runtime mode and `0.0.0.0` binding are forced by `docker-compose.yml`.
-Built FAISS indexes (`/app/faiss_index`) and uploaded subjects (`/app/documents`)
-persist in named volumes.
-
-### Two deployment modes
-
-The app ships with **two** runtime modes, chosen automatically by the host:
-
-| | **Full** (container / VPS) | **Lite** (serverless / Vercel) |
-|---|---|---|
-| Chat grounding | **RAG** — local `fastembed` embeddings + FAISS retrieval | **Direct document text** sent to the LLM (clipped to `MAX_CONTENT_TOKENS`) |
-| Heavy deps (`faiss-cpu`, `fastembed`/onnxruntime) | installed (`requirements-rag.txt`) | **omitted** (`requirements.txt` only) |
-| Background threads, writable disk | yes | no (state under `/tmp`, no warmup/janitor) |
-| Quiz · Flashcards · Planner · Mind Map | ✅ identical | ✅ identical |
-| Best for | richest Chat, persistent indexes | one-command deploy, autoscaling, zero servers |
-
-The mode flips on a single flag — `RAG_ENABLED` (defaults to **off** when the platform sets
-`VERCEL`, **on** otherwise). No code changes; see `backend/config.py`.
-
-### Deploy to Vercel (lite mode)
-
-The repo is Vercel-ready: `api/index.py` exposes the FastAPI app to the `@vercel/python`
-runtime, `vercel.json` rewrites every path to it and bundles `frontend/` + `documents/`,
-and the slim `requirements.txt` keeps the function under the size limit.
-
-```bash
-vercel            # preview deploy (or: vercel --prod)
-```
-
-Set the project's environment variables in the Vercel dashboard (or `vercel env add`):
-`GROQ_API_KEY` (+ `LLM_PROVIDER`, `AVAILABLE_MODELS`, `DEFAULT_MODEL`), and optionally
-`CLERK_PUBLISHABLE_KEY`/`CLERK_SECRET_KEY` and `MONGODB_URI` for auth + history. `VERCEL=1`
-is set by the platform, so the app boots straight into lite mode.
-
-> **When to prefer a container instead.** Full RAG chat, persistent FAISS indexes, and
-> durably-saved uploaded subjects want a long-lived process — deploy the Docker image to
-> **Render / Railway / Fly.io / Cloud Run / a VPS**. On serverless, uploaded subjects are
-> ephemeral (reset on cold start) and Chat grounds on document text rather than retrieval.
+Secrets come from `.env` at **run time** (never baked into the image); built FAISS
+indexes (`/app/faiss_index`) and uploaded subjects (`/app/documents`) persist in
+named volumes.
 
 Two GitHub Actions are included: **CI** (tests on every push/PR) and **Docker**
 (builds & publishes the image to GHCR on `main` / version tags).
 
-**👉 Full guide:** [`DEPLOYMENT.md`](DEPLOYMENT.md) — compose & plain-`docker`
-recipes, volumes, scaling/workers, TLS/reverse-proxy, per-platform notes, CI/CD,
-and a security checklist.
+**👉 Full guide:** [`DEPLOYMENT.md`](DEPLOYMENT.md) — Render + Docker recipes,
+volumes, scaling/workers, TLS/reverse-proxy, CI/CD, and a security checklist.
 
 ---
 

@@ -1,0 +1,74 @@
+# Render Blueprint — one server runs the whole app.
+#
+# A single Render Web Service builds the production Dockerfile and serves BOTH the
+# vanilla-JS SPA and the /api/* routes on one origin (single-server mode), with full
+# RAG: local fastembed embeddings + per-subject FAISS retrieval over your PDFs —
+# identical to running it locally.
+#
+# Deploy (one-time, ~2 min of clicks):
+#   1. Push this file (done) → https://dashboard.render.com → New + → Blueprint
+#   2. Connect the GitHub repo (gpr-27/study-assistant-hub) → Apply
+#   3. Render prompts for the env vars marked `sync: false` below. The only REQUIRED
+#      one is GROQ_API_KEY. Add CLERK_PUBLISHABLE_KEY + MONGODB_URI too if you want the
+#      sign-in gate and saved history (otherwise the app runs open with no history).
+#   4. Render builds the Dockerfile (~5–10 min: installs FAISS/fastembed and pre-bakes
+#      the embedding model) and serves at https://<name>.onrender.com
+#
+# Notes:
+#   • Free instance = 512 MB RAM and spins down after ~15 min idle (cold start ~30–60 s).
+#     The embedding model loads per worker; if first chat OOMs/restarts, set `plan: standard`
+#     (2 GB) below or in the dashboard.
+#   • FAISS indexes rebuild from the bundled PDFs on each start (free tier has no disk).
+#     Uncomment the `disk:` block on a paid plan to cache them across restarts.
+#   • History needs MongoDB reachable from Render: add 0.0.0.0/0 to your Atlas Network
+#     Access. RAG chat itself works without Mongo.
+services:
+  - type: web
+    name: study-assistant-hub
+    runtime: docker
+    plan: free                    # bump to `standard` (2 GB) if the embedding model OOMs
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true              # redeploy on every push to the connected branch
+    # disk:                       # paid plans only — persist built FAISS indexes across restarts
+    #   name: faiss-index
+    #   mountPath: /app/faiss_index
+    #   sizeGB: 1
+    envVars:
+      # --- Runtime ---
+      - key: APP_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0            # Render injects PORT; the app binds 0.0.0.0:$PORT
+      - key: WEB_CONCURRENCY
+        value: "1"                # 1 worker fits 512 MB (each loads its own embedding model)
+      - key: LOG_LEVEL
+        value: INFO
+      # --- LLM provider (REQUIRED) ---
+      - key: LLM_PROVIDER
+        value: groq
+      - key: GROQ_API_KEY
+        sync: false               # REQUIRED secret — set in the Render dashboard
+      # --- Models (no secrets) ---
+      - key: AVAILABLE_MODELS
+        value: "llama-3.3-70b-versatile|Llama 3.3 70B,llama-3.1-8b-instant|Llama 3.1 8B,openai/gpt-oss-120b|GPT-OSS 120B,openai/gpt-oss-20b|GPT-OSS 20B,openai/gpt-oss-safeguard-20b|GPT-OSS Safeguard 20B,qwen/qwen3-32b|Qwen 3 32B,groq/compound|Groq Compound,groq/compound-mini|Groq Compound Mini"
+      - key: DEFAULT_MODEL
+        value: llama-3.3-70b-versatile
+      - key: MINDMAP_MODEL
+        value: llama-3.1-8b-instant
+      # --- Embeddings (local, keyless — pre-baked into the image) ---
+      - key: EMBEDDING_MODEL
+        value: BAAI/bge-small-en-v1.5
+      - key: MAX_CONTENT_TOKENS
+        value: "7000"
+      # --- Auth (optional, Clerk). Leave unset to run the app open (no sign-in gate). ---
+      - key: CLERK_PUBLISHABLE_KEY
+        sync: false               # optional — your pk_test_/pk_live_ key
+      - key: CLERK_SECRET_KEY
+        sync: false               # optional — enables server-side JWT verification
+      # --- Persistence (optional, MongoDB). Leave unset for no saved history. ---
+      - key: MONGODB_URI
+        sync: false               # optional secret — your Atlas connection string
+      - key: MONGODB_DB_NAME
+        value: study_assistant_hub

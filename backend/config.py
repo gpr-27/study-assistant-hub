@@ -43,12 +43,9 @@ log = logging.getLogger("backend.config")
 # Paths — derived from the repository layout, NOT environment-specific.
 # ---------------------------------------------------------------------------
 ROOT_DIR: Path = _REPO_ROOT
+DOCUMENTS_DIR: Path = ROOT_DIR / "documents"
+FAISS_INDEX_DIR: Path = ROOT_DIR / "faiss_index"
 FRONTEND_DIR: Path = ROOT_DIR / "frontend"
-# Study material that ships with the app (read-only on serverless hosts). On a writable host
-# this IS the documents dir; on serverless it is the seed copied into a writable /tmp dir.
-_BUNDLED_DOCUMENTS_DIR: Path = ROOT_DIR / "documents"
-# DOCUMENTS_DIR and FAISS_INDEX_DIR are resolved further below, once IS_SERVERLESS is known
-# (serverless needs writable /tmp paths) — see "Serverless" in the resolved-config section.
 
 
 # ---------------------------------------------------------------------------
@@ -121,14 +118,6 @@ def _get_csv(name: str) -> list[str]:
     return seen
 
 
-def _get_bool(name: str) -> bool | None:
-    """Return a truthy/falsey env flag, or None if unset (so a default can apply)."""
-    raw = _get(name)
-    if raw is None:
-        return None
-    return raw.lower() in {"1", "true", "yes", "on"}
-
-
 # ---------------------------------------------------------------------------
 # Model label derivation.
 # ---------------------------------------------------------------------------
@@ -194,53 +183,6 @@ LOG_LEVEL: str = (_get("LOG_LEVEL") or "INFO").upper()
 IS_PRODUCTION: bool = APP_ENV == ENV_PRODUCTION
 IS_DEVELOPMENT: bool = APP_ENV == ENV_DEVELOPMENT
 RELOAD: bool = IS_DEVELOPMENT          # auto-reload only in development
-
-# ---------------------------------------------------------------------------
-# Serverless (e.g. Vercel) — "lite" runtime mode.
-# ---------------------------------------------------------------------------
-# Vercel sets VERCEL=1 in both build and runtime. On any serverless host the app must run
-# without the heavy local-embeddings/FAISS retrieval stack (it can't fit the function size
-# limit, wants a writable persistent disk, and would re-download the model on every cold
-# start) and without long-lived background threads. Override explicitly with SERVERLESS=1/0.
-_SERVERLESS_OVERRIDE = _get_bool("SERVERLESS")
-IS_SERVERLESS: bool = _SERVERLESS_OVERRIDE if _SERVERLESS_OVERRIDE is not None else bool(_get("VERCEL"))
-# Retrieval-augmented chat (local fastembed embeddings + FAISS) needs that heavy stack and a
-# writable disk — present in the container build, not on serverless. When disabled, Chat sends
-# a bounded slice of the document text straight to the LLM (exactly like quiz/flashcards/etc).
-_RAG_OVERRIDE = _get_bool("RAG_ENABLED")
-RAG_ENABLED: bool = _RAG_OVERRIDE if _RAG_OVERRIDE is not None else not IS_SERVERLESS
-
-
-def _seed_serverless_documents(documents_dir: Path, faiss_dir: Path) -> None:
-    """Copy the bundled (read-only) subjects into the writable /tmp docs dir, once.
-
-    The serverless bundle is read-only except /tmp, so reads of the shipped subjects AND the
-    ephemeral "Add a Subject" upload both work off this single writable dir. Best-effort: a
-    failure just leaves the dir empty (the app still runs, with no subjects)."""
-    import shutil
-
-    try:
-        documents_dir.mkdir(parents=True, exist_ok=True)
-        faiss_dir.mkdir(parents=True, exist_ok=True)
-        if _BUNDLED_DOCUMENTS_DIR.is_dir():
-            for entry in _BUNDLED_DOCUMENTS_DIR.iterdir():
-                if entry.is_dir() and not entry.name.startswith("."):
-                    dest = documents_dir / entry.name
-                    if not dest.exists():
-                        shutil.copytree(entry, dest)
-    except Exception:  # noqa: BLE001 — never let seeding crash a cold start
-        log.warning("Could not seed the serverless documents dir.", exc_info=True)
-
-
-# Resolve the data dirs now that IS_SERVERLESS is known. On serverless they live under the
-# only writable location (/tmp); elsewhere they are the repo dirs (persistent, container-mounted).
-if IS_SERVERLESS:
-    DOCUMENTS_DIR: Path = Path("/tmp/sah/documents")
-    FAISS_INDEX_DIR: Path = Path("/tmp/sah/faiss_index")
-    _seed_serverless_documents(DOCUMENTS_DIR, FAISS_INDEX_DIR)
-else:
-    DOCUMENTS_DIR = ROOT_DIR / "documents"
-    FAISS_INDEX_DIR = ROOT_DIR / "faiss_index"
 
 # Frontend / CORS. Empty by default: the SPA is served by this same server, so no
 # cross-origin access is configured (and none is hardcoded).
@@ -401,15 +343,12 @@ def validate_config() -> None:
     elif APP_ENV not in VALID_ENVIRONMENTS:
         errors.append(f"APP_ENV={APP_ENV!r} — must be one of {', '.join(VALID_ENVIRONMENTS)}")
 
-    # HOST/PORT only matter when WE bind the socket. On serverless the platform owns the
-    # listener (Vercel invokes the ASGI app directly), so they are not required there.
-    if not IS_SERVERLESS:
-        if not HOST:
-            errors.append("HOST (the network address the server binds to)")
-        if not _PORT_OK:
-            errors.append("PORT (must be an integer)")
-        elif PORT is None:
-            errors.append("PORT (the TCP port to listen on)")
+    if not HOST:
+        errors.append("HOST (the network address the server binds to)")
+    if not _PORT_OK:
+        errors.append("PORT (must be an integer)")
+    elif PORT is None:
+        errors.append("PORT (the TCP port to listen on)")
 
     if not LLM_PROVIDER:
         errors.append("LLM_PROVIDER (one of: " + ", ".join(SUPPORTED_PROVIDERS) + ")")
@@ -434,8 +373,7 @@ def validate_config() -> None:
                 f"{TOOL_MODEL_ENV[tool]}={mid!r} is not listed in AVAILABLE_MODELS"
             )
 
-    # The local embedding model is only used by RAG chat retrieval; not needed in lite mode.
-    if RAG_ENABLED and not EMBEDDING_MODEL:
+    if not EMBEDDING_MODEL:
         errors.append("EMBEDDING_MODEL (local fastembed model id)")
 
     # Auth is optional, but a misformatted publishable key is almost always a typo.
@@ -491,8 +429,6 @@ def startup_diagnostics() -> list[str]:
         f" DEFAULT_MODEL    {DEFAULT_MODEL}",
         f" AVAILABLE_MODELS {len(AVAILABLE_MODELS)} ({models})",
         f" EMBEDDING_MODEL  {EMBEDDING_MODEL}",
-        f" RUNTIME          {'serverless (lite)' if IS_SERVERLESS else 'long-lived server'}",
-        f" CHAT RETRIEVAL   {'RAG (FAISS + local embeddings)' if RAG_ENABLED else 'direct document text (no embeddings)'}",
         f" GROQ_API_KEY     {'✓ loaded' if has_groq_key() else '✗ MISSING'}",
         f" CORS_ORIGINS     {', '.join(CORS_ORIGINS) if CORS_ORIGINS else '(none — same-origin)'}",
         f" FRONTEND         {('split → SPA on :' + str(FRONTEND_PORT) + ', API at ' + (API_BASE_URL or '?')) if SPLIT_ORIGIN else 'single server (SPA + API same origin)'}",

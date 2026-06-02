@@ -65,12 +65,9 @@ def _get_db():
         try:
             from pymongo import ASCENDING, DESCENDING, MongoClient
 
-            # Serverless cold starts pay SRV lookup + TLS on the first connect, so give Atlas
-            # a more generous window there than on a warm long-lived server.
             client = MongoClient(
                 config.MONGODB_URI,
-                serverSelectionTimeoutMS=15000 if config.IS_SERVERLESS else 8000,
-                connectTimeoutMS=15000 if config.IS_SERVERLESS else 20000,
+                serverSelectionTimeoutMS=8000,
                 appname="study-assistant-hub",
             )
             client.admin.command("ping")  # fail fast if unreachable
@@ -82,12 +79,8 @@ def _get_db():
             _db = database
             log.info("MongoDB persistence ready (db=%s).", config.MONGODB_DB_NAME)
         except Exception as exc:  # noqa: BLE001 — any failure disables persistence gracefully
-            log.error("MongoDB init failed; persistence disabled for now: %s", exc)
-            # Long-lived server: latch the failure so we don't retry (and re-time-out) on every
-            # request. Serverless: DON'T latch — a later request (e.g. once the operator adds
-            # Vercel to the Atlas IP allow-list) must be able to connect WITHOUT a redeploy.
-            if not config.IS_SERVERLESS:
-                _init_failed = True
+            _init_failed = True
+            log.error("MongoDB init failed; persistence disabled for this run: %s", exc)
             return None
     return _db
 
