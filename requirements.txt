@@ -1,11 +1,31 @@
-langchain>=0.1.0
-langchain-openai>=0.0.2
-langchain-community>=0.0.13
-langchain_text_splitters>=0.0.1
-pydantic>=2.0.0
-streamlit>=1.30.0
-tiktoken>=0.5.0
-python-dotenv>=1.0.0
+# --- Study Assistant Hub (Streamlit-free; FastAPI + vanilla-JS SPA; Groq LLM) ---
+# Web
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+python-multipart>=0.0.9
+
+# Config / models
+pydantic>=2.6,<3.0
+python-dotenv>=1.0
+
+# Groq LLM (no OpenAI anywhere)
+groq>=0.11,<1.0
+
+# Retrieval (chat) — Groq chat model + LOCAL keyless embeddings
+langchain>=0.2,<0.4
+langchain-groq>=0.1,<0.3
+langchain-community>=0.2,<0.4
+langchain-text-splitters>=0.2,<0.4
 faiss-cpu>=1.7.4
-pypdf>=3.17.0
-watchdog>=3.0.0 
+fastembed>=0.3
+tiktoken>=0.6
+
+# PDF + dates
+pypdf>=4.0
+python-dateutil>=2.8
+
+# Persistence (optional history store) — MongoDB; [srv] pulls in dnspython for mongodb+srv URIs
+pymongo[srv]>=4.6,<5.0
+
+# Auth (optional) — verify Clerk session JWTs for per-user history scoping
+pyjwt[crypto]>=2.8,<3.0
