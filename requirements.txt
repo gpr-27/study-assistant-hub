@@ -1,10 +1,19 @@
-# --- Study Assistant Hub (Streamlit-free; FastAPI + vanilla-JS SPA; Groq LLM) ---
+# --- Study Assistant Hub — base dependencies ---
+# This is the SLIM, serverless-safe dependency set used by the Vercel build and by CI.
+# The heavy retrieval stack (FAISS + local fastembed embeddings + the langchain-community
+# loaders/splitters) lives in requirements-rag.txt and is installed ONLY for the full
+# container / local deployment. On serverless the app runs in direct-text "lite" mode
+# (backend.config.RAG_ENABLED=False), so those packages aren't needed and would blow past
+# the function size limit.
+#
+#   • Serverless (Vercel) / CI:  pip install -r requirements.txt
+#   • Full app (Docker / local): pip install -r requirements.txt -r requirements-rag.txt
+#
 # Web
 fastapi>=0.110,<1.0
-uvicorn[standard]>=0.27,<1.0
+uvicorn[standard]>=0.27,<1.0       # local dev server (run.py); Vercel supplies its own
 python-multipart>=0.0.9
-# Production WSGI/ASGI process manager (used by the Docker image; dev uses run.py).
-gunicorn>=21,<24
+gunicorn>=21,<24                    # production process manager (Docker); unused on Vercel
 
 # Config / models
 pydantic>=2.6,<3.0
@@ -13,17 +22,15 @@ python-dotenv>=1.0
 # Groq LLM (no OpenAI anywhere)
 groq>=0.11,<1.0
 
-# Retrieval (chat) — Groq chat model + LOCAL keyless embeddings
-langchain>=0.2,<0.4
+# Chat LLM plumbing — needed in BOTH modes (lite + RAG). langchain-groq pulls langchain-core.
+langchain-core>=0.2,<0.4
 langchain-groq>=0.1,<0.3
-langchain-community>=0.2,<0.4
-langchain-text-splitters>=0.2,<0.4
-faiss-cpu>=1.7.4
-fastembed>=0.3
+
+# PDF text + token budgeting (used by every tool, in both modes)
+pypdf>=4.0
 tiktoken>=0.6
 
-# PDF + dates
-pypdf>=4.0
+# Dates (study planner)
 python-dateutil>=2.8
 
 # Persistence (optional history store) — MongoDB; [srv] pulls in dnspython for mongodb+srv URIs

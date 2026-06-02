@@ -67,8 +67,11 @@ Plus: a **light/dark theme** toggle (defaults to light; your choice is remembere
    ```bash
    python3 -m venv .venv
    source .venv/bin/activate          # Windows: .venv\Scripts\activate
-   pip install -r requirements.txt
+   pip install -r requirements-rag.txt   # full app: base deps + the local retrieval stack
    ```
+   > `requirements.txt` is the **slim** base (used by the serverless/Vercel build and CI);
+   > `requirements-rag.txt` adds the heavy local-embeddings + FAISS stack and pulls the base
+   > in, so the one command above installs everything for the full local app.
 3. **Create your `.env`**
    ```bash
    cp .env.example .env               # then edit .env and fill it in
@@ -385,11 +388,40 @@ production runtime mode and `0.0.0.0` binding are forced by `docker-compose.yml`
 Built FAISS indexes (`/app/faiss_index`) and uploaded subjects (`/app/documents`)
 persist in named volumes.
 
-> **Why a container and not Vercel/serverless?** Heavy native deps
-> (`onnxruntime`, `faiss-cpu`), an in-memory embedding model + on-disk indexes,
-> background warmup/janitor threads, and a persistent MongoDB connection all want
-> a long-lived process — so deploy to **Render / Railway / Fly.io / Cloud Run / a
-> VPS**, not a serverless function.
+### Two deployment modes
+
+The app ships with **two** runtime modes, chosen automatically by the host:
+
+| | **Full** (container / VPS) | **Lite** (serverless / Vercel) |
+|---|---|---|
+| Chat grounding | **RAG** — local `fastembed` embeddings + FAISS retrieval | **Direct document text** sent to the LLM (clipped to `MAX_CONTENT_TOKENS`) |
+| Heavy deps (`faiss-cpu`, `fastembed`/onnxruntime) | installed (`requirements-rag.txt`) | **omitted** (`requirements.txt` only) |
+| Background threads, writable disk | yes | no (state under `/tmp`, no warmup/janitor) |
+| Quiz · Flashcards · Planner · Mind Map | ✅ identical | ✅ identical |
+| Best for | richest Chat, persistent indexes | one-command deploy, autoscaling, zero servers |
+
+The mode flips on a single flag — `RAG_ENABLED` (defaults to **off** when the platform sets
+`VERCEL`, **on** otherwise). No code changes; see `backend/config.py`.
+
+### Deploy to Vercel (lite mode)
+
+The repo is Vercel-ready: a root `app.py` exposes the FastAPI app, `vercel.json` configures
+the Python function (bundling `frontend/` + `documents/`), and the slim `requirements.txt`
+keeps the function under the size limit.
+
+```bash
+vercel            # preview deploy (or: vercel --prod)
+```
+
+Set the project's environment variables in the Vercel dashboard (or `vercel env add`):
+`GROQ_API_KEY` (+ `LLM_PROVIDER`, `AVAILABLE_MODELS`, `DEFAULT_MODEL`), and optionally
+`CLERK_PUBLISHABLE_KEY`/`CLERK_SECRET_KEY` and `MONGODB_URI` for auth + history. `VERCEL=1`
+is set by the platform, so the app boots straight into lite mode.
+
+> **When to prefer a container instead.** Full RAG chat, persistent FAISS indexes, and
+> durably-saved uploaded subjects want a long-lived process — deploy the Docker image to
+> **Render / Railway / Fly.io / Cloud Run / a VPS**. On serverless, uploaded subjects are
+> ephemeral (reset on cold start) and Chat grounds on document text rather than retrieval.
 
 Two GitHub Actions are included: **CI** (tests on every push/PR) and **Docker**
 (builds & publishes the image to GHCR on `main` / version tags).
