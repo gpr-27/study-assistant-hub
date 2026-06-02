@@ -18,8 +18,9 @@ An AI study companion with **five tools** — **Chat**, **Quiz**, **Flashcards**
 9. [Project structure](#-project-structure)
 10. [API reference](#-api-reference)
 11. [Running the tests](#-running-the-tests)
-12. [Troubleshooting](#-troubleshooting)
-13. [Author](#-author)
+12. [Deploy to production (Docker)](#-deploy-to-production-docker)
+13. [Troubleshooting](#-troubleshooting)
+14. [Author](#-author)
 
 ---
 
@@ -305,6 +306,15 @@ faiss_index/<Subject>/          gitignored, rebuildable embedding indexes
 tests/                          pytest suite
 run.py                          launcher (re-execs into .venv, runs uvicorn; also starts the SPA server in split-origin mode)
 frontend_server.py              static SPA server for split-origin mode (serves the SPA on FRONTEND_PORT)
+Dockerfile                      production image (multi-stage; gunicorn+uvicorn; pre-baked models; non-root)
+docker-compose.yml              production-style run (app + optional MongoDB profile; volumes for indexes/uploads)
+docker-entrypoint.sh            seeds the documents dir, then execs gunicorn
+gunicorn.conf.py                env-driven gunicorn config (workers, timeouts, logging)
+.dockerignore                   keeps the build context/image lean and secret-free
+.env.production.example         production .env template (see also .env.example)
+requirements-dev.txt            runtime deps + pytest (test/CI only)
+.github/workflows/              CI (tests) + Docker (build & publish image to GHCR)
+DEPLOYMENT.md                   full production deployment guide
 ```
 
 ---
@@ -354,6 +364,39 @@ python -m pytest -q
 ```
 
 It covers document/path-safety, the vector store, chat session errors, mind-map shaping, and LLM-error propagation.
+
+---
+
+## 🐳 Deploy to production (Docker)
+
+The repo is production-ready and containerized. The image runs the app in
+**single-server mode** (one FastAPI process serves the SPA **and** the API) with
+**Gunicorn + Uvicorn workers**, a **non-root** user, **pre-baked local models**
+(no first-request download), and a `/api/health` healthcheck.
+
+```bash
+cp .env.production.example .env     # fill in GROQ_API_KEY (+ optional Mongo/Clerk)
+docker compose up --build -d        # build + run
+# open http://localhost:8000   ·   health: http://localhost:8000/api/health
+```
+
+Your secrets come from `.env` at **run time** (never baked into the image);
+production runtime mode and `0.0.0.0` binding are forced by `docker-compose.yml`.
+Built FAISS indexes (`/app/faiss_index`) and uploaded subjects (`/app/documents`)
+persist in named volumes.
+
+> **Why a container and not Vercel/serverless?** Heavy native deps
+> (`onnxruntime`, `faiss-cpu`), an in-memory embedding model + on-disk indexes,
+> background warmup/janitor threads, and a persistent MongoDB connection all want
+> a long-lived process — so deploy to **Render / Railway / Fly.io / Cloud Run / a
+> VPS**, not a serverless function.
+
+Two GitHub Actions are included: **CI** (tests on every push/PR) and **Docker**
+(builds & publishes the image to GHCR on `main` / version tags).
+
+**👉 Full guide:** [`DEPLOYMENT.md`](DEPLOYMENT.md) — compose & plain-`docker`
+recipes, volumes, scaling/workers, TLS/reverse-proxy, per-platform notes, CI/CD,
+and a security checklist.
 
 ---
 

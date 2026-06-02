@@ -1,0 +1,7 @@
+# Development / test dependencies. Installs the runtime deps too, plus the test
+# runner (kept out of requirements.txt so the production image stays lean).
+#
+#   pip install -r requirements-dev.txt
+#   python -m pytest -q
+-r requirements.txt
+pytest>=8.0

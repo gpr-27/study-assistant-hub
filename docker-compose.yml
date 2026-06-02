@@ -1,0 +1,58 @@
+# Study Assistant Hub — production-style run with Docker Compose.
+#
+#   docker compose up --build           # build + run the app
+#   docker compose --profile with-mongo up --build   # also run a local MongoDB
+#
+# Your real configuration/secrets come from .env (GROQ_API_KEY, MONGODB_URI,
+# Clerk keys, model list, …) and are injected at RUN time — never baked into the
+# image. The `environment:` block below forces production runtime mode and binds
+# inside the container to 0.0.0.0, overriding whatever those few keys say in .env.
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        # Pre-bake the embedding model that matches your EMBEDDING_MODEL (.env).
+        EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+    image: study-assistant-hub:latest
+    init: true                       # tini-style init for clean signal handling
+    restart: unless-stopped
+    env_file:
+      - .env                         # your real config/secrets (gitignored)
+    environment:                     # production overrides — win over .env
+      APP_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8000
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+    ports:
+      - "${APP_PORT:-8000}:8000"     # host:container — change APP_PORT to remap the host port
+    volumes:
+      - faiss_index:/app/faiss_index # built vector indexes persist across restarts
+      - documents:/app/documents     # bundled + uploaded subjects persist across restarts
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health',timeout=4).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  # Optional local MongoDB for history persistence. Only starts with the profile:
+  #   docker compose --profile with-mongo up --build
+  # Then set MONGODB_URI=mongodb://mongo:27017 in your .env (the app reaches it on
+  # the compose network). Omit this and point MONGODB_URI at Atlas to use the cloud.
+  mongo:
+    image: mongo:7
+    profiles: ["with-mongo"]
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+
+volumes:
+  faiss_index:
+  documents:
+  mongo_data:

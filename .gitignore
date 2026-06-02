@@ -6,9 +6,11 @@ __pycache__/
 venv/
 env/
 
-# Secrets / local config
+# Secrets / local config (the *.example templates stay tracked)
 .env
 .env.local
+.env.production
+.env.*.local
 
 # Generated artifacts (rebuildable)
 faiss_index/

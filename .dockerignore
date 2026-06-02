@@ -1,0 +1,43 @@
+# Keep the build context small and the image clean. The Dockerfile only COPYs
+# backend/, frontend/, documents/, requirements.txt, gunicorn.conf.py and
+# docker-entrypoint.sh — everything else here is excluded.
+
+# Virtualenv & Python caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Git / CI / editor / OS cruft
+.git/
+.github/
+.gitignore
+.idea/
+.vscode/
+*.swp
+.DS_Store
+**/.DS_Store
+
+# Claude Code local tooling
+.claude/
+
+# Secrets & local env — NEVER bake any env file into the image
+.env
+.env.*
+
+# Rebuildable artifacts (FAISS indexes are built at runtime into a volume)
+faiss_index/
+
+# Not needed inside the runtime image
+tests/
+.screens/
+*.md
+run.py
+frontend_server.py
+requirements-dev.txt
+docker-compose.yml
+Dockerfile
+.dockerignore
