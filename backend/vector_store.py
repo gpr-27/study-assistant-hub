@@ -16,10 +16,16 @@ committed to the repository.
 Every embedding/index object is created lazily inside a function so that
 importing this module never downloads a model and never needs a Groq key.
 """
+import contextlib
 import json
 import logging
 import threading
 from pathlib import Path
+
+try:
+    import fcntl  # POSIX advisory file locks (Linux container, macOS dev).
+except ImportError:  # pragma: no cover — non-POSIX (e.g. Windows): no cross-process lock.
+    fcntl = None
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.embeddings import FastEmbedEmbeddings
