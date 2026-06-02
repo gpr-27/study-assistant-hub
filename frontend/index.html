@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<title>Study Assistant Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Figtree:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2322d3ee'/%3E%3Cstop offset='.5' stop-color='%23a78bfa'/%3E%3Cstop offset='1' stop-color='%23f59e0b'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <!-- ambient layers -->
+  <div class="bg"></div>
+  <div class="orbs" aria-hidden="true"><div class="orb a"></div><div class="orb b"></div><div class="orb c"></div><div class="orb d"></div></div>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="cursor-glow" id="glow" aria-hidden="true"></div>
+
+  <!-- SVG refraction filter powering .glass / .panel lensing -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <filter id="liquid" x="-20%" y="-20%" width="140%" height="140%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.009 0.013" numOctaves="2" seed="7" result="n"/>
+      <feGaussianBlur in="n" stdDeviation="2.2" result="s"/>
+      <feDisplacementMap in="SourceGraphic" in2="s" scale="26" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </svg>
+
+  <!-- AUTH GATE — covers the app on first paint. auth.js hides it when Clerk auth is
+       disabled (no key) or once the user is signed in. -->
+  <div class="auth-gate" id="authGate" aria-hidden="false">
+    <div class="auth-card glass">
+      <span class="auth-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5 12 3l9 3.5-9 3.5z"/><path d="M21 6.5v6"/><path d="M6.5 9v5.2c0 1.3 2.5 2.8 5.5 2.8s5.5-1.5 5.5-2.8V9"/></svg>
+      </span>
+      <span class="eyebrow"><span class="dot"></span>Your all-in-one learning companion</span>
+      <h1>Study smarter with<br><span class="glow">AI</span> that feels like <em>glass</em>.</h1>
+      <p>Sign in to open your Chat, Quiz, Flashcards, Planner and Mind&nbsp;Map — built on your own lecture material, powered by Groq.</p>
+      <div class="auth-actions" id="authActions">
+        <div class="auth-loading"><span class="spinner"></span><span>Loading…</span></div>
+      </div>
+      <p class="auth-foot" id="authFoot"></p>
+    </div>
+  </div>
+
+  <div class="shell">
+    <!-- NAV -->
+    <nav class="nav glass" aria-label="Primary">
+      <a class="brand" href="#home">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5 12 3l9 3.5-9 3.5z"/><path d="M21 6.5v6"/><path d="M6.5 9v5.2c0 1.3 2.5 2.8 5.5 2.8s5.5-1.5 5.5-2.8V9"/></svg>
+        </span>
+        Study&nbsp;Assistant&nbsp;Hub
+      </a>
+      <div class="nav-actions">
+        <span class="tag">Chat · Quiz · Flashcards · Planner · Mind Map</span>
+        <a class="nav-add" href="#subjects" aria-label="Add a subject" title="Add a subject">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span>Add subject</span>
+        </a>
+        <button class="toggle" id="themeToggle" aria-label="Toggle light and dark theme" title="Toggle theme">
+          <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2 12h2M20 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+          <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.6 6.6 0 0 0 9.8 9.8z"/></svg>
+        </button>
+        <!-- Clerk UserButton mounts here when signed in (auth.js); hidden otherwise -->
+        <div class="user-btn-slot" id="userButton"></div>
+      </div>
+    </nav>
+
+    <div id="keywarn"></div>
+
+    <!-- HOME -->
+    <section id="home">
+      <header class="hero">
+        <span class="eyebrow glass"><span class="dot"></span>Your all-in-one learning companion</span>
+        <h1>Study smarter with<br><span class="glow">AI</span> that feels like <em>glass</em>.</h1>
+        <p>Five intelligent tools — chat, quizzes, flashcards, study plans and mind maps — built on your own lecture material, powered by Groq.</p>
+        <div class="stats">
+          <span class="stat glass"><b>5</b> AI tools</span>
+          <span class="stat glass"><b id="stat-subjects">·</b> subjects</span>
+          <span class="stat glass"><b>∞</b> ways to learn</span>
+        </div>
+      </header>
+
+      <div class="section-head"><h3>Open a tool</h3><span>Everything in one place</span></div>
+
+      <main class="grid">
+        <a class="card glass c1" href="#chat" aria-label="Open Chat Assistant">
+          <span class="wash"></span><span class="sheen"></span>
+          <div class="card-top">
+            <span class="chip" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-12 7.6L3 21l1.9-6A8.4 8.4 0 1 1 21 11.5z"/><path d="M8.5 12h7M8.5 9h4"/></svg></span>
+            <span class="status"><span class="led"></span>ready</span>
+          </div>
+          <h2>Chat Assistant</h2>
+          <p>Converse with your study materials. Ask questions, get grounded explanations, dig deeper.</p>
+          <div class="card-foot"><span class="open">Open chat <span class="arrow" aria-hidden="true">→</span></span><span class="port">RAG chat</span></div>
+        </a>
+
+        <a class="card glass c2" href="#quiz" aria-label="Open Quiz Generator">
+          <span class="wash"></span><span class="sheen"></span>
+          <div class="card-top">
+            <span class="chip" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l2 2 4-4"/><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M8 17h8"/></svg></span>
+            <span class="status"><span class="led"></span>ready</span>
+          </div>
+          <h2>Quiz Generator</h2>
+          <p>Auto-build multiple-choice quizzes from any PDF. Test recall, see explanations, track your score.</p>
+          <div class="card-foot"><span class="open">Open quizzes <span class="arrow" aria-hidden="true">→</span></span><span class="port">MCQ</span></div>
+        </a>
+
+        <a class="card glass c3" href="#flashcards" aria-label="Open Flashcards">
+          <span class="wash"></span><span class="sheen"></span>
+          <div class="card-top">
+            <span class="chip" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6.5" width="14" height="11" rx="2.5"/><path d="M7 10.5l7-3.2M21 8.5v9a2 2 0 0 1-2 2H9"/></svg></span>
+            <span class="status"><span class="led"></span>ready</span>
+          </div>
+          <h2>Flashcards</h2>
+          <p>Active-recall cards generated on demand. Flip, rate your confidence, review what you miss.</p>
+          <div class="card-foot"><span class="open">Open flashcards <span class="arrow" aria-hidden="true">→</span></span><span class="port">active recall</span></div>
+        </a>
+
+        <a class="card glass c4" href="#planner" aria-label="Open Study Planner">
+          <span class="wash"></span><span class="sheen"></span>
+          <div class="card-top">
+            <span class="chip" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="16" rx="3"/><path d="M3.5 9h17M8 2.5v4M16 2.5v4M8 13h3M8 16.5h6"/></svg></span>
+            <span class="status"><span class="led"></span>ready</span>
+          </div>
+          <h2>Study Planner</h2>
+          <p>Turn lecture PDFs into a day-by-day schedule that paces you to your exam date.</p>
+          <div class="card-foot"><span class="open">Open planner <span class="arrow" aria-hidden="true">→</span></span><span class="port">schedule</span></div>
+        </a>
+
+        <a class="card glass c5" href="#mindmap" aria-label="Open Mind Map">
+          <span class="wash"></span><span class="sheen"></span>
+          <div class="card-top">
+            <span class="chip" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M10.2 10.2 6.4 6.4M13.8 10.2l3.8-3.8M10.2 13.8 6.4 17.6M13.8 13.8l3.8 3.8"/></svg></span>
+            <span class="status"><span class="led"></span>ready</span>
+          </div>
+          <h2>Mind Map</h2>
+          <p>Turn a PDF or a topic into a clean, hierarchical concept map — see how the ideas connect at a glance.</p>
+          <div class="card-foot"><span class="open">Open mind map <span class="arrow" aria-hidden="true">→</span></span><span class="port">concept map</span></div>
+        </a>
+      </main>
+    </section>
+
+    <!-- TOOL VIEW (rendered by app.js) -->
+    <section id="view" class="view" hidden></section>
+
+    <!-- FOOTER -->
+    <footer class="foot glass">
+      <p><b>Chat</b> · <b>Quiz</b> · <b>Flashcards</b> · <b>Study Planner</b> · <b>Mind Map</b></p>
+      <p class="by">Crafted by Praneeth Gandra · Made with <span class="heart">♥</span></p>
+    </footer>
+  </div>
+
+  <div class="toast-wrap" id="toasts" aria-live="polite"></div>
+
+  <!-- runtime-config FIRST OF ALL: seeds window.__API_BASE__ so the SPA knows where the API is
+       (same-origin "/api" in single-server mode, or the absolute API_BASE_URL when the SPA runs
+       on its own port). Served by whichever server delivered this page. -->
+  <script src="/runtime-config.js"></script>
+  <!-- config: defines window.AppConfig (apiBase, models, provider) and starts loading /api/config -->
+  <script src="/assets/config.js"></script>
+  <!-- runtime: defines window.api / window.ui / window.Views synchronously (reads AppConfig) -->
+  <script src="/assets/app.js"></script>
+  <!-- tool views (each registers window.Views.<name>); render() waits for DOMContentLoaded -->
+  <script src="/assets/views/chat.js"></script>
+  <script src="/assets/views/quiz.js"></script>
+  <script src="/assets/views/flashcards.js"></script>
+  <script src="/assets/views/planner.js"></script>
+  <script src="/assets/views/subjects.js"></script>
+  <script src="/assets/views/mindmap.js"></script>
+  <!-- auth gate LAST (ES module, deferred): reads window.AppConfig + window.ui, loads Clerk only if a key is set -->
+  <script type="module" src="/assets/auth.js"></script>
+</body>
+</html>
