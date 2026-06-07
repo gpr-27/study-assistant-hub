@@ -202,3 +202,26 @@ def save_pdf(subject: str, filename: str, data: bytes) -> str:
     stored_name = _unique_pdf_name(subject_dir, _sanitize_pdf_filename(filename))
     (subject_dir / stored_name).write_bytes(data)
     return stored_name
+
+
+def restore_uploaded_pdf(subject: str, filename: str, data: bytes) -> bool:
+    """Write a previously-stored uploaded PDF back to documents/<subject>/.
+
+    Used at startup to re-hydrate an ephemeral documents/ dir (e.g. Render's free tier)
+    from MongoDB. The subject/filename come from our own store but are still validated with
+    the same traversal guards as the upload path. The file is written only if it is not
+    already present, so bundled (seeded) PDFs are never overwritten and the restore is
+    idempotent. Returns True if a file was written, False if skipped or the names are unsafe.
+    """
+    try:
+        safe_subject = _validate_subject_name(subject)
+        safe_name = _safe_component(filename, kind="PDF name")
+    except DocumentError:
+        return False
+    subject_dir = DOCUMENTS_DIR / safe_subject
+    target = subject_dir / safe_name
+    if target.exists():
+        return False
+    subject_dir.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return True

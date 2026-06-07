@@ -18,10 +18,15 @@
 #   • Free instance = 512 MB RAM and spins down after ~15 min idle (cold start ~30–60 s).
 #     The embedding model loads per worker; if first chat OOMs/restarts, set `plan: standard`
 #     (2 GB) below or in the dashboard.
-#   • FAISS indexes rebuild from the bundled PDFs on each start (free tier has no disk).
+#   • FAISS indexes rebuild from the PDFs on each start (free tier has no disk).
 #     Uncomment the `disk:` block on a paid plan to cache them across restarts.
 #   • History needs MongoDB reachable from Render: add 0.0.0.0/0 to your Atlas Network
 #     Access. RAG chat itself works without Mongo.
+#   • Persistent uploads on the FREE tier: set MONGODB_URI (Atlas free tier works). PDFs
+#     added via "Add a Subject" are then stored in MongoDB and re-hydrated on each start,
+#     so they survive restarts/redeploys with no paid disk. (Indexes still rebuild from
+#     those PDFs on start.) Without Mongo, website uploads are lost on the next restart;
+#     bundled subjects always persist (they're baked into the image).
 services:
   - type: web
     name: study-assistant-hub
@@ -68,6 +73,8 @@ services:
       - key: CLERK_SECRET_KEY
         sync: false               # optional — enables server-side JWT verification
       # --- Persistence (optional, MongoDB). Leave unset for no saved history. ---
+      # Also persists PDFs uploaded via "Add a Subject" across restarts — the free-tier
+      # alternative to a paid disk (Atlas free tier is enough). See the notes above.
       - key: MONGODB_URI
         sync: false               # optional secret — your Atlas connection string
       - key: MONGODB_DB_NAME

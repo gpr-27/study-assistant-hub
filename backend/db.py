@@ -376,6 +376,71 @@ def set_chat_title(owner: str, chat_id: str, title: str) -> None:
     )
 
 
+# ---- uploaded PDFs (binary blobs) — let user-uploaded subjects survive restarts ----
+# On a host without a persistent disk (e.g. Render's free tier) the documents/ dir is
+# ephemeral, so PDFs added via "Add a Subject" vanish on the next restart/redeploy. When
+# MongoDB is configured we ALSO store each uploaded PDF here and re-hydrate documents/ from
+# it on startup, so uploads persist at no extra cost. Files are kept in GridFS (chunked), so
+# a PDF of any size is handled safely — not capped by Mongo's 16 MB document limit.
+#
+# Bundled subjects are baked into the image and seeded onto disk by the entrypoint; they are
+# NEVER stored here, so there is no duplication and the two sources stay cleanly separated.
+UPLOADS_BUCKET: str = "uploaded_pdfs"
+
+
+def _gridfs():
+    """Return a GridFS bucket for uploaded PDFs, or None when persistence is off."""
+    db = _get_db()
+    if db is None:
+        return None
+    from gridfs import GridFS
+
+    return GridFS(db, collection=UPLOADS_BUCKET)
+
+
+def store_uploaded_pdf(subject: str, filename: str, data: bytes) -> bool:
+    """Persist one uploaded PDF so it survives a restart. No-op when persistence is off.
+
+    Idempotent: a (subject, filename) already stored is left untouched. Returns True if the
+    file is stored (newly or already), False if persistence is unavailable or the write
+    fails — callers treat the on-disk copy as authoritative, so a failure here only means the
+    upload won't survive a restart, never that the upload itself fails.
+    """
+    fs = _gridfs()
+    if fs is None:
+        return False
+    try:
+        if fs.find_one({"subject": subject, "filename": filename}) is not None:
+            return True
+        fs.put(data, filename=filename, subject=subject, uploaded_at=_now())
+        log.info("Stored uploaded PDF in MongoDB: %s/%s (%d bytes).", subject, filename, len(data))
+        return True
+    except Exception as exc:  # noqa: BLE001 — persistence must never break the upload itself
+        log.warning("Could not store uploaded PDF %s/%s in MongoDB: %s", subject, filename, exc)
+        return False
+
+
+def iter_uploaded_pdfs():
+    """Yield ``(subject, filename, data)`` for every stored upload (empty when off).
+
+    Used at startup to re-hydrate documents/. A read failure is logged and ends iteration
+    rather than crashing startup, so a transient DB hiccup degrades to "uploads not restored
+    this run" instead of taking the whole app down.
+    """
+    fs = _gridfs()
+    if fs is None:
+        return
+    try:
+        for grid_out in fs.find():
+            subject = getattr(grid_out, "subject", None)
+            filename = grid_out.filename
+            if not subject or not filename:
+                continue
+            yield subject, filename, grid_out.read()
+    except Exception as exc:  # noqa: BLE001 — a restore failure must not stop startup
+        log.warning("Could not read uploaded PDFs from MongoDB: %s", exc)
+
+
 def close() -> None:
     """Close the Mongo client (called on app shutdown)."""
     global _client
