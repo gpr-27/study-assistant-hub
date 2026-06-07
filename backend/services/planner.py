@@ -110,10 +110,19 @@ def summarize_pdfs(subject: str, pdfs: list[str], model: str | None = None) -> d
 
 
 def summarize_named_texts(items: list[tuple[str, str]], model: str | None = None) -> dict[str, str]:
-    """Summarize uploaded (name, text) documents. Not cached — uploads are transient."""
+    """Summarize uploaded (name, text) documents.
+
+    Each upload is first chunked and chunk-summarized (cached/saved by content, like a
+    subject PDF), then the TOPICS/SUMMARY view is built from those chunk summaries rather
+    than the raw text — so a re-upload reuses the saved work instead of re-billing it.
+    """
     if not items:
         raise PlannerError("No documents provided to summarize.")
-    return {name: _summarize_text(name, text, model=model) for name, text in items}
+    out: dict[str, str] = {}
+    for name, text in items:
+        chunks = chunk_summaries.get_or_build_for_text(text, name, model)
+        out[name] = _summarize_text(name, chunk_summaries.summaries_as_content(chunks), model=model)
+    return out
 
 
 def _days_until(target_date: str) -> tuple[datetime.date, datetime.date, int]:
