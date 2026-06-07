@@ -21,7 +21,7 @@ from uuid import uuid4
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 
-from backend import db, vector_store
+from backend import agentic_rag, config, db, vector_store
 from backend.auth import LOCAL_OWNER
 from backend.config import model_for, require_groq_key
 
@@ -194,19 +194,27 @@ def ask(session_id: str, message: str) -> str:
     retriever = session["retriever"]
     first_turn = not history
 
-    if retriever is not None:
+    if retriever is not None and config.AGENTIC_RAG:
+        # Agentic RAG: an LLM-driven rewrite→retrieve→grade→correct loop over the
+        # session's index, instead of a single top-k retrieval.
+        answer = str(
+            agentic_rag.answer(retriever, session["llm"], message, _history_messages(history), _SUBJECT_PERSONA)
+        )
+    elif retriever is not None:
+        # Classic single-shot RAG (AGENTIC_RAG disabled).
         docs = retriever.invoke(message)
         context = "\n\n".join(doc.page_content for doc in docs)
         messages = [SystemMessage(content=_SUBJECT_PERSONA)]
         messages.extend(_history_messages(history))
         messages.append(HumanMessage(content=f"Context:\n{context}\n\nQuestion: {message}"))
+        answer = str(session["llm"].invoke(messages).content)
     else:
         persona = _topic_persona(session["topic"]) if session.get("topic") else _GENERIC_PERSONA
         messages = [SystemMessage(content=persona)]
         messages.extend(_history_messages(history))
         messages.append(HumanMessage(content=message))
+        answer = str(session["llm"].invoke(messages).content)
 
-    answer = str(session["llm"].invoke(messages).content)
     history.append((message, answer))
 
     # Mirror the exchange to the persisted chat (no-op when persistence is off).
