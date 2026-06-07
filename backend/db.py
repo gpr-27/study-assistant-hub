@@ -441,6 +441,53 @@ def iter_uploaded_pdfs():
         log.warning("Could not read uploaded PDFs from MongoDB: %s", exc)
 
 
+# ---- chunk summaries (per-PDF) — built once, reused across restarts ----
+# Each subject PDF is summarized chunk-by-chunk once (see backend.chunk_summaries) and the
+# compact result is cached here so a free-tier restart (which rebuilds the ephemeral disk
+# cache from scratch) does not re-bill the LLM. Keyed by a CONTENT fingerprint (a hash of the
+# PDF text + summary model), so a PDF re-hydrated from MongoDB with a new mtime still hits the
+# cache. Documents are global (the documents/ dir is shared), so these are not owner-scoped.
+SUMMARIES: str = "chunk_summaries"
+
+
+def store_chunk_summaries(fingerprint: str, subject: str, pdf: str, summaries: list[str]) -> bool:
+    """Persist a PDF's chunk summaries by content fingerprint. No-op when persistence is off.
+
+    Idempotent (upsert on the fingerprint). Returns True if stored, False if unavailable or
+    the write failed — callers always have the in-memory/disk copy, so a failure here only
+    means the summaries get rebuilt after a restart, never that generation fails.
+    """
+    db = _get_db()
+    if db is None:
+        return False
+    try:
+        db[SUMMARIES].update_one(
+            {"_id": fingerprint},
+            {"$set": {"subject": subject, "pdf": pdf, "summaries": summaries, "updated_at": _now()}},
+            upsert=True,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 — persistence must never break generation
+        log.warning("Could not store chunk summaries (%s/%s): %s", subject, pdf, exc)
+        return False
+
+
+def load_chunk_summaries(fingerprint: str) -> list[str] | None:
+    """Return stored chunk summaries for a content fingerprint, or None if absent/off."""
+    db = _get_db()
+    if db is None:
+        return None
+    try:
+        doc = db[SUMMARIES].find_one({"_id": fingerprint})
+    except Exception as exc:  # noqa: BLE001 — a read failure just means "rebuild this run"
+        log.warning("Could not read chunk summaries (%s): %s", fingerprint, exc)
+        return None
+    if not doc:
+        return None
+    summaries = doc.get("summaries")
+    return summaries if isinstance(summaries, list) else None
+
+
 def close() -> None:
     """Close the Mongo client (called on app shutdown)."""
     global _client

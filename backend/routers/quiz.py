@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from backend import config, db
 from backend.auth import current_owner
-from backend.documents import extract_pdf_text, read_pdf
+from backend.chunk_summaries import ChunkSummaryError, content_for
+from backend.documents import extract_pdf_text
 from backend.schemas import QuizQuestion, QuizRequest, QuizResponse, QuizTopicRequest
 from backend.services.quiz import QuizError, make_quiz, make_quiz_from_topic
 
@@ -30,12 +31,16 @@ def _finalize(data: dict, owner: str, *, title: str, source: str, difficulty: st
 
 @router.post("/generate", response_model=QuizResponse)
 def generate_quiz(request: QuizRequest, owner: str = Depends(current_owner)) -> QuizResponse:
-    """Read the chosen subject PDF and return validated quiz questions.
+    """Build the quiz from the chosen subject PDF's pre-computed chunk summaries.
 
-    DocumentError (unknown subject/PDF) and MissingApiKeyError (no Groq key)
-    bubble up to the global handlers (404 / 503 respectively).
+    The summaries (which cover the whole document) are built once and cached, so we
+    never re-read the full PDF here. DocumentError (unknown subject/PDF) and
+    MissingApiKeyError (no Groq key) bubble up to the global handlers (404 / 503).
     """
-    content = read_pdf(request.subject, request.pdf)
+    try:
+        content = content_for(request.subject, request.pdf, request.model)
+    except ChunkSummaryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     try:
         data = make_quiz(
             content=content,

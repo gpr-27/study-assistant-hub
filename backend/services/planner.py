@@ -10,8 +10,9 @@ import datetime
 from dateutil import parser as date_parser
 from groq import APIError
 
+from backend import chunk_summaries
 from backend.config import MAX_CONTENT_TOKENS, model_for, require_groq_key
-from backend.documents import clip_to_tokens, pdf_signature, read_pdf
+from backend.documents import clip_to_tokens, pdf_signature
 
 _HOURS_PER_DAY: int = 2
 
@@ -85,12 +86,18 @@ def _summarize_text(name: str, text: str, model: str | None = None) -> str:
 
 
 def _summarize_one(subject: str, pdf: str, model: str | None = None) -> str:
-    """Return a cached or freshly generated summary for a single subject PDF."""
+    """Return a cached or freshly generated TOPICS/SUMMARY view for a subject PDF.
+
+    Built from the PDF's pre-computed chunk summaries (which cover the whole document)
+    rather than re-reading and clipping the full PDF, so later tools reuse one shared
+    summarization pass instead of re-billing the entire file each time.
+    """
     resolved = model_for("summary", model)
     cache_key = (subject, pdf, pdf_signature(subject, pdf), resolved)
     if cache_key in _summary_cache:
         return _summary_cache[cache_key]
-    summary = _summarize_text(pdf, read_pdf(subject, pdf), model=model)
+    chunks = chunk_summaries.get_or_build(subject, pdf, model)
+    summary = _summarize_text(pdf, chunk_summaries.summaries_as_content(chunks), model=model)
     _summary_cache[cache_key] = summary
     return summary
 
