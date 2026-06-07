@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from backend import config, db
 from backend.auth import current_owner
-from backend.chunk_summaries import ChunkSummaryError, content_for
+from backend.chunk_summaries import ChunkSummaryError, content_for, content_for_text
 from backend.documents import extract_pdf_text
 from backend.schemas import QuizQuestion, QuizRequest, QuizResponse, QuizTopicRequest
 from backend.services.quiz import QuizError, make_quiz, make_quiz_from_topic
@@ -89,12 +89,18 @@ async def generate_quiz_upload(
     data_bytes = await file.read()
     if not data_bytes:
         raise HTTPException(status_code=400, detail="The uploaded PDF was empty.")
-    content = extract_pdf_text(data_bytes)
-    if not content:
+    text = extract_pdf_text(data_bytes)
+    if not text:
         raise HTTPException(status_code=422, detail="No extractable text found in that PDF.")
+    fname = file.filename or "uploaded.pdf"
+    # Chunk + summarize the upload (saved/cached by content), then generate from those
+    # summaries — same pipeline as a saved subject PDF. A re-upload reuses the cache.
+    try:
+        content = content_for_text(text, fname, model)
+    except ChunkSummaryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     try:
         data = make_quiz(content=content, num_questions=num_questions, difficulty=difficulty, model=model)
     except QuizError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    fname = file.filename or "uploaded.pdf"
     return _finalize(data, owner, title=f"Quiz · {fname}", source=fname, difficulty=difficulty, model=model)

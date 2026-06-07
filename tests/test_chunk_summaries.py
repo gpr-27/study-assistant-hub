@@ -98,6 +98,43 @@ class CacheResolutionTests(unittest.TestCase):
                 cs.get_or_build("Bio", "Empty.pdf")
 
 
+class UploadedTextTests(unittest.TestCase):
+    """One-off uploads go through the same build-once/cache-by-content pipeline."""
+
+    def setUp(self):
+        cs._cache.clear()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.idx = Path(self._tmp.name)
+        self._p1 = mock.patch.object(cs, "FAISS_INDEX_DIR", self.idx)
+        self._p1.start()
+
+    def tearDown(self):
+        self._p1.stop()
+        self._tmp.cleanup()
+        cs._cache.clear()
+
+    def test_builds_and_caches_for_text(self):
+        with mock.patch.object(cs, "_build", return_value=["s1"]) as build, \
+             mock.patch.object(db, "load_chunk_summaries", return_value=None), \
+             mock.patch.object(db, "store_chunk_summaries", return_value=False) as store:
+            out = cs.content_for_text("some uploaded lecture text", "notes.pdf")
+        self.assertEqual(out, "- s1")
+        build.assert_called_once()
+        store.assert_called_once()  # summaries are saved (best-effort) for uploads too
+
+    def test_identical_reupload_reuses_cache(self):
+        with mock.patch.object(cs, "_build", return_value=["only"]) as build, \
+             mock.patch.object(db, "load_chunk_summaries", return_value=None), \
+             mock.patch.object(db, "store_chunk_summaries", return_value=False):
+            cs.get_or_build_for_text("same bytes", "a.pdf")
+            cs.get_or_build_for_text("same bytes", "a.pdf")  # identical content -> cache hit
+        build.assert_called_once()
+
+    def test_empty_text_raises(self):
+        with self.assertRaises(cs.ChunkSummaryError):
+            cs.get_or_build_for_text("   ", "empty.pdf")
+
+
 class BuildForSubjectTests(unittest.TestCase):
     def test_best_effort_skips_failures(self):
         with mock.patch.object(cs, "list_pdf_names", return_value=["a.pdf", "b.pdf"]), \

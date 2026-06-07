@@ -14,8 +14,8 @@ The summaries are cached so they are built only when a PDF (or the summary model
 actually changes:
 
   * in-process memory (per worker),
-  * on disk under ``faiss_index/<subject>/chunk_summaries/<pdf>.json`` (survives
-    within a container's life, shared across workers), and
+  * on disk under ``faiss_index/chunk_summaries/<fingerprint>.json`` (content-
+    addressed; survives within a container's life, shared across workers), and
   * in MongoDB when configured (survives restarts/redeploys even with no disk —
     keyed by a content hash so a PDF re-hydrated from Mongo with a new mtime still
     hits the cache instead of re-billing the LLM).
@@ -167,46 +167,50 @@ def _build(text: str, model: str | None) -> list[str]:
     return summaries
 
 
-# ---- disk cache ----
-def _disk_path(subject: str, pdf: str):
-    safe = hashlib.sha256(pdf.encode("utf-8")).hexdigest()[:16]
-    return FAISS_INDEX_DIR / subject / "chunk_summaries" / f"{safe}.json"
+# ---- disk cache (content-addressed by fingerprint) ----
+# Keyed by the content fingerprint, not by subject/pdf, so the SAME bytes — whether
+# they arrive as a saved subject PDF or a one-off /upload — share one cache entry.
+def _disk_path(fingerprint: str):
+    return FAISS_INDEX_DIR / "chunk_summaries" / f"{fingerprint}.json"
 
 
-def _read_disk(subject: str, pdf: str, fingerprint: str) -> list[str] | None:
-    path = _disk_path(subject, pdf)
+def _read_disk(fingerprint: str) -> list[str] | None:
+    path = _disk_path(fingerprint)
     if not path.is_file():
         return None
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if doc.get("fingerprint") != fingerprint:
-        return None
     summaries = doc.get("summaries")
     return summaries if isinstance(summaries, list) else None
 
 
-def _write_disk(subject: str, pdf: str, fingerprint: str, summaries: list[str]) -> None:
-    path = _disk_path(subject, pdf)
+def _write_disk(fingerprint: str, subject: str, pdf: str, summaries: list[str]) -> None:
+    path = _disk_path(fingerprint)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            json.dumps({"fingerprint": fingerprint, "summaries": summaries}, ensure_ascii=False),
+            json.dumps(
+                {"fingerprint": fingerprint, "subject": subject, "pdf": pdf, "summaries": summaries},
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
     except OSError as exc:  # a read-only/full disk must not break generation
         log.debug("Could not cache chunk summaries to disk for %s/%s: %s", subject, pdf, exc)
 
 
-# ---- public API ----
-def get_or_build(subject: str, pdf: str, model: str | None = None) -> list[str]:
-    """Return the chunk summaries for a subject PDF, building + caching them once.
+# ---- core resolution (shared by subject PDFs and one-off uploads) ----
+def _resolve(text: str, model: str | None, subject: str, pdf: str) -> list[str]:
+    """Return chunk summaries for a document's text, building + caching them once.
 
-    Resolution order: memory → disk → MongoDB → build (LLM). The freshly built set
-    is written back to every layer so later requests (and restarts) are free.
+    Resolution order: memory → disk → MongoDB → build (LLM). The freshly built set is
+    written back to every layer (keyed by content fingerprint) so later requests — for the
+    same bytes from any source, on any worker, after any restart — are free. ``subject``/
+    ``pdf`` are labels for logging and stored metadata only; the cache identity is the
+    fingerprint of (summary model + text).
     """
-    text = read_pdf(subject, pdf)
     if not text or not text.strip():
         raise ChunkSummaryError(f"No extractable text in: {subject}/{pdf}")
     fingerprint = _fingerprint(text, model_for("summary", model))
@@ -220,7 +224,7 @@ def get_or_build(subject: str, pdf: str, model: str | None = None) -> list[str]:
         if cached is not None:
             return cached
 
-        summaries = _read_disk(subject, pdf, fingerprint)
+        summaries = _read_disk(fingerprint)
         source = "disk"
         if summaries is None:
             summaries = db.load_chunk_summaries(fingerprint)
@@ -233,12 +237,28 @@ def get_or_build(subject: str, pdf: str, model: str | None = None) -> list[str]:
         # Backfill every cache layer so the next lookup (any worker, any restart) is free.
         _cache[fingerprint] = summaries
         if source != "disk":
-            _write_disk(subject, pdf, fingerprint, summaries)
+            _write_disk(fingerprint, subject, pdf, summaries)
         if source != "mongo":
             db.store_chunk_summaries(fingerprint, subject, pdf, summaries)
         if source == "built":
             log.info("Built %d chunk summaries for %s/%s.", len(summaries), subject, pdf)
         return summaries
+
+
+# ---- public API ----
+def get_or_build(subject: str, pdf: str, model: str | None = None) -> list[str]:
+    """Return the chunk summaries for a saved subject PDF, building + caching them once."""
+    return _resolve(read_pdf(subject, pdf), model, subject, pdf)
+
+
+def get_or_build_for_text(text: str, label: str, model: str | None = None) -> list[str]:
+    """Return chunk summaries for in-memory text (a one-off uploaded PDF).
+
+    Same build-once/cache-and-save pipeline as a subject PDF — keyed by content, so a
+    re-upload of the same file reuses the saved summaries instead of re-billing the LLM.
+    ``label`` (e.g. the filename) is used only for logging and stored metadata.
+    """
+    return _resolve(text, model, "(upload)", label)
 
 
 def summaries_as_content(summaries: list[str]) -> str:
@@ -247,8 +267,13 @@ def summaries_as_content(summaries: list[str]) -> str:
 
 
 def content_for(subject: str, pdf: str, model: str | None = None) -> str:
-    """Convenience: the joined chunk-summary content for a subject PDF."""
+    """Convenience: the joined chunk-summary content for a saved subject PDF."""
     return summaries_as_content(get_or_build(subject, pdf, model))
+
+
+def content_for_text(text: str, label: str, model: str | None = None) -> str:
+    """Convenience: the joined chunk-summary content for a one-off uploaded PDF."""
+    return summaries_as_content(get_or_build_for_text(text, label, model))
 
 
 def build_for_subject(subject: str, model: str | None = None) -> int:

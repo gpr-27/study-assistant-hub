@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from backend import config, db
 from backend.auth import current_owner
-from backend.chunk_summaries import ChunkSummaryError, content_for
+from backend.chunk_summaries import ChunkSummaryError, content_for, content_for_text
 from backend.documents import extract_pdf_text
 from backend.schemas import MindmapNode, MindmapRequest, MindmapResponse
 from backend.services import mindmap as mindmap_service
@@ -66,8 +66,13 @@ async def upload(
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="The uploaded PDF was empty.")
-    content = extract_pdf_text(data)
-    if not content:
+    text = extract_pdf_text(data)
+    if not text:
         raise HTTPException(status_code=422, detail="No extractable text found in that PDF.")
     fname = file.filename or "uploaded.pdf"
+    # Chunk + summarize the upload (saved/cached by content), then build from those summaries.
+    try:
+        content = content_for_text(text, fname, model)
+    except ChunkSummaryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     return _build(owner, title=f"Mind map · {fname}", source=fname, content=content, model=model)
