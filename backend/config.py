@@ -105,6 +105,23 @@ def _get_int(name: str) -> tuple[int | None, bool]:
         return None, False
 
 
+_TRUE_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES: frozenset[str] = frozenset({"0", "false", "no", "off"})
+
+
+def _get_bool(name: str, default: bool) -> bool:
+    """Read a boolean env value (true/false/yes/no/on/off/1/0); fall back to ``default``."""
+    raw = _get(name)
+    if raw is None:
+        return default
+    low = raw.lower()
+    if low in _TRUE_VALUES:
+        return True
+    if low in _FALSE_VALUES:
+        return False
+    return default
+
+
 def _get_csv(name: str) -> list[str]:
     """Parse a comma-separated env value into a de-duplicated, order-preserving list."""
     raw = _get(name)
@@ -248,6 +265,16 @@ EMBEDDING_MODEL: str | None = _get("EMBEDDING_MODEL")
 # Generation tuning — not environment-specific (same value dev & prod). Documented
 # default so the app stays usable if the knob is omitted; override in .env to tune.
 MAX_CONTENT_TOKENS: int = (_get_int("MAX_CONTENT_TOKENS")[0]) or 7000
+
+# Agentic RAG (chat): when enabled, chat retrieval becomes an LLM-driven loop —
+# rewrite the question into search queries → retrieve → grade the context → correct
+# (re-retrieve) if it's insufficient → answer — instead of a single top-k retrieval.
+# Tuning knobs with safe defaults (not deployment-specific); set AGENTIC_RAG=false to
+# fall back to classic single-shot RAG. MAX_ITERS bounds the corrective re-retrieve
+# rounds so cost/latency stay bounded.
+AGENTIC_RAG: bool = _get_bool("AGENTIC_RAG", True)
+AGENTIC_RAG_MAX_ITERS: int = max(1, (_get_int("AGENTIC_RAG_MAX_ITERS")[0]) or 2)
+AGENTIC_RAG_QUERIES: int = max(1, (_get_int("AGENTIC_RAG_QUERIES")[0]) or 3)
 
 
 # ---------------------------------------------------------------------------
@@ -429,6 +456,7 @@ def startup_diagnostics() -> list[str]:
         f" DEFAULT_MODEL    {DEFAULT_MODEL}",
         f" AVAILABLE_MODELS {len(AVAILABLE_MODELS)} ({models})",
         f" EMBEDDING_MODEL  {EMBEDDING_MODEL}",
+        f" CHAT RETRIEVAL   {('agentic (rewrite→retrieve→grade→correct, ≤' + str(AGENTIC_RAG_MAX_ITERS) + ' rounds)') if AGENTIC_RAG else 'classic single-shot RAG'}",
         f" GROQ_API_KEY     {'✓ loaded' if has_groq_key() else '✗ MISSING'}",
         f" CORS_ORIGINS     {', '.join(CORS_ORIGINS) if CORS_ORIGINS else '(none — same-origin)'}",
         f" FRONTEND         {('split → SPA on :' + str(FRONTEND_PORT) + ', API at ' + (API_BASE_URL or '?')) if SPLIT_ORIGIN else 'single server (SPA + API same origin)'}",

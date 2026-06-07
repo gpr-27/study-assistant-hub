@@ -67,6 +67,13 @@ services:
         value: BAAI/bge-small-en-v1.5
       - key: MAX_CONTENT_TOKENS
         value: "7000"
+      # --- Agentic RAG (chat): LLM-driven rewrite→retrieve→grade→correct loop ---
+      - key: AGENTIC_RAG
+        value: "true"             # set "false" for classic single-shot RAG
+      - key: AGENTIC_RAG_MAX_ITERS
+        value: "2"                # corrective re-retrieve rounds (keep small on free tier)
+      - key: AGENTIC_RAG_QUERIES
+        value: "3"                # search queries tried per round
       # --- Auth (optional, Clerk). Leave unset to run the app open (no sign-in gate). ---
       - key: CLERK_PUBLISHABLE_KEY
         sync: false               # optional — your pk_test_/pk_live_ key
