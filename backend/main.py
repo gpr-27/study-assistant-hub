@@ -22,6 +22,7 @@ from backend.config import (
     has_groq_key,
 )
 from backend import db
+from backend.chunk_summaries import ChunkSummaryError
 from backend.documents import DocumentError
 from backend.routers import chat, flashcards, guest, history, mindmap, planner, quiz, subjects
 from backend.vector_store import warm_all_subjects, warm_embeddings
@@ -87,6 +88,14 @@ else:
 async def _on_document_error(_request, exc: DocumentError) -> JSONResponse:
     log.info("Document error: %s", exc)
     return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(ChunkSummaryError)
+async def _on_chunk_summary_error(_request, exc: ChunkSummaryError) -> JSONResponse:
+    # Raised when a PDF's per-chunk summaries can't be built/parsed (e.g. unreadable PDF
+    # or malformed model output). Surface a clear 502 instead of a bare 500.
+    log.info("Chunk summary error: %s", exc)
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
 
 
 @app.exception_handler(MissingApiKeyError)

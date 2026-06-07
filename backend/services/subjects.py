@@ -7,9 +7,10 @@ index is (re)built and persisted to disk. Existing subjects are left untouched â
 only the affected subject is embedded.
 """
 import logging
+import threading
 from dataclasses import dataclass
 
-from backend import db, vector_store
+from backend import chunk_summaries, db, vector_store
 from backend.documents import DocumentError, restore_uploaded_pdf, save_pdf
 
 log = logging.getLogger(__name__)
@@ -61,7 +62,23 @@ def add_subject(name: str, files: list[tuple[str, bytes]]) -> AddSubjectResult:
             "If these are scanned documents, they need a text layer (OCR)."
         ) from exc
 
+    # Pre-build per-chunk summaries for the new PDFs in the background so they're ready
+    # for quiz/flashcard/planner generation without re-reading the full PDF later. Best-
+    # effort and off the request path: a missing Groq key or any failure just means the
+    # summaries are built lazily on first use instead. (No-op work if already cached.)
+    threading.Thread(
+        target=_safe_build_summaries, args=(name, None), name="summary-build", daemon=True
+    ).start()
+
     return AddSubjectResult(subject=name, saved_pdfs=saved, chunk_count=chunk_count)
+
+
+def _safe_build_summaries(subject: str, model: str | None) -> None:
+    """Background helper: build a subject's chunk summaries, swallowing any error."""
+    try:
+        chunk_summaries.build_for_subject(subject, model)
+    except Exception:  # noqa: BLE001 â€” pre-build is best-effort; lazy build covers misses
+        log.warning("Background chunk-summary build failed for subject '%s'.", subject, exc_info=True)
 
 
 def restore_uploaded_pdfs() -> int:

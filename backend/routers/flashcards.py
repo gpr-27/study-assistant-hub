@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from backend import config, db
 from backend.auth import current_owner
-from backend.documents import extract_pdf_text, read_pdf
+from backend.chunk_summaries import ChunkSummaryError, content_for
+from backend.documents import extract_pdf_text
 from backend.schemas import (
     Flashcard,
     FlashcardsRequest,
@@ -42,12 +43,16 @@ def _finalize(result: dict, owner: str, *, title: str, source: str, difficulty: 
 
 @router.post("/generate", response_model=FlashcardsResponse)
 def generate_flashcards(request: FlashcardsRequest, owner: str = Depends(current_owner)) -> FlashcardsResponse:
-    """Generate flashcards from the requested subject PDF's extracted text.
+    """Generate flashcards from the requested subject PDF's pre-computed chunk summaries.
 
-    Document/key errors bubble to global handlers (404 / 503). Generation or
-    parse failures map to 502; an empty result is treated as a 502 too.
+    The summaries (covering the whole document) are built once and cached, so the full
+    PDF is never re-read here. Document/key errors bubble to global handlers (404 / 503).
+    Generation or parse failures map to 502; an empty result is treated as a 502 too.
     """
-    content = read_pdf(request.subject, request.pdf)
+    try:
+        content = content_for(request.subject, request.pdf, request.model)
+    except ChunkSummaryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     try:
         result = make_flashcards(
             content=content,
