@@ -154,6 +154,21 @@ class ToolsUseSummariesTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200, resp.text)
         content_for.assert_called_once_with("Bio", "Lec-1.pdf", None)
 
+    def test_mindmap_subject_uses_chunk_summaries(self):
+        from backend.routers import mindmap as mm_router
+
+        with mock.patch.object(mm_router, "content_for", return_value="- key point") as content_for, \
+             mock.patch.object(mm_router.mindmap_service, "generate_mindmap",
+                               return_value={"label": "Central", "children": []}) as gen, \
+             mock.patch.object(db, "save", return_value=None):
+            resp = self.client.post("/api/mindmap/generate", json={
+                "mode": "subject", "subject": "Bio", "pdf": "Lec-1.pdf",
+            })
+        self.assertEqual(resp.status_code, 200, resp.text)
+        content_for.assert_called_once_with("Bio", "Lec-1.pdf", None)
+        # generate_mindmap received the summary content, not raw PDF text.
+        self.assertEqual(gen.call_args.kwargs["content"], "- key point")
+
 
 if __name__ == "__main__":
     unittest.main()
