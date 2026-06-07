@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from backend import config, db
 from backend.auth import current_owner
-from backend.documents import extract_pdf_text, read_pdf
+from backend.chunk_summaries import ChunkSummaryError, content_for
+from backend.documents import extract_pdf_text
 from backend.schemas import MindmapNode, MindmapRequest, MindmapResponse
 from backend.services import mindmap as mindmap_service
 
@@ -33,13 +34,18 @@ def _build(owner: str, *, title: str, source: str, topic=None, content=None, mod
 
 @router.post("/generate", response_model=MindmapResponse)
 def generate(request: MindmapRequest, owner: str = Depends(current_owner)) -> MindmapResponse:
-    """Build a mind map for a single subject PDF or a typed topic."""
+    """Build a mind map for a single subject PDF or a typed topic.
+
+    The subject-PDF mode builds from the PDF's pre-computed chunk summaries (covering the
+    whole document) instead of re-reading and clipping the full PDF — same as quiz/flashcards.
+    """
     if request.mode == "subject":
         if not request.subject or not request.pdf:
             raise HTTPException(status_code=400, detail="A subject and one PDF are required.")
-        content = read_pdf(request.subject, request.pdf)
-        if not content:
-            raise HTTPException(status_code=422, detail="That PDF has no extractable text.")
+        try:
+            content = content_for(request.subject, request.pdf, request.model)
+        except ChunkSummaryError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         return _build(owner, title=f"Mind map · {request.subject} / {request.pdf}",
                       source=f"{request.subject} / {request.pdf}", content=content, model=request.model)
     if request.mode == "topic":
