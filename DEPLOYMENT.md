@@ -289,5 +289,5 @@ docker run -d --env-file .env -e APP_ENV=production -e HOST=0.0.0.0 \
 | First chat slow / build pulls the model | The embedding model wasn't pre‑baked (build‑time download failed). It downloads once at runtime into the cache; rebuild with network access to bake it. |
 | History not saving | `MONGODB_URI` unset or unreachable. Logs print `MongoDB init failed; persistence disabled for this run`. Check the URI/credentials and network/IP allow‑list. |
 | Indexes rebuild on every restart | `/app/faiss_index` isn't on a persistent volume. Mount one (see [Data & persistence](#data--persistence-volumes)). |
-| Uploaded subjects disappear on restart | `/app/documents` isn't on a persistent volume. Mount one. |
+| Uploaded subjects disappear on restart | `/app/documents` isn't on a persistent volume. Either mount one (paid disk), or set `MONGODB_URI` — uploaded PDFs are then stored in MongoDB and re‑hydrated on each start, which persists them across restarts even on Render's free (diskless) tier. Bundled subjects always persist (baked into the image). |
 | 429 from AI tools | Groq rate limit. Use a higher‑TPM model or lower `MAX_CONTENT_TOKENS`. |

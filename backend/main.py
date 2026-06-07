@@ -44,6 +44,12 @@ async def lifespan(_app: "FastAPI"):
     # instant and later runs just load saved indexes from disk.
     def _warm() -> None:
         log.info("Warming embeddings and per-subject indexes in the background…")
+        # Re-hydrate any user-uploaded subjects from MongoDB BEFORE building indexes, so
+        # uploads survive a restart on a host without a persistent disk (e.g. Render's free
+        # tier). No-op when persistence is disabled; bundled subjects are unaffected.
+        from backend.services.subjects import restore_uploaded_pdfs
+
+        restore_uploaded_pdfs()
         warm_embeddings()
         warm_all_subjects()
         log.info("Embedding/index warmup complete.")
