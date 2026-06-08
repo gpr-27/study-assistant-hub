@@ -2,7 +2,7 @@ name: Keep Alive
 
 on:
   schedule:
-    - cron: "*/14 * * * *"   # every 14 minutes — beats Render's 15-min idle spindown
+    - cron: "*/10 * * * *"   # every 10 minutes — prevents Render free-tier idle spindown
   workflow_dispatch:          # manual trigger for testing
 
 jobs:
