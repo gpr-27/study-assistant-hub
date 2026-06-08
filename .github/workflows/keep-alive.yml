@@ -1,0 +1,16 @@
+name: Keep Alive
+
+on:
+  schedule:
+    - cron: "*/14 * * * *"   # every 14 minutes — beats Render's 15-min idle spindown
+  workflow_dispatch:          # manual trigger for testing
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" https://study-assistant-hub.onrender.com/api/health)
+          echo "Response: $status"
+          [ "$status" = "200" ] || exit 1
