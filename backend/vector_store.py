@@ -17,6 +17,7 @@ Every embedding/index object is created lazily inside a function so that
 importing this module never downloads a model and never needs a Groq key.
 """
 import contextlib
+import hashlib
 import json
 import logging
 import threading
@@ -117,17 +118,37 @@ def _manifest_path(subject: str) -> Path:
     return _subject_index_dir(subject) / _MANIFEST_NAME
 
 
+def _file_sha256(path: Path) -> str:
+    """Return the SHA-256 hex digest of a file's bytes (read in 1 MiB blocks)."""
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def _fingerprint(subject: str) -> dict:
     """Describe a subject's current PDFs + index settings.
 
-    A change in any PDF (added, removed, resized, re-saved) or in the embedding
-    model / chunk settings produces a different fingerprint, which triggers a
-    rebuild on the next load.
+    Keyed on each PDF's *content* (size + SHA-256), deliberately NOT its mtime.
+    A redeploy, container rebuild, `cp` of the seed documents, or MongoDB
+    re-hydration changes file timestamps while leaving the bytes identical; an
+    mtime-based fingerprint would then treat the unchanged PDFs as "stale" and
+    force a full re-embed on every cold start — and rebuilding an index spikes
+    resident memory far past Render's 512 MB free-tier cap, OOM-killing the
+    worker (whereas loading a pre-baked index costs almost nothing). A content
+    hash is invariant under all of those, so a pre-baked index is recognized as
+    fresh and merely loaded. A genuine PDF edit (added, removed, or any byte
+    change — even one that keeps the same size) still changes the hash and
+    correctly triggers a rebuild.
     """
     files = []
     for path in list_pdf_paths(subject):
-        st = path.stat()
-        files.append({"name": path.name, "size": st.st_size, "mtime": st.st_mtime})
+        files.append({
+            "name": path.name,
+            "size": path.stat().st_size,
+            "sha256": _file_sha256(path),
+        })
     return {
         "model": EMBEDDING_MODEL,
         "chunk_size": _CHUNK_SIZE,

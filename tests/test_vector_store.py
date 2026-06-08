@@ -52,6 +52,26 @@ class FingerprintTests(unittest.TestCase):
         (self.subject_dir / "Lec-1.pdf").write_bytes(_PDF_BYTES + b"more pages\n")
         self.assertNotEqual(before, self._fp())
 
+    def test_changes_when_pdf_content_edited_but_size_unchanged(self):
+        # A same-length edit (byte-for-byte different, identical size) must still
+        # invalidate the index — only a content hash catches this, size alone can't.
+        before = self._fp()
+        (self.subject_dir / "Lec-1.pdf").write_bytes(b"%PDF-1.4\nFAKE\n")  # same len as _PDF_BYTES
+        self.assertEqual(len(_PDF_BYTES), len(b"%PDF-1.4\nFAKE\n"))  # guard: sizes match
+        self.assertNotEqual(before, self._fp())
+
+    def test_unchanged_when_only_mtime_changes(self):
+        # Regression guard for the free-tier OOM: a redeploy / container rebuild /
+        # `cp` / MongoDB re-hydration changes file timestamps while leaving the PDF
+        # bytes identical. The fingerprint must treat that as FRESH (unchanged) so
+        # the pre-baked index is loaded, not re-embedded (which OOMs on 512 MB).
+        import os
+        before = self._fp()
+        for pdf in self.subject_dir.glob("*.pdf"):
+            st = pdf.stat()
+            os.utime(pdf, (st.st_atime, st.st_mtime + 10_000))
+        self.assertEqual(before, self._fp())
+
     def test_changes_when_embedding_model_changes(self):
         before = self._fp()
         with mock.patch.object(vector_store, "EMBEDDING_MODEL", "some/other-model"):
