@@ -62,8 +62,8 @@ services:
         value: llama-3.3-70b-versatile
       - key: MINDMAP_MODEL
         value: llama-3.1-8b-instant
-      - key: SUMMARY_MODEL
-        value: llama-3.1-8b-instant   # lighter model; 500k TPD vs 100k for 70B
+      # SUMMARY_MODEL intentionally unset — uses DEFAULT_MODEL (llama-3.3-70b-versatile).
+      # Changing this invalidates all pre-built chunk summary fingerprints.
       # --- Embeddings (local, keyless — pre-baked into the image) ---
       - key: EMBEDDING_MODEL
         value: BAAI/bge-small-en-v1.5
