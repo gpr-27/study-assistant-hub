@@ -139,18 +139,15 @@ documents/
 
 ## 🧠 How it works
 
+> **Deep dive:** see [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full design (diagrams, both pipelines, deployment, config reference).
+
 **Two different content strategies, by design:**
 
-- **Chat uses embeddings (RAG).** Each subject’s PDFs are split into chunks, embedded **once** with the local `fastembed` model, and saved to `faiss_index/<Subject>/`. On later runs the index is **reloaded from disk** (a `manifest.json` fingerprint rebuilds it only when the PDFs or settings change). On each question, only the **most relevant chunks** are retrieved and sent to Groq.
+- **Chat uses Agentic RAG.** Each subject’s PDFs are split into chunks, embedded **once** with the local `fastembed` model, and saved to `faiss_index/<Subject>/` (reloaded from disk on later runs; a `manifest.json` fingerprint rebuilds it only when the PDFs or settings change). On each question the system runs an **LLM-driven loop** rather than a single fetch: it **rewrites** the question into focused search queries, **retrieves** and merges chunks, **grades** whether the context is sufficient, and **re-retrieves** with new queries if not — then answers grounded in what it gathered. Toggle with `AGENTIC_RAG` (`false` = classic single-shot RAG).
 
-- **Quiz / Flashcards / Planner / Mind Map read the PDF text directly.** These tools generate from the *whole* document, so retrieval doesn’t fit. They extract the text with `pypdf` and send a **single bounded slice** to Groq in **one call** — they do **not** fan out into many calls.
+- **Quiz / Flashcards / Planner / Mind Map use pre-computed chunk summaries.** These tools generate from the *whole* document. Instead of re-reading the PDF each time, every PDF is split into chunks **once** and each chunk gets a thorough, faithful summary; the compact summary set (covering the entire document) is cached by content hash (memory + disk + MongoDB) and fed to Groq. Built eagerly when a subject is added and lazily on first use; one-off uploads go through the same pipeline.
 
-**The single-call budget — `MAX_CONTENT_TOKENS` (default 7,000):**
-- If a document **fits** within the budget, it’s sent **in full**.
-- If it’s **larger**, only the **first `MAX_CONTENT_TOKENS`** tokens are used.
-- Either way it’s **one request**, which keeps it under Groq’s per-minute token limit.
-
-> **Pages ≠ tokens.** A 62-page *slide deck* is often only ~7k tokens (~111 tokens/page) and is sent whole; a dense 60-page *paper/textbook* can be ~40k tokens and gets capped. Text density is what matters, not page count.
+**The generation budget — `MAX_CONTENT_TOKENS` (default 7,000):** the summary content for a tool is sent in full when it fits, or capped to the first `MAX_CONTENT_TOKENS` if larger — one request either way, keeping it under Groq’s per-minute token limit.
 
 ---
 
@@ -316,6 +313,7 @@ gunicorn.conf.py                env-driven gunicorn config (workers, timeouts, l
 requirements-dev.txt            runtime deps + pytest (test/CI only)
 .github/workflows/              CI (tests) + Docker (build & publish image to GHCR)
 DEPLOYMENT.md                   full production deployment guide
+ARCHITECTURE.md                 system design: pipelines, agentic RAG, config reference
 ```
 
 ---
