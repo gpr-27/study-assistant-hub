@@ -20,6 +20,7 @@ import contextlib
 import json
 import logging
 import threading
+from collections import OrderedDict
 from pathlib import Path
 
 try:
@@ -41,12 +42,21 @@ _CHUNK_SIZE: int = 1500
 _CHUNK_OVERLAP: int = 150
 _MANIFEST_NAME: str = "manifest.json"
 
-# In-process cache so repeat subject sessions within one run never touch disk.
-_cache: dict[str, FAISS] = {}
+# LRU cap: keep at most this many subject indexes in RAM at once.
+# Each FAISS index + the shared embedding model ~ 150–250 MB on the free tier (512 MB).
+# 2 concurrent subjects leaves ~100 MB for the Python/FastAPI stack.
+_CACHE_MAX: int = 2
+
+# LRU in-process cache (OrderedDict used as an ordered map; most-recently-used at end).
+_cache: OrderedDict[str, FAISS] = OrderedDict()
 
 # Serialises index builds so the startup warm thread and a chat request can't
 # build the same subject twice at once.
 _build_lock = threading.Lock()
+
+# Singleton embedding model — one load per process, shared across all subjects.
+_embeddings_instance: FastEmbedEmbeddings | None = None
+_embeddings_lock = threading.Lock()
 
 
 class VectorStoreError(Exception):
@@ -54,8 +64,14 @@ class VectorStoreError(Exception):
 
 
 def _embeddings() -> FastEmbedEmbeddings:
-    """Build the local (keyless) embedding model used for FAISS retrieval."""
-    return FastEmbedEmbeddings(model_name=EMBEDDING_MODEL)
+    """Return the process-wide embedding model, loading it once on first call."""
+    global _embeddings_instance
+    if _embeddings_instance is not None:
+        return _embeddings_instance
+    with _embeddings_lock:
+        if _embeddings_instance is None:
+            _embeddings_instance = FastEmbedEmbeddings(model_name=EMBEDDING_MODEL)
+    return _embeddings_instance
 
 
 def warm_embeddings() -> None:
@@ -173,6 +189,15 @@ def _build_and_save(subject: str) -> tuple[FAISS, int]:
     return db, chunk_count
 
 
+def _cache_put(subject: str, db: FAISS) -> None:
+    """Insert/refresh subject in the LRU cache, evicting the oldest if over cap."""
+    _cache.pop(subject, None)
+    _cache[subject] = db
+    while len(_cache) > _CACHE_MAX:
+        evicted, _ = _cache.popitem(last=False)
+        log.info("Evicted FAISS index for subject '%s' from cache (cap=%d).", evicted, _CACHE_MAX)
+
+
 def build_subject_index(subject: str) -> int:
     """Rebuild a subject's index from scratch, persist it, and cache it.
 
@@ -181,7 +206,7 @@ def build_subject_index(subject: str) -> int:
     """
     with _build_lock:
         db, chunk_count = _build_and_save(subject)
-        _cache[subject] = db
+        _cache_put(subject, db)
         return chunk_count
 
 
@@ -192,18 +217,20 @@ def load_or_build_subject_index(subject: str) -> FAISS:
     """
     cached = _cache.get(subject)
     if cached is not None:
+        _cache.move_to_end(subject)
         return cached
 
     with _build_lock:
         cached = _cache.get(subject)
         if cached is not None:
+            _cache.move_to_end(subject)
             return cached
         if _index_is_fresh(subject):
             log.info("Loading saved embeddings for subject '%s'.", subject)
             db = _load_from_disk(subject)
         else:
             db, _ = _build_and_save(subject)
-        _cache[subject] = db
+        _cache_put(subject, db)
         return db
 
 

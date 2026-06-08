@@ -25,7 +25,7 @@ from backend import db
 from backend.chunk_summaries import ChunkSummaryError
 from backend.documents import DocumentError
 from backend.routers import chat, flashcards, guest, history, mindmap, planner, quiz, subjects
-from backend.vector_store import warm_all_subjects, warm_embeddings
+from backend.vector_store import warm_embeddings
 
 log = logging.getLogger("backend.main")
 
@@ -44,16 +44,17 @@ async def lifespan(_app: "FastAPI"):
     # build any missing/stale per-subject indexes, so the first chat session is
     # instant and later runs just load saved indexes from disk.
     def _warm() -> None:
-        log.info("Warming embeddings and per-subject indexes in the background…")
+        log.info("Warming embedding model in the background…")
         # Re-hydrate any user-uploaded subjects from MongoDB BEFORE building indexes, so
         # uploads survive a restart on a host without a persistent disk (e.g. Render's free
         # tier). No-op when persistence is disabled; bundled subjects are unaffected.
         from backend.services.subjects import restore_uploaded_pdfs
 
         restore_uploaded_pdfs()
+        # Warm the embedding model singleton (one-time ONNX load). Subject indexes are
+        # loaded lazily on first chat so startup RAM stays well under 512 MB on the free tier.
         warm_embeddings()
-        warm_all_subjects()
-        log.info("Embedding/index warmup complete.")
+        log.info("Embedding model warm.")
 
     threading.Thread(target=_warm, daemon=True).start()
 

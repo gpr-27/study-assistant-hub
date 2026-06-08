@@ -31,7 +31,7 @@ services:
   - type: web
     name: study-assistant-hub
     runtime: docker
-    plan: free                    # bump to `standard` (2 GB) if the embedding model OOMs
+    plan: free                    # bump to `standard` (2 GB) for more headroom
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /api/health
@@ -62,6 +62,8 @@ services:
         value: llama-3.3-70b-versatile
       - key: MINDMAP_MODEL
         value: llama-3.1-8b-instant
+      - key: SUMMARY_MODEL
+        value: llama-3.1-8b-instant   # lighter model; 500k TPD vs 100k for 70B
       # --- Embeddings (local, keyless — pre-baked into the image) ---
       - key: EMBEDDING_MODEL
         value: BAAI/bge-small-en-v1.5
