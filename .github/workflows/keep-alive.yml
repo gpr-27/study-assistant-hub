@@ -2,7 +2,7 @@ name: Keep Alive
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # every 10 minutes — prevents Render free-tier idle spindown
+    - cron: "*/30 * * * *"   # every 30 minutes — prevents Render free-tier idle spindown
   workflow_dispatch:          # manual trigger for testing
 
 jobs:
