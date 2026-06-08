@@ -11,6 +11,7 @@ env/
 .env.local
 .env.production
 .env.*.local
+render-upload.env
 
 # Generated artifacts (rebuildable)
 faiss_index/
