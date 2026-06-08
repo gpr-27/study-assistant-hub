@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-
 ###############################################################################
 # Study Assistant Hub — production image
 #
@@ -14,9 +12,16 @@
 # Every value comes from the environment (see .env.example / .env.production.example)
 # — nothing deployment-specific is baked into the image. Secrets are injected at
 # run time (env_file / -e / platform secret store); they are NEVER built in.
+#
+# No `# syntax=` directive on purpose: it keeps the build from pulling an external
+# BuildKit frontend image (one fewer network dependency at build time). Only stock
+# Dockerfile features are used, so the engine's built-in frontend handles it.
 ###############################################################################
 
-ARG PYTHON_VERSION=3.13
+# Python 3.12: mature and has prebuilt wheels for every dependency (faiss-cpu,
+# onnxruntime, numpy, …), so the build never falls back to a slow/failing source
+# compile. Override with --build-arg PYTHON_VERSION=... if you need a different one.
+ARG PYTHON_VERSION=3.12
 
 # -----------------------------------------------------------------------------
 # Stage 1 — builder: resolve & install dependencies into /opt/venv

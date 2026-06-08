@@ -93,7 +93,7 @@ Google Cloud Run, AWS App Runner/ECS, a plain VPS**, etc.
 
 ## What the image contains
 
-- **Multi‑stage build** on `python:3.13-slim`: dependencies are installed into a
+- **Multi‑stage build** on `python:3.12-slim`: dependencies are installed into a
   virtualenv in a builder stage and copied into a lean runtime stage.
 - **Pre‑baked models**: the fastembed embedding model **and** the tiktoken
   encoding are downloaded at build time into `/opt/cache`, so the **first
