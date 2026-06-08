@@ -264,7 +264,12 @@ EMBEDDING_MODEL: str | None = _get("EMBEDDING_MODEL")
 
 # Generation tuning — not environment-specific (same value dev & prod). Documented
 # default so the app stays usable if the knob is omitted; override in .env to tune.
-MAX_CONTENT_TOKENS: int = (_get_int("MAX_CONTENT_TOKENS")[0]) or 7000
+# Kept modest (3000) because a provider's per-minute token budget counts the INPUT
+# *and* the reserved output of a single request: on Groq's free tier the smallest
+# model (llama-3.1-8b-instant) allows only 6000 tokens/minute, so the content slice
+# plus the prompt plus the capped completion must all fit under that. A larger value
+# is safe only on higher-tier models/plans.
+MAX_CONTENT_TOKENS: int = (_get_int("MAX_CONTENT_TOKENS")[0]) or 3000
 
 # Agentic RAG (chat): when enabled, chat retrieval becomes an LLM-driven loop —
 # rewrite the question into search queries → retrieve → grade the context → correct

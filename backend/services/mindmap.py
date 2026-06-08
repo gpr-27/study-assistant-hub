@@ -15,10 +15,11 @@ from groq import APIError, Groq
 from backend.config import model_for, require_groq_key
 from backend.documents import clip_to_tokens
 
-# Mind Map runs on a lighter model by default (the mindmap override /
-# DEFAULT_MODEL), so its single-call content budget is smaller than the other
-# tools'.
-_MAX_CONTENT_TOKENS: int = 4000
+# Mind Map runs on a lighter model by default (MINDMAP_MODEL — typically the 6000
+# TPM free-tier 8B). Its per-minute budget counts input + reserved output, so the
+# content slice is bounded and the (small) output is capped below.
+_MAX_CONTENT_TOKENS: int = 3000
+_MAX_OUTPUT_TOKENS: int = 1024   # a flat branches/points map is small; cap the completion
 _MAX_BRANCHES: int = 8       # cap main branches
 _MAX_POINTS: int = 6         # cap points per branch
 _MAX_LABEL_CHARS: int = 80
@@ -104,6 +105,7 @@ def generate_mindmap(*, topic: str | None = None, content: str | None = None, mo
             ],
             response_format={"type": "json_object"},
             temperature=0.3,
+            max_tokens=_MAX_OUTPUT_TOKENS,
         )
         data = json.loads(response.choices[0].message.content or "{}")
     except json.JSONDecodeError as exc:

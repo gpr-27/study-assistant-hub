@@ -15,6 +15,19 @@ from backend.documents import clip_to_tokens
 
 _SYSTEM_PROMPT: str = "You are a helpful teacher creating educational flashcards. Always respond with valid JSON."
 
+# Output (completion) cap. A provider's per-minute token budget counts the RESERVED
+# output too, and with no cap Groq reserves the model's full ~8k default completion —
+# which alone can exceed the free-tier limit. Size it to the actual deck: a JSON card
+# is ~100 tokens; clamp so input + this stays under the model's TPM cap.
+_TOKENS_PER_CARD: int = 110
+_MIN_OUTPUT_TOKENS: int = 512
+_MAX_OUTPUT_TOKENS: int = 2048
+
+
+def _output_tokens(num_cards: int) -> int:
+    """Completion-token cap sized to the requested number of cards."""
+    return max(_MIN_OUTPUT_TOKENS, min(_MAX_OUTPUT_TOKENS, num_cards * _TOKENS_PER_CARD + 256))
+
 
 class FlashcardError(Exception):
     """Raised when flashcards cannot be generated or parsed from the model."""
@@ -104,7 +117,7 @@ Return ONLY valid JSON with this exact structure:
 """.strip()
 
 
-def _generate_from_prompt(prompt: str, model) -> list[dict]:
+def _generate_from_prompt(prompt: str, model, max_tokens: int) -> list[dict]:
     """Call Groq once with a prepared prompt and return validated cards."""
     client = Groq()
     try:
@@ -116,6 +129,7 @@ def _generate_from_prompt(prompt: str, model) -> list[dict]:
             ],
             response_format={"type": "json_object"},
             temperature=0.5,
+            max_tokens=max_tokens,
         )
         raw = response.choices[0].message.content
         data = json.loads(raw)
@@ -145,7 +159,9 @@ def make_flashcards(content: str, num_cards: int = 10, difficulty: str = "medium
         raise FlashcardError("Cannot create flashcards from empty content.")
     target = max(1, num_cards)
     snippet = clip_to_tokens(content, MAX_CONTENT_TOKENS)
-    cards = _generate_from_prompt(_build_prompt(snippet, target, difficulty), model_for("flashcards", model))
+    cards = _generate_from_prompt(
+        _build_prompt(snippet, target, difficulty), model_for("flashcards", model), _output_tokens(target)
+    )
     return {"cards": cards[:target]}
 
 
@@ -159,5 +175,7 @@ def make_flashcards_from_topic(topic: str, num_cards: int = 10, difficulty: str 
     if not topic or not topic.strip():
         raise FlashcardError("Cannot create flashcards without a topic.")
     target = max(1, num_cards)
-    cards = _generate_from_prompt(_build_topic_prompt(topic.strip(), target, difficulty), model_for("flashcards", model))
+    cards = _generate_from_prompt(
+        _build_topic_prompt(topic.strip(), target, difficulty), model_for("flashcards", model), _output_tokens(target)
+    )
     return {"cards": cards[:target]}

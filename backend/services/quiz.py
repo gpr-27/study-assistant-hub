@@ -16,6 +16,18 @@ from backend.schemas import QuizQuestion
 _VALID_KEYS: tuple[str, str, str, str] = ("A", "B", "C", "D")
 _VALID_DIFFICULTIES: tuple[str, str, str] = ("easy", "medium", "hard")
 
+# Output (completion) cap. The model's per-minute token budget counts the reserved
+# output too, so cap it to the actual quiz size (~150 tokens for a question with four
+# options + explanation in JSON) rather than letting Groq reserve its full default.
+_TOKENS_PER_QUESTION: int = 160
+_MIN_OUTPUT_TOKENS: int = 512
+_MAX_OUTPUT_TOKENS: int = 2048
+
+
+def _output_tokens(num_questions: int) -> int:
+    """Completion-token cap sized to the requested number of questions."""
+    return max(_MIN_OUTPUT_TOKENS, min(_MAX_OUTPUT_TOKENS, num_questions * _TOKENS_PER_QUESTION + 256))
+
 
 class QuizError(Exception):
     """Raised when a quiz cannot be generated or parsed from the model output."""
@@ -127,7 +139,7 @@ def _build_topic_prompt(topic: str, num_questions: int, difficulty: str) -> str:
     )
 
 
-def _generate_from_prompt(prompt: str, model) -> list[QuizQuestion]:
+def _generate_from_prompt(prompt: str, model, max_tokens: int) -> list[QuizQuestion]:
     """Call Groq once with a prepared prompt and return validated questions."""
     require_groq_key()
     client = Groq()
@@ -140,6 +152,7 @@ def _generate_from_prompt(prompt: str, model) -> list[QuizQuestion]:
             ],
             response_format={"type": "json_object"},
             temperature=0.5,
+            max_tokens=max_tokens,
         )
         payload = response.choices[0].message.content
         data = json.loads(payload or "{}")
@@ -170,7 +183,7 @@ def make_quiz(content: str, num_questions: int, difficulty: str, model: str | No
     level = _normalise_difficulty(difficulty)
     snippet = clip_to_tokens(content, MAX_CONTENT_TOKENS)
     resolved = model_for("quiz", model)
-    questions = _generate_from_prompt(_build_prompt(snippet, wanted, level), resolved)
+    questions = _generate_from_prompt(_build_prompt(snippet, wanted, level), resolved, _output_tokens(wanted))
     return {"questions": [q.model_dump() for q in questions[:wanted]]}
 
 
@@ -186,7 +199,8 @@ def make_quiz_from_topic(topic: str, num_questions: int, difficulty: str, model:
     level = _normalise_difficulty(difficulty)
     prompt = _build_topic_prompt(topic.strip(), wanted, level)
     resolved = model_for("quiz", model)
+    budget = _output_tokens(wanted)
     # Single Groq call here, so one malformed roll = total failure. Retry once
     # before giving up (the global handler still surfaces a clear 502 if both fail).
-    questions = _generate_from_prompt(prompt, resolved) or _generate_from_prompt(prompt, resolved)
+    questions = _generate_from_prompt(prompt, resolved, budget) or _generate_from_prompt(prompt, resolved, budget)
     return {"questions": [q.model_dump() for q in questions[:wanted]]}

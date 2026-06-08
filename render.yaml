@@ -68,7 +68,8 @@ services:
       - key: EMBEDDING_MODEL
         value: BAAI/bge-small-en-v1.5
       - key: MAX_CONTENT_TOKENS
-        value: "7000"
+        value: "3000"             # input + reserved output must fit the model's TPM
+                                  # cap (free-tier 8B = 6000 tokens/min)
       # --- Agentic RAG (chat): LLM-driven rewrite→retrieve→grade→correct loop ---
       - key: AGENTIC_RAG
         value: "true"             # set "false" for classic single-shot RAG

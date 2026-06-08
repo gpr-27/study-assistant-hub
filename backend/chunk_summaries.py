@@ -33,7 +33,7 @@ import threading
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from backend import db
-from backend.config import FAISS_INDEX_DIR, MAX_CONTENT_TOKENS, model_for, require_groq_key
+from backend.config import FAISS_INDEX_DIR, model_for, require_groq_key
 from backend.documents import list_pdf_names, read_pdf
 
 log = logging.getLogger(__name__)
@@ -44,10 +44,16 @@ log = logging.getLogger(__name__)
 _CHUNK_SIZE: int = 3000
 _CHUNK_OVERLAP: int = 200
 
-# A rough chars-per-token factor used to batch chunks under the model's token
-# budget without importing the tokenizer (which would need a network download).
-_CHARS_PER_TOKEN: int = 4
-_BATCH_CHAR_BUDGET: int = MAX_CONTENT_TOKENS * _CHARS_PER_TOKEN
+# Per-batch INPUT budget (chars) for one summarization call. Deliberately small and
+# INDEPENDENT of MAX_CONTENT_TOKENS: the summary may run on the free-tier 8B model
+# (6000 tokens/min), and that per-minute budget counts this input PLUS the reserved
+# output below — so keep input + _SUMMARY_MAX_OUTPUT_TOKENS comfortably under the cap.
+# ~8000 chars ≈ 2000 input tokens (≈ 2 chunks). Smaller batches mean more calls, but
+# the summaries are cached (disk + Mongo) so it is a one-time cost per document.
+_BATCH_CHAR_BUDGET: int = 8000
+# Completion cap for a summary batch. Without it Groq reserves the model's full
+# default output (~8k), which alone can exceed the 8B model's per-minute limit.
+_SUMMARY_MAX_OUTPUT_TOKENS: int = 2500
 
 # In-process cache: fingerprint -> list[str]. The fingerprint already encodes the
 # PDF text + model, so it is the whole identity of a summary set.
@@ -138,6 +144,7 @@ def _summarize_batch(chunks: list[str], model: str | None) -> list[str]:
             ],
             response_format={"type": "json_object"},
             temperature=0.2,
+            max_tokens=_SUMMARY_MAX_OUTPUT_TOKENS,
         )
         data = json.loads(resp.choices[0].message.content or "{}")
     except APIError:

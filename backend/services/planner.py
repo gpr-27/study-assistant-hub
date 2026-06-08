@@ -16,6 +16,13 @@ from backend.documents import clip_to_tokens, pdf_signature
 
 _HOURS_PER_DAY: int = 2
 
+# Completion caps. A model's per-minute token budget counts the reserved output, so
+# bound it explicitly instead of letting Groq reserve its full default (~8k) — which
+# alone can exceed the free-tier 8B model's 6000 TPM. The TOPICS/SUMMARY view is
+# compact; a day-by-day plan can run longer.
+_SUMMARY_MAX_OUTPUT_TOKENS: int = 2000
+_PLAN_MAX_OUTPUT_TOKENS: int = 3500
+
 # Cache of generated summaries keyed by (subject, pdf, signature) to avoid
 # re-billing the same document within a process lifetime. The signature
 # (mtime, size) is part of the key so replacing a PDF re-summarizes it instead
@@ -73,6 +80,7 @@ def _summarize_text(name: str, text: str, model: str | None = None) -> str:
                 {"role": "user", "content": _summary_prompt(name, text)},
             ],
             temperature=0.4,
+            max_tokens=_SUMMARY_MAX_OUTPUT_TOKENS,
         )
     except APIError:
         raise  # Groq errors (rate limit, auth, …) are formatted by the global handlers
@@ -217,6 +225,7 @@ def _call_plan(prompt: str, model: str | None = None) -> str:
                 {"role": "user", "content": prompt},
             ],
             temperature=0.5,
+            max_tokens=_PLAN_MAX_OUTPUT_TOKENS,
         )
     except APIError:
         raise  # Groq errors (rate limit, auth, …) are formatted by the global handlers
