@@ -34,7 +34,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from backend.config import EMBEDDING_MODEL, FAISS_INDEX_DIR
-from backend.documents import list_pdf_paths, subject_internal_key
+from backend.documents import _USER_PREFIX, list_pdf_paths, subject_internal_key
 
 log = logging.getLogger(__name__)
 
@@ -198,23 +198,54 @@ def _cache_put(subject: str, db: FAISS) -> None:
         log.info("Evicted FAISS index for subject '%s' from cache (cap=%d).", evicted, _CACHE_MAX)
 
 
+def _is_user_subject(key: str) -> bool:
+    return key.startswith(_USER_PREFIX)
+
+
+def _save_index_to_mongo(key: str) -> None:
+    """Best-effort: persist a user subject's FAISS index to MongoDB."""
+    if not _is_user_subject(key):
+        return
+    from backend import db as mongo_db
+    mongo_db.store_subject_index(key, _subject_index_dir(key))
+
+
+def _restore_index_from_mongo(key: str) -> bool:
+    """Try to restore a user subject's FAISS index from MongoDB to disk.
+
+    Returns True when all 3 index files were written and the manifest
+    still matches the current PDFs (so the index is fresh).
+    """
+    if not _is_user_subject(key):
+        return False
+    from backend import db as mongo_db
+    if not mongo_db.load_subject_index(key, _subject_index_dir(key)):
+        return False
+    return _index_is_fresh(key)
+
+
 def build_subject_index(subject: str, owner: str | None = None) -> int:
     """Rebuild a subject's index from scratch, persist it, and cache it.
 
-    Called when a subject's PDFs change (e.g. a new subject is added). Returns
-    the number of indexed chunks.
+    After building, the index is also saved to MongoDB so user-uploaded
+    subjects survive a restart without re-embedding their PDFs.
     """
     key = subject_internal_key(subject, owner)
     with _build_lock:
         db, chunk_count = _build_and_save(key)
         _cache_put(key, db)
-        return chunk_count
+    _save_index_to_mongo(key)
+    return chunk_count
 
 
 def load_or_build_subject_index(subject: str, owner: str | None = None) -> FAISS:
     """Return a subject's FAISS store, building it once if needed.
 
-    Resolution order: in-process cache → fresh on-disk index → (re)build.
+    Resolution order:
+      1. In-process LRU cache  (instant)
+      2. Fresh on-disk index   (disk → load, no embedding work)
+      3. MongoDB restore       (disk was wiped; write files + load, no embedding work)
+      4. Rebuild from PDFs     (fallback: embed all PDFs via fastembed)
     """
     key = subject_internal_key(subject, owner)
     cached = _cache.get(key)
@@ -230,8 +261,13 @@ def load_or_build_subject_index(subject: str, owner: str | None = None) -> FAISS
         if _index_is_fresh(key):
             log.info("Loading saved embeddings for subject '%s'.", key)
             db = _load_from_disk(key)
+        elif _restore_index_from_mongo(key):
+            log.info("Restored FAISS index from MongoDB for '%s'.", key)
+            db = _load_from_disk(key)
         else:
+            log.info("Rebuilding FAISS index for '%s'…", key)
             db, _ = _build_and_save(key)
+            _save_index_to_mongo(key)
         _cache_put(key, db)
         return db
 

@@ -448,6 +448,79 @@ def iter_uploaded_pdfs():
         log.warning("Could not read uploaded PDFs from MongoDB: %s", exc)
 
 
+# ---- FAISS indexes (per user subject) — persist across restarts without rebuilding ----
+# Bundled subjects (Mathematics, Operating System) have their indexes baked into the Docker
+# image and never need MongoDB storage. User-uploaded subjects live on ephemeral disk
+# (Render free tier) so we persist their 3 index files in GridFS and restore them on startup
+# — the user gets their subject back instantly without re-embedding all their PDFs.
+INDEX_BUCKET: str = "subject_indexes"
+_INDEX_FILES: tuple[str, ...] = ("index.faiss", "index.pkl", "manifest.json")
+
+
+def _index_gridfs():
+    """Return a GridFS bucket for FAISS index files, or None when persistence is off."""
+    database = _get_db()
+    if database is None:
+        return None
+    from gridfs import GridFS
+
+    return GridFS(database, collection=INDEX_BUCKET)
+
+
+def store_subject_index(key: str, index_dir: "Path") -> bool:
+    """Persist a user subject's FAISS index files to MongoDB so they survive a restart.
+
+    ``key`` is the internal subject key (e.g. ``user__user_abc123__Notes``). All three files
+    (index.faiss, index.pkl, manifest.json) are replaced atomically: old versions are deleted
+    first so repeated uploads don't accumulate stale blobs. Returns True if all files were
+    stored, False if persistence is unavailable or the write failed.
+    """
+    fs = _index_gridfs()
+    if fs is None:
+        return False
+    try:
+        for fname in _INDEX_FILES:
+            path = index_dir / fname
+            if not path.is_file():
+                continue
+            for old in fs.find({"subject_key": key, "filename": fname}):
+                fs.delete(old._id)
+            fs.put(path.read_bytes(), filename=fname, subject_key=key, saved_at=_now())
+        log.info("Stored FAISS index in MongoDB: %s.", key)
+        return True
+    except Exception as exc:  # noqa: BLE001 — persistence must never break the upload
+        log.warning("Could not store FAISS index %s in MongoDB: %s", key, exc)
+        return False
+
+
+def load_subject_index(key: str, index_dir: "Path") -> bool:
+    """Restore a user subject's FAISS index files from MongoDB to disk.
+
+    Writes all 3 files to ``index_dir``, creating it if needed. Returns True only when all
+    3 files were restored (a partial restore is not useful for FAISS.load_local). A missing
+    key or any read failure returns False so the caller can fall back to rebuilding.
+    """
+    fs = _index_gridfs()
+    if fs is None:
+        return False
+    try:
+        restored = 0
+        for fname in _INDEX_FILES:
+            doc = fs.find_one({"subject_key": key, "filename": fname})
+            if doc is None:
+                continue
+            index_dir.mkdir(parents=True, exist_ok=True)
+            (index_dir / fname).write_bytes(doc.read())
+            restored += 1
+        if restored == len(_INDEX_FILES):
+            log.info("Restored FAISS index from MongoDB: %s.", key)
+            return True
+        return False
+    except Exception as exc:  # noqa: BLE001 — a restore failure falls back to rebuild
+        log.warning("Could not restore FAISS index %s from MongoDB: %s", key, exc)
+        return False
+
+
 # ---- chunk summaries (per-PDF) — built once, reused across restarts ----
 # Each subject PDF is summarized chunk-by-chunk once (see backend.chunk_summaries) and the
 # compact result is cached here so a free-tier restart (which rebuilds the ephemeral disk
