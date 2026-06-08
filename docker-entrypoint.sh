@@ -16,7 +16,7 @@ DATA_DIR="/app/documents"
 if [ -d "$SEED_DIR" ]; then
   mkdir -p "$DATA_DIR"
   # -r recursive, -n no-clobber: never overwrite an existing (possibly newer) file.
-  cp -rn "$SEED_DIR"/. "$DATA_DIR"/ 2>/dev/null || true
+  cp -rpn "$SEED_DIR"/. "$DATA_DIR"/ 2>/dev/null || true
 fi
 
 # Replace the shell with the CMD so signals (SIGTERM from the container runtime)

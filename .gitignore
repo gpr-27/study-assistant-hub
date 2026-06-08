@@ -13,9 +13,6 @@ env/
 .env.*.local
 render-upload.env
 
-# Generated artifacts (rebuildable)
-faiss_index/
-
 # Dev screenshots
 .screens/
 

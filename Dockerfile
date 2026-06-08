@@ -96,7 +96,7 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # /app/documents doesn't hide them — the entrypoint seeds them in on start.
 COPY documents /opt/seed-documents
 
-# Writable data dirs (empty in the image): faiss_index is rebuilt from the PDFs,
+# Writable data dirs: faiss_index holds pre-built (and any new) indexes,
 # documents holds the seed PDFs + any uploads. Created owned by the app user so a
 # named volume first-mounted here inherits the correct ownership.
 RUN mkdir -p /app/documents /app/faiss_index /opt/cache \
@@ -112,6 +112,26 @@ RUN python -c "from langchain_community.embeddings import FastEmbedEmbeddings as
       || echo 'WARN: embedding model not pre-baked; it will download on first use.' ; \
     python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')" \
       || echo 'WARN: tiktoken encoding not pre-baked; it will download on first use.'
+
+# Pre-build FAISS indexes for all bundled subjects so the container loads them
+# instantly on every cold start — no rebuild needed at runtime.
+# We seed the documents here with -p (preserve timestamps) so the manifest
+# fingerprint matches what the entrypoint seeds at runtime.
+RUN cp -rp /opt/seed-documents/. /app/documents/ \
+ && EMBEDDING_MODEL="${EMBEDDING_MODEL}" \
+    LLM_PROVIDER=groq \
+    AVAILABLE_MODELS=llama-3.3-70b-versatile \
+    DEFAULT_MODEL=llama-3.3-70b-versatile \
+    APP_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=8000 \
+    python -c "
+from backend.vector_store import warm_embeddings, warm_all_subjects
+warm_embeddings()
+warm_all_subjects()
+print('FAISS indexes pre-built for all bundled subjects.')
+" \
+ || echo 'WARN: FAISS pre-build failed; indexes will rebuild on first use.'
 
 EXPOSE 8000
 
