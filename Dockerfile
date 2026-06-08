@@ -133,12 +133,7 @@ RUN cp -rp /opt/seed-documents/. /app/documents/ \
     APP_ENV=production \
     HOST=0.0.0.0 \
     PORT=8000 \
-    python -c "
-from backend.vector_store import warm_embeddings, warm_all_subjects
-warm_embeddings()
-warm_all_subjects()
-print('FAISS indexes pre-built for all bundled subjects.')
-" \
+    python -c "from backend.vector_store import warm_embeddings, warm_all_subjects; warm_embeddings(); warm_all_subjects(); print('FAISS indexes pre-built.')" \
  || echo 'WARN: FAISS pre-build failed; indexes will rebuild on first use.'
 
 EXPOSE 8000
