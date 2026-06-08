@@ -76,7 +76,7 @@ def start_subject_session(subject: str, model: str | None = None, owner: str = L
     The index is built once and reloaded from disk on later runs (see
     backend.vector_store), so reopening a subject is fast.
     """
-    retriever = vector_store.get_subject_retriever(subject, _RETRIEVE_K)
+    retriever = vector_store.get_subject_retriever(subject, _RETRIEVE_K, owner)
     label = f"Subject · {subject}"
     chat_id = db.create_chat(owner, {"mode": "subject", "subject": subject, "label": label,
                                      "model": model_for("chat", model)})
@@ -252,7 +252,7 @@ def resume_session(owner: str, chat_id: str) -> tuple[str, str, str, str, list[d
 
     retriever = None
     if mode == "subject" and subject:
-        retriever = vector_store.get_subject_retriever(subject, _RETRIEVE_K)
+        retriever = vector_store.get_subject_retriever(subject, _RETRIEVE_K, owner)
 
     # Rebuild the (question, answer) history from stored alternating messages.
     history: list[tuple[str, str]] = []

@@ -27,12 +27,13 @@ class AddSubjectResult:
     chunk_count: int
 
 
-def add_subject(name: str, files: list[tuple[str, bytes]]) -> AddSubjectResult:
+def add_subject(name: str, files: list[tuple[str, bytes]], owner: str | None = None) -> AddSubjectResult:
     """Save uploaded PDFs under a subject and build its persistent index.
 
-    `files` is a list of (filename, bytes). Adding to an existing subject name
-    appends the PDFs and rebuilds that subject's index. Raises SubjectError if no
-    files are given, none are valid PDFs, or the PDFs contain no readable text.
+    `files` is a list of (filename, bytes). When owner is provided the subject is
+    stored under the user-namespaced path so it is only visible to that user.
+    Raises SubjectError if no files are given, none are valid PDFs, or the PDFs
+    contain no readable text.
     """
     if not files:
         raise SubjectError("Add at least one PDF to create a subject.")
@@ -40,43 +41,35 @@ def add_subject(name: str, files: list[tuple[str, bytes]]) -> AddSubjectResult:
     saved: list[str] = []
     for filename, data in files:
         try:
-            stored_name = save_pdf(name, filename, data)
+            stored_name = save_pdf(name, filename, data, owner)
         except DocumentError as exc:
             raise SubjectError(str(exc)) from exc
         saved.append(stored_name)
-        # Mirror the saved PDF into MongoDB (when configured) so it survives a restart on a
-        # host with no persistent disk. Best-effort: the on-disk copy is authoritative, so a
-        # persistence hiccup never fails the upload — it only means it won't outlive a restart.
-        db.store_uploaded_pdf(name, stored_name, data)
+        # Mirror the saved PDF into MongoDB so it survives a restart (best-effort).
+        db.store_uploaded_pdf(name, stored_name, data, owner)
 
     if not saved:
         raise SubjectError("None of the uploaded files were valid PDFs.")
 
     try:
-        chunk_count = vector_store.build_subject_index(name)
+        chunk_count = vector_store.build_subject_index(name, owner)
     except vector_store.VectorStoreError as exc:
-        # The PDFs are saved, but nothing could be embedded (e.g. scanned images
-        # with no extractable text). Surface that clearly; the files remain.
         raise SubjectError(
             f"Saved {len(saved)} PDF(s), but no readable text was found to embed. "
             "If these are scanned documents, they need a text layer (OCR)."
         ) from exc
 
-    # Pre-build per-chunk summaries for the new PDFs in the background so they're ready
-    # for quiz/flashcard/planner generation without re-reading the full PDF later. Best-
-    # effort and off the request path: a missing Groq key or any failure just means the
-    # summaries are built lazily on first use instead. (No-op work if already cached.)
     threading.Thread(
-        target=_safe_build_summaries, args=(name, None), name="summary-build", daemon=True
+        target=_safe_build_summaries, args=(name, None, owner), name="summary-build", daemon=True
     ).start()
 
     return AddSubjectResult(subject=name, saved_pdfs=saved, chunk_count=chunk_count)
 
 
-def _safe_build_summaries(subject: str, model: str | None) -> None:
+def _safe_build_summaries(subject: str, model: str | None, owner: str | None = None) -> None:
     """Background helper: build a subject's chunk summaries, swallowing any error."""
     try:
-        chunk_summaries.build_for_subject(subject, model)
+        chunk_summaries.build_for_subject(subject, model, owner)
     except Exception:  # noqa: BLE001 — pre-build is best-effort; lazy build covers misses
         log.warning("Background chunk-summary build failed for subject '%s'.", subject, exc_info=True)
 
@@ -84,17 +77,16 @@ def _safe_build_summaries(subject: str, model: str | None) -> None:
 def restore_uploaded_pdfs() -> int:
     """Re-hydrate documents/ from MongoDB-stored uploads. Returns the count restored.
 
-    Called once at startup (before per-subject indexes are built) so user-uploaded subjects
-    reappear after a restart on a host without a persistent disk. A no-op when MongoDB isn't
-    configured. Bundled subjects are baked into the image and are not stored in MongoDB, so
-    this only ever restores genuine user uploads and never clobbers a seeded PDF.
+    Called once at startup so user-uploaded subjects reappear after a restart on a
+    host without a persistent disk. Each PDF is restored to its owner-namespaced path
+    (``documents/user__{owner}__{subject}/``) so uploads remain scoped per user.
     """
     restored = 0
-    for subject, filename, data in db.iter_uploaded_pdfs():
+    for owner, subject, filename, data in db.iter_uploaded_pdfs():
         try:
-            if restore_uploaded_pdf(subject, filename, data):
+            if restore_uploaded_pdf(subject, filename, data, owner):
                 restored += 1
-        except OSError as exc:  # one unwritable file must not abort the whole restore
+        except OSError as exc:
             log.warning("Could not restore uploaded PDF %s/%s: %s", subject, filename, exc)
     if restored:
         log.info("Restored %d uploaded PDF(s) from MongoDB into documents/.", restored)

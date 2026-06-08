@@ -42,11 +42,11 @@ def _save_plan(owner: str, plan: str, *, title: str, source: str, target_date: s
 
 
 @router.post("/summaries", response_model=SummariesResponse)
-def create_summaries(request: SummariesRequest) -> SummariesResponse:
+def create_summaries(request: SummariesRequest, owner: str = Depends(current_owner)) -> SummariesResponse:
     """Generate a per-PDF summary for each selected document (subject mode)."""
     require_groq_key()
     try:
-        summaries = summarize_pdfs(request.subject, request.pdfs, model=request.model)
+        summaries = summarize_pdfs(request.subject, request.pdfs, model=request.model, owner=owner)
     except PlannerError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return SummariesResponse(summaries=summaries)
@@ -57,7 +57,7 @@ def create_plan(request: PlanRequest, owner: str = Depends(current_owner)) -> Pl
     """Generate a day-by-day markdown study plan from subject PDFs."""
     require_groq_key()
     try:
-        plan = generate_plan(request.subject, request.pdfs, request.target_date, model=request.model)
+        plan = generate_plan(request.subject, request.pdfs, request.target_date, model=request.model, owner=owner)
     except PlannerError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return _save_plan(owner, plan, title=f"Plan · {request.subject}", source=request.subject,

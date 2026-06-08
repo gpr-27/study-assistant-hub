@@ -43,7 +43,7 @@ def generate(request: MindmapRequest, owner: str = Depends(current_owner)) -> Mi
         if not request.subject or not request.pdf:
             raise HTTPException(status_code=400, detail="A subject and one PDF are required.")
         try:
-            content = content_for(request.subject, request.pdf, request.model)
+            content = content_for(request.subject, request.pdf, request.model, owner)
         except ChunkSummaryError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return _build(owner, title=f"Mind map · {request.subject} / {request.pdf}",

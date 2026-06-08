@@ -85,28 +85,23 @@ def _summarize_text(name: str, text: str, model: str | None = None) -> str:
     return summary
 
 
-def _summarize_one(subject: str, pdf: str, model: str | None = None) -> str:
-    """Return a cached or freshly generated TOPICS/SUMMARY view for a subject PDF.
-
-    Built from the PDF's pre-computed chunk summaries (which cover the whole document)
-    rather than re-reading and clipping the full PDF, so later tools reuse one shared
-    summarization pass instead of re-billing the entire file each time.
-    """
+def _summarize_one(subject: str, pdf: str, model: str | None = None, owner: str | None = None) -> str:
+    """Return a cached or freshly generated TOPICS/SUMMARY view for a subject PDF."""
     resolved = model_for("summary", model)
-    cache_key = (subject, pdf, pdf_signature(subject, pdf), resolved)
+    cache_key = (subject, pdf, pdf_signature(subject, pdf, owner), resolved)
     if cache_key in _summary_cache:
         return _summary_cache[cache_key]
-    chunks = chunk_summaries.get_or_build(subject, pdf, model)
+    chunks = chunk_summaries.get_or_build(subject, pdf, model, owner)
     summary = _summarize_text(pdf, chunk_summaries.summaries_as_content(chunks), model=model)
     _summary_cache[cache_key] = summary
     return summary
 
 
-def summarize_pdfs(subject: str, pdfs: list[str], model: str | None = None) -> dict[str, str]:
+def summarize_pdfs(subject: str, pdfs: list[str], model: str | None = None, owner: str | None = None) -> dict[str, str]:
     """Summarize each selected subject PDF and return a {pdf_name: summary} map."""
     if not pdfs:
         raise PlannerError("No PDFs selected to summarize.")
-    return {pdf: _summarize_one(subject, pdf, model) for pdf in pdfs}
+    return {pdf: _summarize_one(subject, pdf, model, owner) for pdf in pdfs}
 
 
 def summarize_named_texts(items: list[tuple[str, str]], model: str | None = None) -> dict[str, str]:
@@ -240,9 +235,9 @@ def _run_plan(label: str, summaries: dict[str, str], target_date: str, model: st
     return _call_plan(_plan_prompt(label, summaries, start, target, days), model)
 
 
-def generate_plan(subject: str, pdfs: list[str], target_date: str, model: str | None = None) -> str:
+def generate_plan(subject: str, pdfs: list[str], target_date: str, model: str | None = None, owner: str | None = None) -> str:
     """Generate a markdown study plan for selected subject PDFs and a target date."""
-    return _run_plan(subject, summarize_pdfs(subject, pdfs, model), target_date, model)
+    return _run_plan(subject, summarize_pdfs(subject, pdfs, model, owner), target_date, model)
 
 
 def generate_plan_from_texts(label: str, items: list[tuple[str, str]], target_date: str, model: str | None = None) -> str:

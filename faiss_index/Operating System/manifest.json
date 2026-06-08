@@ -1,0 +1,17 @@
+{
+  "chunk_overlap": 150,
+  "chunk_size": 1500,
+  "files": [
+    {
+      "mtime": 1780906416.6133733,
+      "name": "Lec-1.pdf",
+      "size": 1937578
+    },
+    {
+      "mtime": 1780906416.619485,
+      "name": "Lec-2.pdf",
+      "size": 2730809
+    }
+  ],
+  "model": "BAAI/bge-small-en-v1.5"
+}

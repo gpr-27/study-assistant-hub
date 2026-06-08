@@ -398,22 +398,28 @@ def _gridfs():
     return GridFS(db, collection=UPLOADS_BUCKET)
 
 
-def store_uploaded_pdf(subject: str, filename: str, data: bytes) -> bool:
+def store_uploaded_pdf(subject: str, filename: str, data: bytes, owner: str | None = None) -> bool:
     """Persist one uploaded PDF so it survives a restart. No-op when persistence is off.
 
-    Idempotent: a (subject, filename) already stored is left untouched. Returns True if the
-    file is stored (newly or already), False if persistence is unavailable or the write
-    fails — callers treat the on-disk copy as authoritative, so a failure here only means the
-    upload won't survive a restart, never that the upload itself fails.
+    ``owner`` is the Clerk user id (or None for bundled subjects — never used in practice).
+    Idempotent: a (owner, subject, filename) already stored is left untouched. Returns True if
+    the file is stored (newly or already), False if persistence is unavailable or the write
+    fails — callers treat the on-disk copy as authoritative.
     """
     fs = _gridfs()
     if fs is None:
         return False
     try:
-        if fs.find_one({"subject": subject, "filename": filename}) is not None:
+        query = {"subject": subject, "filename": filename}
+        if owner:
+            query["owner"] = owner
+        if fs.find_one(query) is not None:
             return True
-        fs.put(data, filename=filename, subject=subject, uploaded_at=_now())
-        log.info("Stored uploaded PDF in MongoDB: %s/%s (%d bytes).", subject, filename, len(data))
+        meta = {"filename": filename, "subject": subject, "uploaded_at": _now()}
+        if owner:
+            meta["owner"] = owner
+        fs.put(data, **meta)
+        log.info("Stored uploaded PDF in MongoDB: %s/%s owner=%s (%d bytes).", subject, filename, owner, len(data))
         return True
     except Exception as exc:  # noqa: BLE001 — persistence must never break the upload itself
         log.warning("Could not store uploaded PDF %s/%s in MongoDB: %s", subject, filename, exc)
@@ -421,11 +427,11 @@ def store_uploaded_pdf(subject: str, filename: str, data: bytes) -> bool:
 
 
 def iter_uploaded_pdfs():
-    """Yield ``(subject, filename, data)`` for every stored upload (empty when off).
+    """Yield ``(owner, subject, filename, data)`` for every stored upload (empty when off).
 
-    Used at startup to re-hydrate documents/. A read failure is logged and ends iteration
-    rather than crashing startup, so a transient DB hiccup degrades to "uploads not restored
-    this run" instead of taking the whole app down.
+    ``owner`` is the Clerk user id stored with the file, or None for pre-migration records
+    that were saved without an owner.  Used at startup to re-hydrate documents/; each file is
+    restored to its owner-namespaced path so uploads are scoped per user.
     """
     fs = _gridfs()
     if fs is None:
@@ -434,9 +440,10 @@ def iter_uploaded_pdfs():
         for grid_out in fs.find():
             subject = getattr(grid_out, "subject", None)
             filename = grid_out.filename
+            owner = getattr(grid_out, "owner", None)
             if not subject or not filename:
                 continue
-            yield subject, filename, grid_out.read()
+            yield owner, subject, filename, grid_out.read()
     except Exception as exc:  # noqa: BLE001 — a restore failure must not stop startup
         log.warning("Could not read uploaded PDFs from MongoDB: %s", exc)
 

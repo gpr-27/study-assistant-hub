@@ -34,7 +34,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from backend.config import EMBEDDING_MODEL, FAISS_INDEX_DIR
-from backend.documents import list_pdf_paths
+from backend.documents import list_pdf_paths, subject_internal_key
 
 log = logging.getLogger(__name__)
 
@@ -198,53 +198,55 @@ def _cache_put(subject: str, db: FAISS) -> None:
         log.info("Evicted FAISS index for subject '%s' from cache (cap=%d).", evicted, _CACHE_MAX)
 
 
-def build_subject_index(subject: str) -> int:
+def build_subject_index(subject: str, owner: str | None = None) -> int:
     """Rebuild a subject's index from scratch, persist it, and cache it.
 
     Called when a subject's PDFs change (e.g. a new subject is added). Returns
     the number of indexed chunks.
     """
+    key = subject_internal_key(subject, owner)
     with _build_lock:
-        db, chunk_count = _build_and_save(subject)
-        _cache_put(subject, db)
+        db, chunk_count = _build_and_save(key)
+        _cache_put(key, db)
         return chunk_count
 
 
-def load_or_build_subject_index(subject: str) -> FAISS:
+def load_or_build_subject_index(subject: str, owner: str | None = None) -> FAISS:
     """Return a subject's FAISS store, building it once if needed.
 
     Resolution order: in-process cache → fresh on-disk index → (re)build.
     """
-    cached = _cache.get(subject)
+    key = subject_internal_key(subject, owner)
+    cached = _cache.get(key)
     if cached is not None:
-        _cache.move_to_end(subject)
+        _cache.move_to_end(key)
         return cached
 
     with _build_lock:
-        cached = _cache.get(subject)
+        cached = _cache.get(key)
         if cached is not None:
-            _cache.move_to_end(subject)
+            _cache.move_to_end(key)
             return cached
-        if _index_is_fresh(subject):
-            log.info("Loading saved embeddings for subject '%s'.", subject)
-            db = _load_from_disk(subject)
+        if _index_is_fresh(key):
+            log.info("Loading saved embeddings for subject '%s'.", key)
+            db = _load_from_disk(key)
         else:
-            db, _ = _build_and_save(subject)
-        _cache_put(subject, db)
+            db, _ = _build_and_save(key)
+        _cache_put(key, db)
         return db
 
 
-def get_subject_retriever(subject: str, k: int):
+def get_subject_retriever(subject: str, k: int, owner: str | None = None):
     """Return a retriever over a subject's persistent index."""
-    return load_or_build_subject_index(subject).as_retriever(search_kwargs={"k": k})
+    return load_or_build_subject_index(subject, owner).as_retriever(search_kwargs={"k": k})
 
 
 def warm_all_subjects() -> None:
-    """Build or load every subject's index once (run in a background thread at
-    startup). Best-effort: one subject failing must not stop the others."""
+    """Build or load every bundled subject's index once (called at Docker build time).
+    Best-effort: one subject failing must not stop the others."""
     from backend.documents import list_subjects
 
-    for subject in list_subjects():
+    for subject in list_subjects():  # no owner = bundled subjects only
         try:
             load_or_build_subject_index(subject)
         except Exception:

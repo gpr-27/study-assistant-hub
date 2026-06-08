@@ -38,7 +38,7 @@ def generate_quiz(request: QuizRequest, owner: str = Depends(current_owner)) -> 
     MissingApiKeyError (no Groq key) bubble up to the global handlers (404 / 503).
     """
     try:
-        content = content_for(request.subject, request.pdf, request.model)
+        content = content_for(request.subject, request.pdf, request.model, owner)
     except ChunkSummaryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     try:

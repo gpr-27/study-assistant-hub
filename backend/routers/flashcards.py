@@ -50,7 +50,7 @@ def generate_flashcards(request: FlashcardsRequest, owner: str = Depends(current
     Generation or parse failures map to 502; an empty result is treated as a 502 too.
     """
     try:
-        content = content_for(request.subject, request.pdf, request.model)
+        content = content_for(request.subject, request.pdf, request.model, owner)
     except ChunkSummaryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     try:

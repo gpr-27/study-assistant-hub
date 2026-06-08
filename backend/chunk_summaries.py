@@ -234,9 +234,11 @@ def _resolve(text: str, model: str | None, subject: str, pdf: str) -> list[str]:
             summaries = _build(text, model)
             source = "built"
 
-        # Backfill every cache layer so the next lookup (any worker, any restart) is free.
+        # Backfill persistent layers. When MongoDB is available it is the authoritative
+        # persistent cache, so skip the disk write — it would just create local noise.
+        # Only fall back to disk when MongoDB is not configured.
         _cache[fingerprint] = summaries
-        if source != "disk":
+        if source != "disk" and not db.is_enabled():
             _write_disk(fingerprint, subject, pdf, summaries)
         if source != "mongo":
             db.store_chunk_summaries(fingerprint, subject, pdf, summaries)
@@ -246,9 +248,9 @@ def _resolve(text: str, model: str | None, subject: str, pdf: str) -> list[str]:
 
 
 # ---- public API ----
-def get_or_build(subject: str, pdf: str, model: str | None = None) -> list[str]:
+def get_or_build(subject: str, pdf: str, model: str | None = None, owner: str | None = None) -> list[str]:
     """Return the chunk summaries for a saved subject PDF, building + caching them once."""
-    return _resolve(read_pdf(subject, pdf), model, subject, pdf)
+    return _resolve(read_pdf(subject, pdf, owner), model, subject, pdf)
 
 
 def get_or_build_for_text(text: str, label: str, model: str | None = None) -> list[str]:
@@ -266,9 +268,9 @@ def summaries_as_content(summaries: list[str]) -> str:
     return "\n\n".join(f"- {s}" for s in summaries)
 
 
-def content_for(subject: str, pdf: str, model: str | None = None) -> str:
+def content_for(subject: str, pdf: str, model: str | None = None, owner: str | None = None) -> str:
     """Convenience: the joined chunk-summary content for a saved subject PDF."""
-    return summaries_as_content(get_or_build(subject, pdf, model))
+    return summaries_as_content(get_or_build(subject, pdf, model, owner))
 
 
 def content_for_text(text: str, label: str, model: str | None = None) -> str:
@@ -276,7 +278,7 @@ def content_for_text(text: str, label: str, model: str | None = None) -> str:
     return summaries_as_content(get_or_build_for_text(text, label, model))
 
 
-def build_for_subject(subject: str, model: str | None = None) -> int:
+def build_for_subject(subject: str, model: str | None = None, owner: str | None = None) -> int:
     """Build (and cache) chunk summaries for every PDF in a subject.
 
     Called right after a subject is added so its uploads are summarized up front.
@@ -284,9 +286,9 @@ def build_for_subject(subject: str, model: str | None = None) -> int:
     the whole upload. Returns the number of PDFs successfully summarized.
     """
     done = 0
-    for pdf in list_pdf_names(subject):
+    for pdf in list_pdf_names(subject, owner):
         try:
-            get_or_build(subject, pdf, model)
+            get_or_build(subject, pdf, model, owner)
             done += 1
         except Exception:  # noqa: BLE001 — build is best-effort; lazy build covers misses later
             log.warning("Could not pre-build chunk summaries for %s/%s.", subject, pdf, exc_info=True)
