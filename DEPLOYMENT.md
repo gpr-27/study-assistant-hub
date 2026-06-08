@@ -189,12 +189,22 @@ Atlas cluster or the `mongo` volume, not in the app's filesystem.
 
 ## Scaling, workers & resources
 
+**Worker count & memory:**
+
 - Tune workers with **`WEB_CONCURRENCY`** (default `2`). **Each worker loads its
-  own copy of the embedding model**, so memory scales with worker count. The app
-  is I/O‑bound (waiting on Groq/MongoDB) and each worker already serves sync
-  routes from a threadpool, so **1–2 workers** suits most deployments.
-- Suggested starting resources: **~1 vCPU, 1–2 GB RAM** for 1–2 workers. Bump
-  RAM before adding workers.
+  own copy of the embedding model**, so memory scales with worker count.
+- **Per-worker breakdown:**
+  - Python runtime + libraries: ~80 MB
+  - fastembed embedding model (`BAAI/bge-small-en-v1.5`): ~150 MB
+  - In-process FAISS indexes (all subjects): ~5–10 MB
+  - Per-request transient (vector operations, text chunks in flight): ~5–30 MB
+  - **Total per worker: ~250–350 MB** (min–max across states)
+- **Example capacity:**
+  - **Free tier (512 MB, 1 worker):** 512 − 300 = 212 MB for headroom. Tight but works; no concurrent users if a request is in flight.
+  - **Standard plan (2 GB, 2 workers):** 2000 − 700 = 1300 MB headroom. Comfortably handles 3–4 concurrent users.
+  - **Rule of thumb:** RAM ≈ 200 MB + (WEB_CONCURRENCY × 250 MB).
+- The app is **I/O‑bound** (waiting on Groq/MongoDB) and each worker already serves sync
+  routes from a threadpool, so **1–2 workers** suits most deployments. Bump RAM before adding workers.
 - Other gunicorn knobs (timeout, max‑requests recycling, keep‑alive) are env‑
   driven — see [`gunicorn.conf.py`](gunicorn.conf.py).
 - Mind **Groq rate limits** (free tier has low tokens‑per‑minute); the app
