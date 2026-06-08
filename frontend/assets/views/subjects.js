@@ -67,7 +67,7 @@
           <span class="badge badge-accent">Subject ready</span>
           <strong>${esc(result.subject)}</strong>
         </div>
-        <p class="muted" style="margin:0">Embedded ${result.chunk_count} chunk(s) from ${(result.saved_pdfs || []).length} PDF(s). Saved under <code>documents/${esc(result.subject)}/</code>.</p>
+        <p class="muted" style="margin:0">Embedded ${result.chunk_count} chunk(s) from ${(result.saved_pdfs || []).length} PDF(s) — ready to use in Chat, Quiz, Flashcards, Planner and Mind Map.</p>
         <ul class="md" style="margin:.2rem 0 .2rem 1.1rem">${list}</ul>
         <div class="row row-wrap" style="gap:.6rem">
           <a class="btn-accent" href="#chat">Open in Chat →</a>
