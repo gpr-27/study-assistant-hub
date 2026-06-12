@@ -75,12 +75,14 @@ class JsonExtractionTests(unittest.TestCase):
 class RewriteTests(unittest.TestCase):
     def test_parses_and_caps_queries(self):
         llm = FakeLLM(['{"queries": ["a", "b", "c", "d", "e"]}'])
-        out = agentic_rag._rewrite(llm, "q", [])
-        self.assertEqual(out, ["a", "b", "c"][: config.AGENTIC_RAG_QUERIES])
+        queries, prompt = agentic_rag._rewrite(llm, "q", [])
+        self.assertEqual(queries, ["a", "b", "c"][: config.AGENTIC_RAG_QUERIES])
+        self.assertIn("search queries", prompt)
 
     def test_falls_back_to_question_on_bad_json(self):
         llm = FakeLLM(["not json"])
-        self.assertEqual(agentic_rag._rewrite(llm, "what is X?", []), ["what is X?"])
+        queries, _prompt = agentic_rag._rewrite(llm, "what is X?", [])
+        self.assertEqual(queries, ["what is X?"])
 
     def test_rate_limit_propagates(self):
         llm = FakeLLM([_rate_limit()])
@@ -99,24 +101,24 @@ class RetrieveTests(unittest.TestCase):
 class GradeTests(unittest.TestCase):
     def test_sufficient_true(self):
         llm = FakeLLM(['{"sufficient": true, "missing": ""}'])
-        ok, missing = agentic_rag._grade(llm, "q", "some context")
+        ok, missing, _prompt = agentic_rag._grade(llm, "q", "some context")
         self.assertTrue(ok)
 
     def test_insufficient_with_missing(self):
         llm = FakeLLM(['{"sufficient": false, "missing": "definition of X"}'])
-        ok, missing = agentic_rag._grade(llm, "q", "ctx")
+        ok, missing, _prompt = agentic_rag._grade(llm, "q", "ctx")
         self.assertFalse(ok)
         self.assertEqual(missing, "definition of X")
 
     def test_empty_context_is_insufficient_without_calling_llm(self):
         llm = FakeLLM([])  # must not be called
-        ok, _ = agentic_rag._grade(llm, "q", "   ")
+        ok, _missing, _prompt = agentic_rag._grade(llm, "q", "   ")
         self.assertFalse(ok)
         self.assertEqual(llm.calls, [])
 
     def test_unparseable_grade_assumes_sufficient(self):
         llm = FakeLLM(["???"])
-        ok, _ = agentic_rag._grade(llm, "q", "ctx")
+        ok, _missing, _prompt = agentic_rag._grade(llm, "q", "ctx")
         self.assertTrue(ok)  # degrade to naive RAG rather than loop forever
 
 
@@ -128,10 +130,13 @@ class AnswerLoopTests(unittest.TestCase):
             '{"sufficient": true}',          # grade -> stop
             "FINAL ANSWER",                  # generate
         ])
-        out = agentic_rag.answer(retriever, llm, "question?", [], "persona", max_iters=2)
-        self.assertEqual(out, "FINAL ANSWER")
+        text, steps, sources = agentic_rag.answer(retriever, llm, "question?", [], "persona", max_iters=2)
+        self.assertEqual(text, "FINAL ANSWER")
         self.assertEqual(retriever.queries, ["q1"])     # only one retrieval round
         self.assertEqual(len(llm.calls), 3)
+        # trace covers the full path: rewrite → retrieve → grade → generate
+        self.assertEqual([s["kind"] for s in steps], ["rewrite", "retrieve", "grade", "generate"])
+        self.assertEqual(steps[2]["verdict"], "sufficient")
 
     def test_corrective_second_round_then_generate(self):
         retriever = FakeRetriever({"q1": [_Doc("weak")], "q2": [_Doc("strong extra")]})
@@ -142,13 +147,16 @@ class AnswerLoopTests(unittest.TestCase):
             '{"sufficient": true}',                       # grade #2 -> stop
             "ANSWER WITH BOTH",                          # generate
         ])
-        out = agentic_rag.answer(retriever, llm, "question?", [], "persona", max_iters=2)
-        self.assertEqual(out, "ANSWER WITH BOTH")
+        text, steps, sources = agentic_rag.answer(retriever, llm, "question?", [], "persona", max_iters=2)
+        self.assertEqual(text, "ANSWER WITH BOTH")
         self.assertEqual(retriever.queries, ["q1", "q2"])
         # final generation context should include both retrieved docs
         gen_msgs = llm.calls[-1]
         self.assertIn("weak", gen_msgs[-1].content)
         self.assertIn("strong extra", gen_msgs[-1].content)
+        # the corrective round is visible in the trace
+        verdicts = [s["verdict"] for s in steps if s["kind"] == "grade"]
+        self.assertEqual(verdicts, ["insufficient", "sufficient"])
 
     def test_round_cap_respected(self):
         retriever = FakeRetriever({"q": [_Doc("ctx")]})
@@ -158,9 +166,10 @@ class AnswerLoopTests(unittest.TestCase):
             '{"sufficient": false, "missing": "x"}',
             "ANSWER ANYWAY",
         ])
-        out = agentic_rag.answer(retriever, llm, "q?", [], "persona", max_iters=1)
-        self.assertEqual(out, "ANSWER ANYWAY")
+        text, steps, sources = agentic_rag.answer(retriever, llm, "q?", [], "persona", max_iters=1)
+        self.assertEqual(text, "ANSWER ANYWAY")
         self.assertEqual(retriever.queries, ["q"])  # no second round
+        self.assertEqual([s["verdict"] for s in steps if s["kind"] == "grade"], ["limit"])
 
 
 class ChatServiceWiringTests(unittest.TestCase):
@@ -180,9 +189,9 @@ class ChatServiceWiringTests(unittest.TestCase):
         chat_mod, sid = self._session(retriever)
         with mock.patch.object(chat_mod.config, "AGENTIC_RAG", True), \
              mock.patch.object(chat_mod, "require_groq_key", lambda: None), \
-             mock.patch.object(chat_mod.agentic_rag, "answer", return_value="AGENTIC") as ag:
+             mock.patch.object(chat_mod.agentic_rag, "answer", return_value=("AGENTIC", [], [])) as ag:
             out = chat_mod.ask(sid, "hello")
-        self.assertEqual(out, "AGENTIC")
+        self.assertEqual(out["answer"], "AGENTIC")
         ag.assert_called_once()
 
     def test_uses_classic_when_disabled(self):
@@ -195,7 +204,7 @@ class ChatServiceWiringTests(unittest.TestCase):
              mock.patch.object(chat_mod, "require_groq_key", lambda: None), \
              mock.patch.object(chat_mod.agentic_rag, "answer", side_effect=AssertionError("should not be agentic")):
             out = chat_mod.ask(sid, "hello")
-        self.assertEqual(out, "CLASSIC")
+        self.assertEqual(out["answer"], "CLASSIC")
         self.assertEqual(retriever.queries, ["hello"])  # one direct retrieval
 
 
@@ -222,7 +231,8 @@ class HttpEndToEndTests(unittest.TestCase):
              mock.patch.object(chat, "require_groq_key", lambda: None), \
              mock.patch.object(chat.vector_store, "get_subject_retriever", return_value=retriever), \
              mock.patch.object(chat, "_new_chat_model", return_value=llm):
-            start = self.client.post("/api/chat/start", json={"mode": "subject", "subject": "Bio"})
+            # Use a bundled subject that exists on disk — /chat/start validates it.
+            start = self.client.post("/api/chat/start", json={"mode": "subject", "subject": "Mathematics"})
             self.assertEqual(start.status_code, 200, start.text)
             sid = start.json()["session_id"]
 

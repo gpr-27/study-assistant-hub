@@ -1,20 +1,23 @@
 """Persistent, per-subject FAISS vector store.
 
-Each subject's lecture PDFs are embedded once with the local (keyless) fastembed
-model and saved under ``faiss_index/<subject>/``. On later runs the index is
-loaded from disk instead of being rebuilt, so chat is fast and embeddings are
-recomputed only when a subject's PDFs (or the embedding model) actually change.
+Each subject's lecture PDFs are embedded once — via the hosted Gemini embeddings
+API by default (``EMBEDDING_PROVIDER=gemini``), or the local keyless fastembed
+model as a fallback (``EMBEDDING_PROVIDER=local``) — and saved under
+``faiss_index/<subject>/``. On later runs the index is loaded from disk instead
+of being rebuilt, so chat is fast and embeddings are recomputed only when a
+subject's PDFs (or the embedding model) actually change.
 
 A small ``manifest.json`` next to each index records a fingerprint of the source
 PDFs plus the embedding/chunk settings; if the current files no longer match the
 fingerprint, the index is rebuilt automatically.
 
-The on-disk indexes are gitignored (``faiss_index/``): they are rebuildable,
-machine/model-specific binaries that persist locally across runs but are not
-committed to the repository.
+Bundled subjects' indexes are committed (pre-baked by ``scripts/prebake_all.py``)
+so the server merely LOADS them — no embedding call, no key needed for them at
+runtime. User subjects' indexes (``faiss_index/user__*/``, gitignored) are
+persisted to MongoDB GridFS and restored on startup instead.
 
 Every embedding/index object is created lazily inside a function so that
-importing this module never downloads a model and never needs a Groq key.
+importing this module never creates a client and never needs an API key.
 """
 import contextlib
 import hashlib

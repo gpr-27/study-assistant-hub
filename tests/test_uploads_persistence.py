@@ -82,17 +82,32 @@ class RestoreOrchestrationTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_restores_all_stored_uploads(self):
+        # iter_uploaded_pdfs yields (owner, subject, filename, data); owned uploads are
+        # restored to the user-namespaced path so they stay scoped per user.
         stored = [
-            ("Algorithms", "Lec-1.pdf", _PDF_BYTES),
-            ("Algorithms", "Lec-2.pdf", _PDF_BYTES),
-            ("Networks", "Intro.pdf", _PDF_BYTES),
+            ("u1", "Algorithms", "Lec-1.pdf", _PDF_BYTES),
+            ("u1", "Algorithms", "Lec-2.pdf", _PDF_BYTES),
+            ("u2", "Networks", "Intro.pdf", _PDF_BYTES),
         ]
         with mock.patch.object(db, "iter_uploaded_pdfs", return_value=iter(stored)):
             count = subjects_service.restore_uploaded_pdfs()
         self.assertEqual(count, 3)
-        self.assertTrue((self.docs / "Algorithms" / "Lec-1.pdf").is_file())
-        self.assertTrue((self.docs / "Algorithms" / "Lec-2.pdf").is_file())
-        self.assertTrue((self.docs / "Networks" / "Intro.pdf").is_file())
+        self.assertTrue((self.docs / "user__u1__Algorithms" / "Lec-1.pdf").is_file())
+        self.assertTrue((self.docs / "user__u1__Algorithms" / "Lec-2.pdf").is_file())
+        self.assertTrue((self.docs / "user__u2__Networks" / "Intro.pdf").is_file())
+
+    def test_skips_ownerless_legacy_uploads(self):
+        # Privacy guard: a record with no owner must NOT be restored to the flat
+        # documents/<subject>/ path, where it would leak as a bundled subject.
+        stored = [
+            (None, "Algorithms", "Legacy.pdf", _PDF_BYTES),
+            ("u1", "Algorithms", "Mine.pdf", _PDF_BYTES),
+        ]
+        with mock.patch.object(db, "iter_uploaded_pdfs", return_value=iter(stored)):
+            count = subjects_service.restore_uploaded_pdfs()
+        self.assertEqual(count, 1)
+        self.assertFalse((self.docs / "Algorithms").exists())
+        self.assertTrue((self.docs / "user__u1__Algorithms" / "Mine.pdf").is_file())
 
     def test_no_op_when_nothing_stored(self):
         with mock.patch.object(db, "iter_uploaded_pdfs", return_value=iter([])):
@@ -120,7 +135,7 @@ class AddSubjectStoresToDbTests(unittest.TestCase):
             result = subjects_service.add_subject("Algorithms", [("Lec-1.pdf", _PDF_BYTES)])
         self.assertEqual(result.chunk_count, 7)
         self.assertEqual(result.saved_pdfs, ["Lec-1.pdf"])
-        store.assert_called_once_with("Algorithms", "Lec-1.pdf", _PDF_BYTES)
+        store.assert_called_once_with("Algorithms", "Lec-1.pdf", _PDF_BYTES, None)
 
 
 if __name__ == "__main__":

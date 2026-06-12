@@ -2,7 +2,8 @@
 
 Study Assistant Hub is a single **FastAPI** server that serves a vanilla-JS single-page
 app **and** the `/api/*` JSON API on one origin. Text generation runs on **Groq**;
-embeddings run **locally** (keyless) via fastembed. Everything is driven by environment
+embeddings run on **Google Gemini** (hosted, `EMBEDDING_PROVIDER=gemini`, with a local
+fastembed fallback via `EMBEDDING_PROVIDER=local`). Everything is driven by environment
 variables — the same image runs identically on a laptop and on Render.
 
 ```
@@ -17,12 +18,13 @@ variables — the same image runs identically on a laptop and on Render.
                                          │
               ┌──────────────────────────┼───────────────────────────┐
               ▼                          ▼                           ▼
-        Groq (LLM)              fastembed + FAISS              MongoDB (optional)
-     text generation         local embeddings / search     history · uploads · summaries
+        Groq (LLM)            Gemini embeddings + FAISS        MongoDB (optional)
+     text generation          hosted embeddings / search    history · uploads · indexes
 ```
 
-The only required secret is `GROQ_API_KEY`. MongoDB (persistence) and Clerk (auth) are
-optional; without them the app runs fully, just open and stateless.
+The required secrets are `GROQ_API_KEY` and `GEMINI_API_KEY` (embeddings). MongoDB
+(persistence) and Clerk (auth) are optional; without them the app runs fully, just open
+and stateless.
 
 ---
 
@@ -46,8 +48,8 @@ The FastAPI **lifespan** (`backend/main.py`) runs once per worker:
    `CHAT RETRIEVAL: agentic | classic`).
 2. Spawn a background warmup thread so the first request isn't slow:
    - `restore_uploaded_pdfs()` — re-hydrate user uploads from MongoDB to disk,
-   - `warm_embeddings()` — load the fastembed model,
-   - `warm_all_subjects()` — build/load each subject's FAISS index.
+   - `warm_embeddings()` — initialize the embeddings client,
+   - `warm_all_subjects()` — load (or build) each subject's FAISS index.
 3. Start the guest janitor (cleans up expired anonymous accounts; no-op without MongoDB).
 
 `/api/health` answers immediately (it's what Render probes) because warmup is off-thread.
@@ -95,41 +97,31 @@ NAIVE:    question ─▶ retrieve top-k once ─▶ answer
 AGENTIC:  question ─▶ rewrite(N queries) ─▶ retrieve+merge ─▶ grade ──(loop if weak)──▶ answer
 ```
 
-### 3b. Quiz / Flashcards / Mind map / Planner → **chunk summaries** (`backend/chunk_summaries.py`)
+### 3b. Quiz / Flashcards / Mind map / Planner → **direct PDF content**
 
 These tools generate over a *whole selected PDF*, not a specific question, so they don't
-retrieve. Previously each request re-read the entire PDF and clipped it to the first
-`MAX_CONTENT_TOKENS` — re-reading every time and dropping the document's tail.
+retrieve. Each request extracts the PDF's text (`backend/documents.py::read_pdf` /
+`extract_pdf_text`) and clips it to the per-call budget with
+`clip_to_tokens(text, MAX_CONTENT_TOKENS)` before prompting the LLM. The budget is sized
+to fit the Groq free-tier TPM limit (input + reserved output tokens count against it).
 
-Now each PDF is split into chunks **once** and every chunk gets a thorough, faithful,
-extractive summary (definitions, formulas, terms, examples preserved). The compact set —
-covering the whole document — is what the tools feed to the LLM thereafter.
-
-Built once, cached at three layers, keyed by a **content fingerprint** (hash of the PDF
-text + summary model):
-
-- in-process **memory** (per worker),
-- **disk** at `faiss_index/chunk_summaries/<fingerprint>.json` (content-addressed),
-- **MongoDB** (when configured) — survives restarts/redeploys even with no disk.
-
-Resolution order in `_resolve()`: memory → disk → MongoDB → build (LLM), backfilling
-every layer. Because the key is a content hash, the **same bytes from any source** —
-a saved subject PDF or a one-off `/upload` — share one cache entry, and a re-upload of an
-identical file reuses the saved summaries instead of re-billing the LLM.
-
-- **Saved subject PDFs:** `content_for(subject, pdf)`; built eagerly in the background when
-  a subject is added (`services/subjects.py`) and lazily on first use otherwise.
-- **One-off uploads:** `content_for_text(text, filename)` — same pipeline; summaries saved.
+The Planner additionally offers per-PDF **summaries** ("Generate summary"): each selected
+PDF is summarized into a TOPICS/SUMMARY layout (`services/planner.py::summarize_pdfs`)
+and the result is saved to the user's history (kind `summaries`, separate from saved
+plans) when persistence is enabled.
 
 ---
 
 ## 4. Embeddings & search index (`backend/vector_store.py`)
 
-Each subject's PDFs are split into 1,500-char chunks, embedded with fastembed
-(`BAAI/bge-small-en-v1.5`, local/keyless), and stored in a per-subject **FAISS** index at
+Each subject's PDFs are split into 1,500-char chunks, embedded via the hosted **Gemini**
+embeddings API (`backend/gemini_embeddings.py`; `EMBEDDING_PROVIDER=local` falls back to
+the keyless on-device fastembed model), and stored in a per-subject **FAISS** index at
 `faiss_index/<subject>/`. A `manifest.json` fingerprints the PDFs + settings, so an index
-rebuilds only when its PDFs (or the embedding model) actually change. This index backs the
-chat retriever (pipeline 3a).
+rebuilds only when its PDFs (or the embedding model) actually change — bundled subjects
+ship with pre-baked indexes that are merely *loaded*, never re-embedded (important on
+Render's 512MB free tier). This index backs the chat retriever (pipeline 3a). User
+subjects' index files are also persisted to MongoDB (GridFS) and restored on startup.
 
 ---
 
@@ -137,10 +129,12 @@ chat retriever (pipeline 3a).
 
 Active only when `MONGODB_URI` is set; otherwise every function is a graceful no-op.
 
-- **History** — chats, quizzes, flashcards, plans, mindmaps, scoped per `owner`.
+- **History** — chats, quizzes, flashcards, plans, mindmaps, summaries, scoped per `owner`.
 - **Uploaded PDFs** — stored in GridFS and re-hydrated into `documents/` on startup, so
-  uploads survive restarts on a diskless host (e.g. Render's free tier).
-- **Chunk summaries** — cached by content fingerprint so restarts don't re-bill the LLM.
+  uploads survive restarts on a diskless host (e.g. Render's free tier). Owner-scoped;
+  owner-less legacy records are never restored (they would leak as bundled subjects).
+- **FAISS indexes** — user subjects' index files persist in GridFS and restore on startup,
+  so a redeploy never re-embeds (no Gemini cost, no rebuild).
 
 `owner` is the Clerk user id (`backend/auth.py`), or an anonymous guest id
 (`guest_<uuid>`, auto-expiring via a Mongo TTL index), or `"local"` when auth is off.
@@ -152,9 +146,9 @@ Active only when `MONGODB_URI` is set; otherwise every function is a graceful no
 **Chat message** → `POST /api/chat/message` → `chat.ask()` → (agentic) `agentic_rag.answer()`
 runs rewrite→retrieve→grade→correct→generate → reply saved to history (if enabled).
 
-**Generate a quiz** → `POST /api/quiz/generate` → `content_for(subject, pdf)` returns the
-cached chunk summaries → `services/quiz.py::make_quiz()` calls Groq (JSON mode), validates
-each question → saved to history → returned.
+**Generate a quiz** → `POST /api/quiz/generate` → `read_pdf(subject, pdf)` +
+`clip_to_tokens()` produce the content → `services/quiz.py::make_quiz()` calls Groq
+(JSON mode), validates each question → saved to history → returned.
 
 Errors are normalized by global handlers in `main.py`: rate limit → 429, other Groq errors
 → 502, missing key → 503, unknown subject/PDF → 404, summary/parse failures → 502.
@@ -164,9 +158,10 @@ Errors are normalized by global handlers in `main.py`: rate limit → 429, other
 ## 7. Packaging & deployment
 
 **`Dockerfile`** (multi-stage): a *builder* installs deps into a venv; the *runtime* copies
-the venv + `backend/` + `frontend/` + bundled `documents/`, drops to a non-root user, and
-**pre-bakes the models** (fastembed embedding model + tiktoken `cl100k_base`) into a
-writable cache so the first request needs no download. Runs under **tini** →
+the venv + `backend/` + `frontend/` + bundled `documents/` + pre-baked `faiss_index/`,
+drops to a non-root user, and **pre-bakes the tokenizer** (tiktoken `cl100k_base`) into a
+writable cache so the first request needs no download (embeddings are hosted on Gemini —
+no local model to bake). Runs under **tini** →
 `docker-entrypoint.sh` (seeds bundled PDFs into `documents/` without clobbering) →
 **gunicorn** with Uvicorn workers (`gunicorn.conf.py`, binds `0.0.0.0:$PORT`).
 
@@ -184,10 +179,10 @@ backend/
   main.py            FastAPI app, lifespan, routers, exception handlers
   config.py          all env reading + validation (single source of truth)
   agentic_rag.py     chat retrieval loop: rewrite → retrieve → grade → correct → generate
-  chunk_summaries.py per-chunk PDF summaries (build-once, cache by content)
+  gemini_embeddings.py hosted Gemini embeddings client (LangChain-compatible)
   vector_store.py    per-subject FAISS index (embeddings) for chat retrieval
   documents.py       PDF read/list/save + restore; traversal-safe paths
-  db.py              optional MongoDB: history, uploaded PDFs (GridFS), summaries
+  db.py              optional MongoDB: history, uploaded PDFs + indexes (GridFS)
   auth.py            optional Clerk JWT verification + owner resolution
   services/          chat, quiz, flashcards, mindmap, planner, subjects (business logic)
   routers/           one router per tool (the /api/* endpoints)
@@ -208,7 +203,9 @@ Dockerfile, docker-entrypoint.sh, gunicorn.conf.py, render.yaml, DEPLOYMENT.md
 | `LLM_PROVIDER` | yes | `groq` |
 | `GROQ_API_KEY` | yes | Groq secret |
 | `AVAILABLE_MODELS`, `DEFAULT_MODEL` | yes | model menu + default |
-| `EMBEDDING_MODEL` | yes | local fastembed model (pre-baked) |
+| `EMBEDDING_PROVIDER` | no (`gemini`) | `gemini` (hosted) or `local` (fastembed fallback) |
+| `GEMINI_API_KEY` | with `gemini` | Gemini embeddings secret |
+| `EMBEDDING_MODEL` | yes | embedding model id for the active provider |
 | `MAX_CONTENT_TOKENS` | no (7000) | per-call content budget for the generation tools |
 | `AGENTIC_RAG` | no (true) | enable the agentic chat loop; `false` = classic RAG |
 | `AGENTIC_RAG_MAX_ITERS` | no (2) | corrective re-retrieve rounds |
