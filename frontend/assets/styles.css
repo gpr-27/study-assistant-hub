@@ -380,7 +380,8 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border: 0; bo
 
 /* ---------- chat (redesigned) ---------- */
 .chat-shell { display: flex; flex-direction: column; height: calc(100dvh - 120px); min-height: 480px; }
-.chat-topbar { padding: .65rem 1rem; border-radius: var(--r-md); }
+.chat-minibar { display: flex; align-items: center; gap: .5rem; padding: .45rem .6rem; border-radius: var(--r-md); }
+#chatOptionsBtn.is-open { border-color: hsl(var(--accent) / .6); color: hsl(var(--ink)); }
 .chat-src-bar { padding: .75rem 1rem; border-radius: var(--r-md); }
 .chat { display: flex; flex-direction: column; height: clamp(420px, 68vh, 720px); }
 .thread { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: .8rem; padding: 1.2rem; }

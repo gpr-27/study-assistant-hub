@@ -292,6 +292,7 @@
       composer.querySelector("#chatSend").disabled = false;
       composer.querySelector(".input").focus();
       updateSessionBadge(resp.label);
+      setChatSetup(false);   // collapse setup → full-page chat
       thread.scrollTop = thread.scrollHeight;
     } catch (e) {
       clear(thread);
@@ -356,6 +357,7 @@
       composer.querySelector("#chatSend").disabled = false;
       composer.querySelector(".input").focus();
       updateSessionBadge(resp.label);
+      setChatSetup(false);   // collapse setup → full-page chat
       toast("Session started.", "ok");
       // refresh history list if popover is open
       const hp = document.querySelector('.history-panel[data-kind="chats"]');
@@ -424,13 +426,23 @@
     }
   }
 
+  // ── Show / hide the collapsible setup panel (Options toggle) ──
+  function setChatSetup(open) {
+    const setup = document.getElementById("chatSetup");
+    const btn = document.getElementById("chatOptionsBtn");
+    if (setup) setup.hidden = !open;
+    if (btn) {
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+      btn.classList.toggle("is-open", !!open);
+    }
+  }
+
   // ── Reset to new chat state ────────────────────────────────
   function resetChat() {
     session = null; source = "subject"; pdfFile = null;
     updateSessionBadge("");
 
-    const srcBar = document.getElementById("chatSrcBar");
-    if (srcBar) srcBar.hidden = false;
+    setChatSetup(true);   // reopen setup so a new session can be started
 
     const thread = document.querySelector("#chatThread");
     if (thread) {
@@ -457,19 +469,18 @@
       root.append(el(`
         <div class="chat-shell stack">
 
-          <!-- Top bar -->
-          <div class="chat-topbar panel">
-            <div class="row between">
-              <div class="row" style="gap:.6rem">
-                <button id="chatHistBtn" class="btn" type="button" title="Chat history" style="padding:.45rem .8rem;font-size:.85rem">≡ History</button>
-                <span id="chatSessionBadge"></span>
-              </div>
-              <button id="chatNewBtn" class="btn-accent" type="button" style="padding:.5rem 1rem;font-size:.88rem">+ New chat</button>
-            </div>
+          <!-- Slim always-on bar: the Options toggle reveals/hides the setup below,
+               so the chat thread can take the full page (ChatGPT-style). -->
+          <div class="chat-minibar panel">
+            <button id="chatOptionsBtn" class="btn" type="button" aria-expanded="true" aria-controls="chatSetup" title="Show or hide chat setup" style="padding:.42rem .8rem;font-size:.85rem">⚙ Options</button>
+            <span id="chatSessionBadge"></span>
+            <span style="flex:1"></span>
+            <button id="chatHistBtn" class="btn" type="button" title="Chat history" style="padding:.42rem .8rem;font-size:.85rem">≡ History</button>
+            <button id="chatNewBtn" class="btn-accent" type="button" style="padding:.42rem .85rem;font-size:.85rem">+ New</button>
           </div>
 
-          <!-- Source selection bar -->
-          <div id="chatSrcBar" class="chat-src-bar panel">
+          <!-- Collapsible setup: source selection + model + start. -->
+          <div id="chatSetup" class="chat-src-bar panel">
             <div class="row" style="gap:.75rem;flex-wrap:wrap;align-items:center">
               <div class="seg" role="tablist" id="chatSrcSeg">
                 <button type="button" data-src="subject" aria-pressed="true">Subject</button>
@@ -520,6 +531,8 @@
       document.getElementById("chatNewBtn").addEventListener("click", resetChat);
       document.getElementById("chatHistBtn").addEventListener("click", (e) =>
         openHistoryDrawer(e.currentTarget));
+      document.getElementById("chatOptionsBtn").addEventListener("click", () =>
+        setChatSetup(document.getElementById("chatSetup")?.hidden));
 
       // Wire composer
       const composer = document.getElementById("chatComposer");
