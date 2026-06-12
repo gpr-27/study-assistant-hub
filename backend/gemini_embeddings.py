@@ -74,19 +74,43 @@ def _normalize(vec: list[float]) -> list[float]:
 class GeminiEmbeddings(Embeddings):
     """langchain ``Embeddings`` backed by Gemini's ``embedContent`` endpoints."""
 
-    def __init__(self, model: str, api_key: str, output_dimensionality: int | None = None) -> None:
+    def __init__(self, model: str, api_key: str, output_dimensionality: int | None = None,
+                 fallback_api_key: str | None = None) -> None:
         if not api_key:
             raise GeminiEmbeddingError("GEMINI_API_KEY is required for Gemini embeddings.")
         # Accept either "gemini-embedding-2" or the fully-qualified "models/...".
         self._model = model if model.startswith("models/") else f"models/{model}"
         self._api_key = api_key
+        # Quota fallback: a SECOND key (separate Google project = separate quota
+        # bucket) used when the primary key's quota is spent. Same model on both
+        # keys, so vectors stay compatible with the existing FAISS indexes — a
+        # fallback *model* would NOT be (its vectors can't query this index).
+        self._fallback_api_key = (fallback_api_key or "").strip() or None
         self._dim = output_dimensionality
         self._reduced = output_dimensionality is not None  # reduced dims need re-normalizing
         self._session = requests.Session()
 
-    # ── internal request helper (honors 429 retryDelay + backoff) ───────────
+    # ── internal request helpers (honor 429 retryDelay + backoff) ───────────
     def _post(self, endpoint: str, payload: dict, *,
               max_retries: int | None = None, max_quota_wait: float | None = None) -> dict:
+        """POST with quota fallback: primary key first, then the fallback key.
+
+        The fallback key (optional GEMINI_API_KEY_FALLBACK) is a separate Google
+        project, i.e. a separate quota bucket — same model, so vectors remain
+        compatible with the existing indexes.
+        """
+        try:
+            return self._post_with_key(self._api_key, endpoint, payload,
+                                       max_retries=max_retries, max_quota_wait=max_quota_wait)
+        except GeminiQuotaError:
+            if not self._fallback_api_key:
+                raise
+            log.info("Primary Gemini key quota spent — retrying on the fallback key.")
+            return self._post_with_key(self._fallback_api_key, endpoint, payload,
+                                       max_retries=max_retries, max_quota_wait=max_quota_wait)
+
+    def _post_with_key(self, api_key: str, endpoint: str, payload: dict, *,
+                       max_retries: int | None = None, max_quota_wait: float | None = None) -> dict:
         """``max_retries``/``max_quota_wait`` let interactive callers fail fast.
 
         Index builds want the patient default loop (waiting out a per-minute
@@ -95,7 +119,7 @@ class GeminiEmbeddings(Embeddings):
         into a dead "Load failed" instead of a clean, retryable 429.
         """
         retries = max_retries or _MAX_RETRIES
-        url = f"{_API_ROOT}/{self._model}:{endpoint}?key={self._api_key}"
+        url = f"{_API_ROOT}/{self._model}:{endpoint}?key={api_key}"
         last_err: Exception | None = None
         quota_hit = False
         for attempt in range(retries):

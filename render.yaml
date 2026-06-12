@@ -71,6 +71,8 @@ services:
         value: gemini-embedding-2
       - key: GEMINI_API_KEY
         sync: false               # REQUIRED secret — set in the Render dashboard
+      - key: GEMINI_API_KEY_FALLBACK
+        sync: false               # OPTIONAL second key (separate Google project) — used when the primary key's embedding quota is spent
       - key: MAX_CONTENT_TOKENS
         value: "3000"             # input + reserved output must fit the model's TPM
                                   # cap (free-tier 8B = 6000 tokens/min)

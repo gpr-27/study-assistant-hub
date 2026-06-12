@@ -81,6 +81,7 @@ def _build_embeddings() -> Embeddings:
             model=EMBEDDING_MODEL,
             api_key=config.GEMINI_API_KEY,
             output_dimensionality=EMBEDDING_DIM,
+            fallback_api_key=config.GEMINI_API_KEY_FALLBACK,
         )
     # Legacy local fallback (EMBEDDING_PROVIDER=local): keyless on-device model.
     from langchain_community.embeddings import FastEmbedEmbeddings

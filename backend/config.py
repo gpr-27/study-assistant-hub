@@ -222,6 +222,11 @@ GROQ_API_KEY: str | None = _get("GROQ_API_KEY")
 # Embeddings: hosted Google Gemini (default) instead of a local fastembed model.
 # Set EMBEDDING_PROVIDER=local to fall back to the keyless on-device model.
 GEMINI_API_KEY: str | None = _get("GEMINI_API_KEY")
+# Optional second Gemini key (a separate Google project = a separate free-tier
+# quota bucket). When the primary key's embedding quota is exhausted, requests
+# transparently retry on this key — SAME model, so vectors stay compatible
+# with the existing FAISS indexes.
+GEMINI_API_KEY_FALLBACK: str | None = _get("GEMINI_API_KEY_FALLBACK")
 
 # Auth (optional, Clerk). CLERK_PUBLISHABLE_KEY is a PUBLIC key (safe to send to the
 # browser — that is its purpose); its presence enables the sign-in gate, its absence
