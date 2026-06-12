@@ -410,13 +410,19 @@
 
     const backdrop = el(`<div id="histPopoverBg" class="hist-popover-backdrop"></div>`);
     const popover = el(`<div id="histPopover" class="hist-popover stack-sm"></div>`);
+    // On phones the anchored dropdown is cramped and often clips off-screen — render
+    // a full-width bottom sheet instead (CSS owns its layout via .hist-popover--sheet).
+    const isMobile = window.matchMedia("(max-width: 560px)").matches;
 
     const close = () => {
       backdrop.classList.remove("hist-popover-backdrop--open");
+      popover.classList.remove("hist-popover--in");
+      document.body.classList.remove("hist-scroll-lock");
       popover.remove();
       setTimeout(() => backdrop.remove(), 200);
     };
     backdrop.addEventListener("mousedown", close);
+    backdrop.addEventListener("touchstart", (e) => { e.preventDefault(); close(); }, { passive: false });
 
     const head = el(`<div class="hist-popover-head">
       <span class="hist-popover-title">${esc(opts.title || "History")}</span>
@@ -432,8 +438,13 @@
     document.body.append(backdrop, popover);
     requestAnimationFrame(() => backdrop.classList.add("hist-popover-backdrop--open"));
 
-    // Position below and right-aligned with the anchor button (clamped to viewport)
-    if (anchor) {
+    if (isMobile) {
+      // Full-width bottom sheet — layout/animation handled by CSS. Lock the page
+      // behind it so a scroll gesture moves the list, not the page underneath.
+      popover.classList.add("hist-popover--sheet");
+      document.body.classList.add("hist-scroll-lock");
+    } else if (anchor) {
+      // Position below and right-aligned with the anchor button (clamped to viewport)
       const rect = anchor.getBoundingClientRect();
       const right = Math.max(12, window.innerWidth - rect.right);
       const top = rect.bottom + 8;
@@ -462,6 +473,10 @@
 
   function render() {
     const name = (location.hash.replace(/^#\/?/, "") || "home");
+    // Navigating away always closes a stray history sheet and frees the scroll lock.
+    document.getElementById("histPopover")?.remove();
+    document.getElementById("histPopoverBg")?.remove();
+    document.body.classList.remove("hist-scroll-lock");
     if (current && Views[current] && typeof Views[current].unmount === "function") {
       try { Views[current].unmount(); } catch (_) {}
     }

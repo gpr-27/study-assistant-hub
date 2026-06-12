@@ -9,6 +9,32 @@
   let session = null;       // { id, label }
   let source  = "subject";  // "subject" | "topic" | "upload"
   let pdfFile = null;
+  let teardownLayout = null; // removes the responsive shell-sizing listeners on unmount
+
+  // ── Responsive height: size the chat shell to the space actually left below the
+  //    nav + view header so the composer always stays pinned on-screen — on any
+  //    phone or tablet, and above the on-screen keyboard. CSS offsets can only
+  //    guess the chrome height; measuring it is exact. visualViewport tracks the
+  //    iOS URL bar and the software keyboard; resize/orientation cover the rest.
+  function installShellSizing(shell) {
+    const vp = window.visualViewport;
+    const fit = () => {
+      if (!shell.isConnected) return;
+      const top = shell.getBoundingClientRect().top;          // distance from viewport top
+      const avail = (vp ? vp.height : window.innerHeight) - top - 12;
+      shell.style.height = Math.max(320, avail) + "px";
+    };
+    requestAnimationFrame(fit);
+    window.addEventListener("resize", fit);
+    window.addEventListener("orientationchange", fit);
+    if (vp) { vp.addEventListener("resize", fit); vp.addEventListener("scroll", fit); }
+    teardownLayout = () => {
+      window.removeEventListener("resize", fit);
+      window.removeEventListener("orientationchange", fit);
+      if (vp) { vp.removeEventListener("resize", fit); vp.removeEventListener("scroll", fit); }
+      teardownLayout = null;
+    };
+  }
 
   // ── History popover (shared solid drawer, same as the other tools) ────────
   function openHistoryDrawer(anchor) {
@@ -461,6 +487,9 @@
 
         </div>`));
 
+      // Keep the composer pinned on-screen across devices and keyboard states.
+      installShellSizing(root.querySelector(".chat-shell"));
+
       // Wire model selector
       document.getElementById("chatModelCtl").append(window.ui.modelSelect());
 
@@ -494,8 +523,10 @@
 
     unmount() {
       session = null; source = "subject"; pdfFile = null;
+      if (teardownLayout) teardownLayout();
       document.getElementById("histPopover")?.remove();
       document.getElementById("histPopoverBg")?.remove();
+      document.body.classList.remove("hist-scroll-lock");
     },
   };
 })();

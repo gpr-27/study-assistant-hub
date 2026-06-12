@@ -151,7 +151,9 @@
       scroll.scrollTop = cy * zoom - ay;
     }
 
-    function render() {
+    // `animateFrom` (optional) is the node just expanded — its freshly-revealed
+    // descendants ease in, so opening a branch feels smooth instead of popping.
+    function render(animateFrom) {
       const keepLeft = scroll.scrollLeft;
       const keepTop = scroll.scrollTop;
       clear(stage);
@@ -161,20 +163,21 @@
       stage.append(svg);
 
       const visible = [];
-      (function walk(node, depth) {
+      (function walk(node, depth, inNew) {
         node._depth = depth;
+        node._enter = inNew && node !== animateFrom;   // a newly-revealed child
         visible.push(node);
-        if (node.expanded) for (const child of node.children || []) walk(child, depth + 1);
-      })(root, 0);
+        if (node.expanded) for (const child of node.children || []) walk(child, depth + 1, inNew || node === animateFrom);
+      })(root, 0, false);
 
       // Create + measure every visible card (offsetWidth needs a live DOM).
       for (const node of visible) {
-        const wrap = el(`<div class="mm-node-wrap"></div>`);
+        const wrap = el(`<div class="mm-node-wrap${node._enter ? " mm-enter" : ""}"></div>`);
         const card = el(`<div class="mm-card lvl${Math.min(node._depth, 2)}">${esc(node.label)}</div>`);
         wrap.append(card);
         if (hasChildren(node)) {
           const toggle = el(`<button class="mm-toggle" type="button" aria-label="Expand or collapse" aria-expanded="${node.expanded}">${node.expanded ? "‹" : "›"}</button>`);
-          toggle.addEventListener("click", () => { node.expanded = !node.expanded; render(); });
+          toggle.addEventListener("click", () => { node.expanded = !node.expanded; render(node.expanded ? node : null); });
           wrap.append(toggle);
         }
         stage.append(wrap);
@@ -230,7 +233,7 @@
           const ey = child._cy;
           const dx = Math.max(30, (ex - sx) / 2);
           const path = document.createElementNS(SVG_NS, "path");
-          path.setAttribute("class", "mm-link");
+          path.setAttribute("class", "mm-link" + (child._enter ? " mm-link-enter" : ""));
           path.setAttribute("d", `M ${sx} ${sy} C ${sx + dx} ${sy} ${ex - dx} ${ey} ${ex} ${ey}`);
           svg.append(path);
         }
@@ -248,25 +251,53 @@
       }
     }
 
-    // Drag the empty canvas to pan (toggles and zoom buttons keep their click).
-    scroll.addEventListener("mousedown", (e) => {
+    // Pan + pinch-zoom via Pointer Events — one code path for mouse, touch and pen.
+    // One pointer drags to pan; two pointers pinch to zoom toward their midpoint.
+    // On touch, CSS sets `touch-action: none` on .mm-scroll so the browser hands us
+    // the gesture instead of native-scrolling or page-zooming. (Toggles and the zoom
+    // buttons keep their own clicks.)
+    const pointers = new Map();   // pointerId -> {x, y}
+    let pinchPrev = 0;            // last finger-to-finger distance during a pinch
+
+    scroll.addEventListener("pointerdown", (e) => {
       if (e.target.closest(".mm-toggle") || e.target.closest(".mm-zoom")) return;
-      const start = { x: e.clientX, y: e.clientY, left: scroll.scrollLeft, top: scroll.scrollTop };
-      canvas.classList.add("is-panning");
-      const move = (ev) => {
-        scroll.scrollLeft = start.left - (ev.clientX - start.x);
-        scroll.scrollTop = start.top - (ev.clientY - start.y);
-      };
-      const up = () => {
-        canvas.classList.remove("is-panning");
-        document.removeEventListener("mousemove", move);
-        document.removeEventListener("mouseup", up);
-      };
-      document.addEventListener("mousemove", move);
-      document.addEventListener("mouseup", up);
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size === 1) canvas.classList.add("is-panning");
+      if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        pinchPrev = Math.hypot(a.x - b.x, a.y - b.y);
+      }
+      try { scroll.setPointerCapture(e.pointerId); } catch (_) {}
     });
 
-    // Wheel (or trackpad pinch) zooms toward the pointer.
+    scroll.addEventListener("pointermove", (e) => {
+      const p = pointers.get(e.pointerId);
+      if (!p) return;
+      const dx = e.clientX - p.x, dy = e.clientY - p.y;
+      p.x = e.clientX; p.y = e.clientY;
+
+      if (pointers.size >= 2) {
+        // Pinch: scale by the change in finger distance, anchored at the midpoint.
+        const [a, b] = [...pointers.values()];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        if (pinchPrev > 0 && dist > 0) setZoom(zoom * (dist / pinchPrev), (a.x + b.x) / 2, (a.y + b.y) / 2);
+        pinchPrev = dist;
+        return;
+      }
+      // Single pointer: drag to pan.
+      scroll.scrollLeft -= dx;
+      scroll.scrollTop -= dy;
+    });
+
+    const endPointer = (e) => {
+      if (!pointers.delete(e.pointerId)) return;
+      if (pointers.size < 2) pinchPrev = 0;
+      if (pointers.size === 0) canvas.classList.remove("is-panning");
+    };
+    scroll.addEventListener("pointerup", endPointer);
+    scroll.addEventListener("pointercancel", endPointer);
+
+    // Wheel (or trackpad pinch) zooms toward the pointer — desktop fast path.
     scroll.addEventListener("wheel", (e) => {
       e.preventDefault();
       const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;

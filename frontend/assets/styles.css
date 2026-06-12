@@ -555,6 +555,7 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border: 0; bo
 .hist-popover .history-panel > .between .section-head { display: none; }
 .hist-popover .history-panel .hist-search { flex: none; }
 .hist-popover .history-panel .hist-list { flex: 1; min-height: 0; max-height: none; overflow-y: auto; }
+@keyframes sheet-up { from { transform: translateY(100%); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
 
 /* ---------- quiz ---------- */
 .opts { display: grid; gap: .7rem; margin-top: 1.2rem; }
@@ -620,10 +621,14 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border: 0; bo
     hsl(226 40% 96% / .35); }
 .mm-scroll {
   position: absolute; inset: 0; overflow: auto; display: flex; cursor: grab;
+  /* `safe` centering: centre the graph when it fits, but fall back to start-
+     aligned the moment it overflows — otherwise auto-margin/centre alignment
+     clips the left/top edge and you can never scroll/pan back to it. */
+  justify-content: safe center; align-items: safe center;
   -webkit-user-select: none; user-select: none;
 }
 .mm-canvas.is-panning .mm-scroll { cursor: grabbing; }
-.mm-viewport { margin: auto; position: relative; flex: 0 0 auto; }
+.mm-viewport { position: relative; flex: 0 0 auto; }
 .mm-stage { position: absolute; inset: 0; transform-origin: 0 0; }
 /* floating zoom controls, fixed over the scroll layer */
 .mm-zoom {
@@ -663,6 +668,12 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border: 0; bo
   font-size: .82rem; line-height: 1; cursor: pointer;
   transition: border-color .18s, color .18s, background .18s; }
 .mm-toggle:hover { border-color: hsl(var(--accent)); color: hsl(var(--ink)); background: hsl(var(--accent) / .25); }
+/* Smoothly reveal a branch when its parent is expanded: children ease in from
+   the parent's side, their connector rails fade up with them. */
+@keyframes mm-node-enter { from { opacity: 0; transform: translateX(-14px) scale(.94); } to { opacity: 1; transform: none; } }
+@keyframes mm-link-enter { from { opacity: 0; } to { opacity: 1; } }
+.mm-node-wrap.mm-enter { animation: mm-node-enter .3s var(--ease-spring) both; }
+.mm-link-enter { animation: mm-link-enter .34s var(--ease-out) both; }
 
 /* ============================================================
    ANIMATIONS / a11y
@@ -777,7 +788,17 @@ body { min-height: 100svh; }
 
 /* Cleaner tap feedback; stop scroll-chaining out of inner scrollers. */
 * { -webkit-tap-highlight-color: transparent; }
-.thread, .mm-scroll, .codeblock pre, .table-wrap, .flip-face { overscroll-behavior: contain; }
+/* Kill iOS double-tap-to-zoom and the 300ms tap delay across the whole app
+   (covers buttons, message bubbles AND empty space) while leaving pinch-zoom
+   intact for accessibility. Overlays are listed so taps on them don't zoom. */
+.shell, .hist-popover, .hist-popover-backdrop, .auth-gate, .toast-wrap { touch-action: manipulation; }
+/* Smooth momentum scrolling in every inner scroller; contain scroll-chaining so
+   a flick inside the thread/list never drags the page behind it. */
+.thread, .mm-scroll, .codeblock pre, .table-wrap, .flip-face, .hist-list {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+body.hist-scroll-lock { overflow: hidden; }
 
 /* ---- Touch / coarse pointer: grow tap targets toward ~44px (WCAG 2.5.5),
         kill the cursor glow (no finger to track), and lift inputs to 16px so
@@ -786,6 +807,9 @@ body { min-height: 100svh; }
   .input, .textarea, select.select { font-size: 16px; }
   .seg button { padding-block: .62rem; min-height: 44px; }
   .mm-zoom button { min-width: 38px; height: 38px; }
+  /* Hand mind-map drag/pinch gestures to the JS pan-zoom instead of native
+     scroll / page-zoom (mindmap.js Pointer Events take over). */
+  .mm-scroll { touch-action: none; }
   .toggle { width: 46px; height: 46px; }
   .nav-add { padding-block: .55rem; }
   .opt { padding-block: 1rem; }
@@ -918,6 +942,39 @@ body { min-height: 100svh; }
   .view-head h2 { font-size: clamp(1.4rem, 7vw, 2rem); }
   .hist-item { padding: .8rem .9rem; }
   .history-panel .hist-list { max-height: none; }   /* no inner scroll on phones */
+
+  /* Chat fills the screen below the floating nav + view header; only the thread
+     scrolls and the composer stays pinned on-screen. dvh tracks the URL bar. The
+     offset matches the real chrome above the chat shell (nav + heading + gaps). */
+  .chat-shell { height: calc(100dvh - 164px); min-height: 0; }
+  .thread { padding: .9rem; gap: .6rem; }
+  .composer { padding: .7rem; padding-bottom: max(.7rem, env(safe-area-inset-bottom)); }
+  .chat-src-bar .row { gap: .55rem; }
+  .chat-src-bar #chatSrcRow { flex: 1 1 100%; }
+
+  /* History opens as a full-width bottom sheet — readable and easy to dismiss.
+     !important guards against any stale inline positioning from the JS path. */
+  .hist-popover--sheet {
+    position: fixed !important;
+    left: 0 !important; right: 0 !important; bottom: 0 !important; top: auto !important;
+    width: 100% !important; max-width: 100% !important;
+    max-height: 82dvh !important;
+    z-index: 200 !important;
+    border-radius: var(--r-card) var(--r-card) 0 0;
+    padding: .55rem 1rem calc(1rem + env(safe-area-inset-bottom));
+    animation: sheet-up .26s var(--ease-spring) both;
+  }
+  /* Grab-handle affordance at the top of the sheet. */
+  .hist-popover--sheet::after {
+    content: ""; position: absolute; top: .45rem; left: 50%; transform: translateX(-50%);
+    width: 40px; height: 4px; border-radius: 999px; background: hsl(var(--ink) / .22);
+  }
+  .hist-popover--sheet .hist-popover-head { padding-top: .7rem; }
+}
+
+/* Short / landscape phones: keep the chat composer on-screen too. */
+@media (max-height: 560px) and (orientation: landscape) {
+  .chat-shell { height: calc(100dvh - 150px); min-height: 0; }
 }
 /* Never allow horizontal overflow on small screens. */
 @media (max-width: 920px) {
