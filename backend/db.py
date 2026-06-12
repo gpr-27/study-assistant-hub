@@ -5,7 +5,7 @@ graceful no-op so the app runs identically without a database. EVERY read and wr
 is scoped by ``owner`` (the signed-in Clerk user id, or "local" when auth is off),
 so users never see each other's history.
 
-Artifact kinds: chats, quizzes, flashcards, plans, mindmaps.
+Artifact kinds: chats, quizzes, flashcards, plans, mindmaps, summaries.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from backend import config
 
 log = logging.getLogger("backend.db")
 
-KINDS: tuple[str, ...] = ("chats", "quizzes", "flashcards", "plans", "mindmaps")
+KINDS: tuple[str, ...] = ("chats", "quizzes", "flashcards", "plans", "mindmaps", "summaries")
 
 # Anonymous guest accounts live in their own collection. A guest's *artifacts* are NOT
 # embedded here — they live in the KINDS collections above under owner="guest_<uuid>",

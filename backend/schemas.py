@@ -141,6 +141,8 @@ class SummariesRequest(BaseModel):
 
 class SummariesResponse(BaseModel):
     summaries: dict[str, str]       # pdf name -> summary text
+    id: str | None = None           # saved history id (None when persistence is off)
+    title: str | None = None
 
 
 class PlanRequest(BaseModel):

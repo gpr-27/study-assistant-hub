@@ -43,13 +43,23 @@ def _save_plan(owner: str, plan: str, *, title: str, source: str, target_date: s
 
 @router.post("/summaries", response_model=SummariesResponse)
 def create_summaries(request: SummariesRequest, owner: str = Depends(current_owner)) -> SummariesResponse:
-    """Generate a per-PDF summary for each selected document (subject mode)."""
+    """Generate a per-PDF summary for each selected document, and save it to the
+    user's history (separate from saved plans) when persistence is enabled."""
     require_groq_key()
     try:
         summaries = summarize_pdfs(request.subject, request.pdfs, model=request.model, owner=owner)
     except PlannerError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return SummariesResponse(summaries=summaries)
+    title = f"Summary · {request.subject}"
+    saved_id = db.save("summaries", owner, {
+        "title": title,
+        "source": request.subject,
+        "subject": request.subject,
+        "pdfs": request.pdfs,
+        "model": config.model_for("planner", request.model),
+        "summaries": summaries,
+    })
+    return SummariesResponse(summaries=summaries, id=saved_id, title=title)
 
 
 @router.post("/generate", response_model=PlanResponse)

@@ -30,6 +30,30 @@
     return { body: src.trim() };
   }
 
+  // Render a {pdfName -> summary} map into a stack of cards. Shared by "Generate
+  // summary" and by re-opening a saved summary from history.
+  function renderSummaries(summaries, heading) {
+    const names = Object.keys(summaries || {});
+    if (!names.length) return empty("No summaries were produced.");
+    const wrap = el(`<div class="stack"></div>`);
+    wrap.append(el(`<div class="section-head"><h3>${esc(heading || "PDF summaries")}</h3><span>${names.length} document(s)</span></div>`));
+    for (const name of names) {
+      const parts = splitSummary(summaries[name]);
+      const card = el(`<article class="panel-soft stack-sm"></article>`);
+      card.append(el(`<h3 style="font-family:var(--font-display);font-weight:700">${esc(name)}</h3>`));
+      if (parts.topics !== undefined) {
+        card.append(el(`<div class="label">Topics &amp; concepts</div>`));
+        card.append(md(parts.topics));
+        card.append(el(`<div class="label">Overall summary</div>`));
+        card.append(md(parts.summary));
+      } else {
+        card.append(md(parts.body));
+      }
+      wrap.append(card);
+    }
+    return wrap;
+  }
+
   window.Views.planner = {
     accent: "plan",
     title: "Study Planner",
@@ -42,9 +66,12 @@
       root.append(el(`
         <div class="layout-aside">
           <aside class="panel stack" id="pl-controls">
-            <div class="between" style="align-items:center">
+            <div class="between" style="align-items:center;gap:.4rem">
               <span style="font-family:var(--font-display);font-weight:700;font-size:1.05rem;letter-spacing:-.01em;color:hsl(var(--ink))">Planner</span>
-              <button id="pl-hist" class="btn" type="button" style="padding:.4rem .8rem;font-size:.85rem">≡ History</button>
+              <span class="row" style="gap:.35rem;flex:none">
+                <button id="pl-hist-plans" class="btn" type="button" style="padding:.4rem .7rem;font-size:.82rem">≡ Plans</button>
+                <button id="pl-hist-summaries" class="btn" type="button" style="padding:.4rem .7rem;font-size:.82rem">≡ Summaries</button>
+              </span>
             </div>
             <div class="field" style="margin:0">
               <span class="label">Source</span>
@@ -66,7 +93,7 @@
             <div id="pl-modelctl"></div>
 
             <div class="stack-sm">
-              <button class="btn btn-block" id="pl-preview" type="button">Preview summaries</button>
+              <button class="btn btn-block" id="pl-preview" type="button">Generate summary</button>
               <button class="btn-accent btn-block" id="pl-generate" type="button">Generate plan</button>
             </div>
           </aside>
@@ -90,8 +117,13 @@
         wrap.append(planBox);
         showResults(wrap);
       }
-      root.querySelector("#pl-hist").addEventListener("click", (e) =>
+      function openSavedSummary(saved) {
+        showResults(renderSummaries((saved && saved.summaries) || {}, (saved && saved.title) || "Summary"));
+      }
+      root.querySelector("#pl-hist-plans").addEventListener("click", (e) =>
         window.ui.openHistoryDrawer("plans", { title: "Saved plans", anchor: e.currentTarget, onOpen: openSavedPlan }));
+      root.querySelector("#pl-hist-summaries").addEventListener("click", (e) =>
+        window.ui.openHistoryDrawer("summaries", { title: "Saved summaries", anchor: e.currentTarget, onOpen: openSavedSummary }));
 
       root.querySelector("#pl-modelctl").append(window.ui.modelSelect());
 
@@ -253,26 +285,11 @@
         try {
           const data = await window.api.post("/planner/summaries", { subject, pdfs, model: window.ui.selectedModel(root) });
           const summaries = data.summaries || {};
-          const names = Object.keys(summaries);
-          if (!names.length) { showResults(empty("No summaries were produced.")); return; }
-
-          const wrap = el(`<div class="stack"></div>`);
-          wrap.append(el(`<div class="section-head"><h3>PDF summaries</h3><span>${names.length} document(s)</span></div>`));
-          for (const name of names) {
-            const parts = splitSummary(summaries[name]);
-            const card = el(`<article class="panel-soft stack-sm"></article>`);
-            card.append(el(`<h3 style="font-family:var(--font-display);font-weight:700">${esc(name)}</h3>`));
-            if (parts.topics !== undefined) {
-              card.append(el(`<div class="label">Topics &amp; concepts</div>`));
-              card.append(md(parts.topics));
-              card.append(el(`<div class="label">Overall summary</div>`));
-              card.append(md(parts.summary));
-            } else {
-              card.append(md(parts.body));
-            }
-            wrap.append(card);
-          }
-          showResults(wrap);
+          if (!Object.keys(summaries).length) { showResults(empty("No summaries were produced.")); return; }
+          showResults(renderSummaries(summaries));
+          if (data.id) toast("Summary saved to history.", "ok");
+          const __hp = document.querySelector('.history-panel[data-kind="summaries"]');
+          if (__hp && __hp.refresh) __hp.refresh();
         } catch (e) {
           showResults(empty("Couldn’t generate summaries.", "⚠"));
           toast("Summaries failed: " + e.message, "error");
