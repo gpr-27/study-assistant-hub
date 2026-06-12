@@ -59,10 +59,10 @@ services:
       - key: AVAILABLE_MODELS
         value: "llama-3.3-70b-versatile|Llama 3.3 70B,llama-3.1-8b-instant|Llama 3.1 8B,qwen/qwen3-32b|Qwen 3 32B,groq/compound|Groq Compound"
       - key: DEFAULT_MODEL
-        value: llama-3.3-70b-versatile
+        value: llama-3.1-8b-instant
       - key: MINDMAP_MODEL
         value: llama-3.1-8b-instant
-      # SUMMARY_MODEL intentionally unset — uses DEFAULT_MODEL (llama-3.3-70b-versatile).
+      # SUMMARY_MODEL intentionally unset — uses DEFAULT_MODEL (llama-3.1-8b-instant).
       # Changing this invalidates all pre-built chunk summary fingerprints.
       # --- Embeddings (hosted Google Gemini — no model in RAM) ---
       - key: EMBEDDING_PROVIDER
