@@ -145,7 +145,7 @@ class ServiceTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {}, clear=False):
             import os
             os.environ.pop("GEMINI_VISION_MODEL", None)
-            self.assertEqual(service.vision_model(), "gemini-2.0-flash")
+            self.assertEqual(service.vision_model(), "gemini-2.5-flash")
         with mock.patch.dict("os.environ", {"GEMINI_VISION_MODEL": "gemini-9.9-pro"}):
             self.assertEqual(service.vision_model(), "gemini-9.9-pro")
 

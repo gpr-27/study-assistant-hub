@@ -173,12 +173,15 @@ class ProgressApiTests(unittest.TestCase):
         with mock.patch.object(progress.db, "list_items", return_value=items) as li:
             res = self.client.get("/api/progress/summary")
         self.assertEqual(res.status_code, 200)
-        li.assert_called_once_with("attempts", OWNER, limit=100)
+        # attempts feed the accuracy stats; the unified dashboard ALSO queries
+        # every other tool's kind for the all-app activity grid.
+        li.assert_any_call("attempts", OWNER, limit=100)
         data = res.json()
         self.assertEqual(data["overall"]["total_attempts"], 2)
         self.assertEqual(data["subjects"][0]["subject"], "Maths")
         self.assertEqual(data["weakest"][0]["topic"], "Algebra")
         self.assertAlmostEqual(data["weakest"][0]["accuracy"], 0.5, places=3)
+        self.assertTrue(any(a["tool"] == "exams" for a in data["activity"]))
 
 
 if __name__ == "__main__":

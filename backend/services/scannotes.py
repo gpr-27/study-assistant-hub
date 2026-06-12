@@ -8,7 +8,8 @@ retry conventions (429 retryDelay honored, transient 5xx retried with backoff)
 Each photo is sent as a base64 ``inline_data`` part to ``generateContent`` and
 transcribed faithfully into clean Markdown. The vision model id is read from
 the GEMINI_VISION_MODEL env var here (config.py is frozen for this feature);
-it defaults to "gemini-2.0-flash".
+it defaults to "gemini-2.5-flash" (2.0-flash is retired on the free tier:
+its quota is 0, so every call 429s).
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ from backend import config
 log = logging.getLogger("backend.services.scannotes")
 
 _API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
-_DEFAULT_VISION_MODEL = "gemini-2.0-flash"
+_DEFAULT_VISION_MODEL = "gemini-2.5-flash"
 _VISION_MODEL_ENV = "GEMINI_VISION_MODEL"
 _TIMEOUT = 60
 _MAX_RETRIES = 4

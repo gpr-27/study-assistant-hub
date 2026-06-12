@@ -50,7 +50,7 @@
             <label class="btn" for="sn-file" style="cursor:pointer">📷 Take / choose photos…</label>
             <span class="muted" id="sn-count">No photos selected</span>
           </div>
-          <input id="sn-file" type="file" accept="image/*" capture="environment" multiple hidden />
+          <input id="sn-file" type="file" accept="image/*" multiple hidden />
           <div class="hint">Works best with clear photos and good lighting. Up to ${MAX_IMAGES} images, 8 MB each (JPEG/PNG/WebP — HEIC isn’t supported).</div>
         </div>
 

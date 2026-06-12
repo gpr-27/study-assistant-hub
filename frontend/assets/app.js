@@ -485,6 +485,9 @@
     if (current && Views[current] && typeof Views[current].unmount === "function") {
       try { Views[current].unmount(); } catch (_) {}
     }
+    // The footer belongs to the landing page only — hide it inside tool views.
+    const foot = document.querySelector(".foot");
+    if (foot) foot.hidden = ROUTES.includes(name);
     if (!ROUTES.includes(name)) { home.hidden = false; view.hidden = true; current = null; return; }
     const v = Views[name];
     home.hidden = true; view.hidden = false; current = name;

@@ -104,6 +104,14 @@ RUN mkdir -p /app/documents /app/faiss_index /opt/cache \
 
 USER app
 
+# Pre-baked FAISS indexes for the bundled subjects (committed in the repo,
+# built by scripts/prebake_all.py with the same EMBEDDING_* settings as
+# render.yaml). At startup the content-hash manifest matches the seeded PDFs,
+# so the index is merely LOADED — zero Gemini embedding calls for bundled
+# subjects. Without this COPY the server re-embeds every subject on every
+# boot and free-tier embedding quota (requests/minute) dies in a retry loop.
+COPY --chown=app:app faiss_index /app/faiss_index
+
 # Pre-bake the tokenizer so the first request needs no network for tokenization.
 # (Embeddings are hosted on Gemini now — no local model to bake.) Non-fatal.
 RUN python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')" \

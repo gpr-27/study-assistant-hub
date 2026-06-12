@@ -55,10 +55,19 @@ class OverallStats(BaseModel):
     streak_days: int
 
 
+class ToolActivity(BaseModel):
+    tool: str          # history kind, e.g. "exams"
+    label: str         # display name, e.g. "Mock exams"
+    route: str         # SPA hash route, e.g. "#exam"
+    count: int
+    metric: str | None = None   # e.g. "avg 72%" (exams) / "avg 7.5/10" (teach-backs)
+
+
 class SummaryResponse(BaseModel):
     overall: OverallStats
     subjects: list[SubjectStats]
     weakest: list[WeakTopic]
+    activity: list[ToolActivity] = []
 
 
 @router.post("/record", response_model=RecordResponse)

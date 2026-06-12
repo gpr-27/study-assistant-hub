@@ -109,6 +109,59 @@ def _streak_days(dates: set, today=None) -> int:
     return streak
 
 
+# Every tool that contributes to the unified dashboard: history kind -> display.
+_ACTIVITY_TOOLS: tuple[tuple[str, str, str], ...] = (
+    ("chats", "Chats", "#chat"),
+    ("quizzes", "Quizzes", "#quiz"),
+    ("flashcards", "Flashcard decks", "#flashcards"),
+    ("exams", "Mock exams", "#exam"),
+    ("teachbacks", "Teach-backs", "#teachback"),
+    ("plans", "Study plans", "#planner"),
+    ("summaries", "Summaries", "#planner"),
+    ("mindmaps", "Mind maps", "#mindmap"),
+    ("predictions", "Predictions", "#predictor"),
+    ("cheatsheets", "Cheat sheets", "#cheatsheet"),
+    ("scans", "Note scans", "#scannotes"),
+)
+
+
+def _tool_activity(owner: str) -> list[dict]:
+    """Per-tool activity for the whole app: counts plus a performance metric
+    where one exists (exam average score, teach-back average understanding).
+
+    Pure aggregation over history summaries — no LLM. Tools with zero items
+    are included (count 0) so the dashboard shows the full app surface.
+    """
+    activity = []
+    for kind, label, route in _ACTIVITY_TOOLS:
+        items = db.list_items(kind, owner, limit=100)
+        metric = None
+        if kind == "exams":
+            scores = [
+                (float(i["total_score"]), float(i["max_score"]))
+                for i in items
+                if isinstance(i.get("total_score"), (int, float))
+                and isinstance(i.get("max_score"), (int, float)) and i["max_score"]
+            ]
+            if scores:
+                avg = sum(s / m for s, m in scores) / len(scores)
+                metric = f"avg {round(avg * 100)}%"
+        elif kind == "teachbacks":
+            scores = [
+                float(ev["understanding_score_0_to_10"])
+                for i in items
+                if isinstance(ev := i.get("evaluation"), dict)
+                and isinstance(ev.get("understanding_score_0_to_10"), (int, float))
+            ]
+            if scores:
+                metric = f"avg {round(sum(scores) / len(scores), 1)}/10"
+        activity.append({
+            "tool": kind, "label": label, "route": route,
+            "count": len(items), "metric": metric,
+        })
+    return activity
+
+
 def build_summary(owner: str) -> dict:
     """Aggregate the owner's recent attempts into a progress dashboard payload.
 
@@ -200,4 +253,5 @@ def build_summary(owner: str) -> dict:
         },
         "subjects": subjects,
         "weakest": weakest,
+        "activity": _tool_activity(owner),
     }

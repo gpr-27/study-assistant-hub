@@ -1009,6 +1009,19 @@ body.hist-scroll-lock { overflow: hidden; }
    NEW FEATURE STYLES (exam, predictor accent, voice, progress, cheat sheet)
    ============================================================ */
 
+/* All-app activity grid (progress dashboard) */
+.prog-acts { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: .55rem; }
+.prog-act {
+  display: flex; flex-direction: column; align-items: flex-start; gap: .15rem;
+  padding: .75rem .85rem; text-decoration: none; color: inherit;
+  transition: border-color .18s, transform .18s var(--ease-out);
+}
+.prog-act:hover { border-color: hsl(var(--accent) / .6); transform: translateY(-1px); }
+.prog-act-count { font-family: var(--font-display); font-weight: 800; font-size: 1.45rem; letter-spacing: -.02em; color: hsl(var(--ink)); line-height: 1; }
+.prog-act-label { font-size: .82rem; color: hsl(var(--ink-soft)); }
+.prog-act--zero .prog-act-count { color: hsl(var(--ink-faint)); }
+.prog-act .badge { margin-top: .2rem; }
+
 /* AI insights panel (progress dashboard) */
 .prog-insight-headline { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; letter-spacing: -.01em; color: hsl(var(--ink)); margin: 0; }
 .prog-rec { display: block; text-decoration: none; color: inherit; padding: .75rem .9rem; transition: border-color .18s, transform .18s var(--ease-out); }

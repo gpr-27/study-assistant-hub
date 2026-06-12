@@ -154,35 +154,62 @@
     }
   }
 
+  // ── All-app activity: one tile per tool (chats, quizzes, exams, scans…) ──
+  function activityGrid(activity) {
+    const panel = el(`<div class="panel stack-sm"></div>`);
+    panel.append(el(`<div class="section-head" style="margin:0"><h3>Your activity across the app</h3><span>tap a tile to open the tool</span></div>`));
+    const grid = el(`<div class="prog-acts"></div>`);
+    activity.forEach((a) => {
+      const tile = el(`
+        <a class="panel-soft prog-act${a.count ? "" : " prog-act--zero"}" href="${esc(a.route)}">
+          <span class="prog-act-count">${a.count}</span>
+          <span class="prog-act-label">${esc(a.label)}</span>
+          ${a.metric ? `<span class="badge badge-accent">${esc(a.metric)}</span>` : ""}
+        </a>`);
+      grid.append(tile);
+    });
+    panel.append(grid);
+    return panel;
+  }
+
   function renderSummary(data) {
     clear(root);
     const overall = (data && data.overall) || { total_attempts: 0, overall_accuracy: 0, streak_days: 0 };
     const subjects = (data && data.subjects) || [];
     const weakest = (data && data.weakest) || [];
+    const activity = (data && data.activity) || [];
+    const anyActivity = activity.some((a) => a.count > 0);
 
     const wrap = el(`<div class="stack" style="max-width:840px;margin:0 auto"></div>`);
 
-    if (!overall.total_attempts) {
+    if (!anyActivity && !overall.total_attempts) {
       const intro = el(`<div class="panel stack"></div>`);
-      intro.append(empty("No progress data yet. Finish a quiz or rate a full flashcard deck — your results land here automatically.", "📊"));
+      intro.append(empty("Nothing to analyze yet. Use any tool — chats, quizzes, exams, scans — and your activity, performance and AI insights all land here.", "📊"));
       intro.append(el(`
         <div class="row-wrap" style="justify-content:center">
+          <a class="btn" href="#chat">Start a chat</a>
           <a class="btn" href="#quiz">Take a quiz</a>
-          <a class="btn" href="#flashcards">Review flashcards</a>
+          <a class="btn" href="#exam">Sit a mock exam</a>
         </div>`));
       wrap.append(intro);
       root.append(wrap);
       return;
     }
 
-    wrap.append(statTiles(overall));
-    // AI insights load asynchronously in their own panel so the dashboard is instant.
+    // 1) Whole-app activity (every tool), 2) AI insights, 3) quiz/flashcard performance.
+    if (activity.length) wrap.append(activityGrid(activity));
     const insPanel = el(`<div class="panel stack-sm"></div>`);
     wrap.append(insPanel);
     loadInsights(insPanel, false);
-    wrap.append(weakestList(weakest));
-    if (subjects.length) wrap.append(heatmap(subjects));
-    wrap.append(el(`<p class="hint center">Based on your last 100 quiz and flashcard sessions.</p>`));
+
+    if (overall.total_attempts) {
+      wrap.append(statTiles(overall));
+      wrap.append(weakestList(weakest));
+      if (subjects.length) wrap.append(heatmap(subjects));
+      wrap.append(el(`<p class="hint center">Accuracy stats are based on your last 100 quiz and flashcard sessions.</p>`));
+    } else {
+      wrap.append(el(`<p class="hint center">Finish a quiz or rate a flashcard deck to unlock accuracy stats and the weakness heatmap.</p>`));
+    }
     root.append(wrap);
   }
 
