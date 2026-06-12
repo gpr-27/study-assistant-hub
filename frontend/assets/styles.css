@@ -379,7 +379,13 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border: 0; bo
 .toast.ok { border-color: hsl(var(--c-plan) / .6); background: hsl(var(--c-plan) / .14); }
 
 /* ---------- chat (redesigned) ---------- */
-.chat-shell { display: flex; flex-direction: column; height: calc(100dvh - 120px); min-height: 480px; }
+.chat-shell { display: flex; flex-direction: column; gap: .55rem; height: calc(100dvh - 120px); min-height: 480px; }
+/* Chat view reclaims vertical space for the thread: a slimmer page header and
+   tighter gaps push more of the screen into the conversation area. The shell
+   height is measured live (installShellSizing), so a shorter header above it
+   grows the thread automatically. */
+.view[data-accent="chat"] .view-head { margin: .55rem 0 .65rem; }
+.view[data-accent="chat"] .view-head h2 { font-size: clamp(1.35rem, 4.5vw, 1.95rem); }
 .chat-minibar { display: flex; align-items: center; gap: .5rem; padding: .45rem .6rem; border-radius: var(--r-md); }
 #chatOptionsBtn.is-open { border-color: hsl(var(--accent) / .6); color: hsl(var(--ink)); }
 .chat-src-bar { padding: .75rem 1rem; border-radius: var(--r-md); }
