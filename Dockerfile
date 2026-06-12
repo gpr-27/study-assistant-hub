@@ -54,10 +54,9 @@ RUN pip install --upgrade pip \
 # -----------------------------------------------------------------------------
 FROM python:${PYTHON_VERSION}-slim AS runtime
 
-# Which local fastembed model to pre-bake. Defaults to the app's default; pass
-# --build-arg EMBEDDING_MODEL=... to match a custom EMBEDDING_MODEL so the image
-# ships with the right model warm.
-ARG EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+# Embeddings are hosted (Google Gemini) — nothing to pre-bake into the image.
+# Kept as a build arg only so the FAISS pre-build below can stamp the manifest model.
+ARG EMBEDDING_MODEL=gemini-embedding-2
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -113,28 +112,16 @@ USER app
 # first use and are saved to MongoDB for future restarts.
 COPY --chown=app:app faiss_index/chunk_summaries /app/faiss_index/chunk_summaries
 
-# Pre-bake the local models so the first chat/quiz request is instant and the
-# container needs no network for embeddings/tokenization. Non-fatal: if the
-# download is unavailable at build time, the writable cache self-heals at run time.
-RUN python -c "from langchain_community.embeddings import FastEmbedEmbeddings as F; F(model_name='${EMBEDDING_MODEL}').embed_query('warm up')" \
-      || echo 'WARN: embedding model not pre-baked; it will download on first use.' ; \
-    python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')" \
+# Pre-bake the tokenizer so the first request needs no network for tokenization.
+# (Embeddings are hosted on Gemini now — no local model to bake.) Non-fatal.
+RUN python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')" \
       || echo 'WARN: tiktoken encoding not pre-baked; it will download on first use.'
 
-# Pre-build FAISS indexes for all bundled subjects so the container loads them
-# instantly on every cold start — no rebuild needed at runtime.
-# We seed the documents here with -p (preserve timestamps) so the manifest
-# fingerprint matches what the entrypoint seeds at runtime.
-RUN cp -rp /opt/seed-documents/. /app/documents/ \
- && EMBEDDING_MODEL="${EMBEDDING_MODEL}" \
-    LLM_PROVIDER=groq \
-    AVAILABLE_MODELS=llama-3.3-70b-versatile \
-    DEFAULT_MODEL=llama-3.3-70b-versatile \
-    APP_ENV=production \
-    HOST=0.0.0.0 \
-    PORT=8000 \
-    python -c "from backend.vector_store import warm_embeddings, warm_all_subjects; warm_embeddings(); warm_all_subjects(); print('FAISS indexes pre-built.')" \
- || echo 'WARN: FAISS pre-build failed; indexes will rebuild on first use.'
+# Seed the bundled-subject documents so their committed FAISS indexes are recognized
+# as fresh at runtime (the content-hash manifest matches) and merely LOADED — no
+# re-embedding, so no Gemini API call and no key needed at build time. We preserve
+# timestamps with -p to mirror what the entrypoint seeds at runtime.
+RUN cp -rp /opt/seed-documents/. /app/documents/ || true
 
 EXPOSE 8000
 

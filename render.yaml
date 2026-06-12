@@ -64,9 +64,13 @@ services:
         value: llama-3.1-8b-instant
       # SUMMARY_MODEL intentionally unset — uses DEFAULT_MODEL (llama-3.3-70b-versatile).
       # Changing this invalidates all pre-built chunk summary fingerprints.
-      # --- Embeddings (local, keyless — pre-baked into the image) ---
+      # --- Embeddings (hosted Google Gemini — no model in RAM) ---
+      - key: EMBEDDING_PROVIDER
+        value: gemini
       - key: EMBEDDING_MODEL
-        value: BAAI/bge-small-en-v1.5
+        value: gemini-embedding-2
+      - key: GEMINI_API_KEY
+        sync: false               # REQUIRED secret — set in the Render dashboard
       - key: MAX_CONTENT_TOKENS
         value: "3000"             # input + reserved output must fit the model's TPM
                                   # cap (free-tier 8B = 6000 tokens/min)
