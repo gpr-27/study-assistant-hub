@@ -14,24 +14,32 @@
   // ── Responsive height: size the chat shell to the space actually left below the
   //    nav + view header so the composer always stays pinned on-screen — on any
   //    phone or tablet, and above the on-screen keyboard. CSS offsets can only
-  //    guess the chrome height; measuring it is exact. visualViewport tracks the
-  //    iOS URL bar and the software keyboard; resize/orientation cover the rest.
+  //    guess the chrome height; measuring it is exact.
+  //
+  //    CRITICAL: measure the shell's offset from the top of the DOCUMENT
+  //    (rect.top + scrollY), NOT its viewport-relative top. Viewport-relative top
+  //    shrinks as the page scrolls, so deriving the height from it — and listening
+  //    to scroll — formed a feedback loop that grew the shell without bound
+  //    ("chat goes infinite down"). Document-relative offset is scroll-invariant,
+  //    so the height is stable and we only need to react to resize (URL bar /
+  //    keyboard / orientation), never to scroll.
   function installShellSizing(shell) {
     const vp = window.visualViewport;
     const fit = () => {
       if (!shell.isConnected) return;
-      const top = shell.getBoundingClientRect().top;          // distance from viewport top
-      const avail = (vp ? vp.height : window.innerHeight) - top - 12;
-      shell.style.height = Math.max(320, avail) + "px";
+      const rect = shell.getBoundingClientRect();
+      const offsetTop = rect.top + (window.scrollY || window.pageYOffset || 0);
+      const viewportH = vp ? vp.height : window.innerHeight;
+      shell.style.height = Math.max(320, viewportH - offsetTop - 12) + "px";
     };
     requestAnimationFrame(fit);
     window.addEventListener("resize", fit);
     window.addEventListener("orientationchange", fit);
-    if (vp) { vp.addEventListener("resize", fit); vp.addEventListener("scroll", fit); }
+    if (vp) vp.addEventListener("resize", fit);
     teardownLayout = () => {
       window.removeEventListener("resize", fit);
       window.removeEventListener("orientationchange", fit);
-      if (vp) { vp.removeEventListener("resize", fit); vp.removeEventListener("scroll", fit); }
+      if (vp) vp.removeEventListener("resize", fit);
       teardownLayout = null;
     };
   }
