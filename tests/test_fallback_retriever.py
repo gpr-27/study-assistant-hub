@@ -22,6 +22,9 @@ class _Store:
 
 
 class QuotaFallbackRetrieverTests(unittest.TestCase):
+    def setUp(self):
+        vector_store._primary_quota_until = 0.0   # reset the cooldown between tests
+
     def test_primary_success_never_loads_fallback(self):
         primary = _Store(docs=["d1"])
         r = vector_store._QuotaFallbackRetriever("Math", primary, k=4)
@@ -37,6 +40,17 @@ class QuotaFallbackRetrieverTests(unittest.TestCase):
         with mock.patch.object(vector_store, "_load_fallback_store", return_value=fallback):
             self.assertEqual(r.invoke("q"), ["fb-doc"])
         self.assertEqual(fallback.queries, [("q", 3)])
+
+    def test_cooldown_skips_primary_after_quota_failure(self):
+        primary = _Store(raise_quota=True)
+        fallback = _Store(docs=["fb"])
+        r = vector_store._QuotaFallbackRetriever("Math", primary, k=2)
+        with mock.patch.object(vector_store, "_load_fallback_store", return_value=fallback):
+            r.invoke("q1")            # primary probed once, quota -> cooldown set
+            r.invoke("q2")            # within cooldown: straight to fallback
+            r.invoke("q3")
+        self.assertEqual(len(primary.queries), 1)    # primary probed exactly once
+        self.assertEqual(len(fallback.queries), 3)
 
     def test_quota_reraised_when_no_fallback_exists(self):
         primary = _Store(raise_quota=True)

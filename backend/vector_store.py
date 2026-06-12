@@ -420,13 +420,23 @@ def _load_fallback_store(subject_key: str) -> FAISS | None:
     return store
 
 
+# After a primary-model quota failure, skip the primary entirely for this long.
+# One agentic chat message can make up to ~6 embed calls (3 queries × 2 rounds);
+# without a cooldown each call separately re-probes the dead primary (2 retries
+# × 8s), stacking to a minute+ — the phone kills the connection at ~60s anyway.
+_PRIMARY_QUOTA_COOLDOWN_S = 120.0
+_primary_quota_until: float = 0.0
+
+
 class _QuotaFallbackRetriever:
     """Retriever that switches to the fallback-model index on embedding quota.
 
     The primary search embeds the query with the primary model (fast-fail on
     quota). On GeminiQuotaError, if this subject has a pre-baked fallback index,
     the SAME query is embedded with the fallback model and searched against the
-    fallback index — model and index always switch together.
+    fallback index — model and index always switch together. A process-wide
+    cooldown then routes subsequent searches straight to the fallback, so a
+    dead primary is probed once per cooldown window, not once per query.
     """
 
     def __init__(self, subject_key: str, store: FAISS, k: int) -> None:
@@ -435,16 +445,26 @@ class _QuotaFallbackRetriever:
         self._k = k
 
     def invoke(self, query: str):
+        import time as _time
+
         from backend.gemini_embeddings import GeminiQuotaError
 
+        global _primary_quota_until
+        if _time.monotonic() < _primary_quota_until:
+            fallback = _load_fallback_store(self._key)
+            if fallback is not None:
+                return fallback.similarity_search(query, k=self._k)
+            # No fallback for this subject — fall through and try the primary anyway.
         try:
             return self._store.similarity_search(query, k=self._k)
         except GeminiQuotaError:
+            _primary_quota_until = _time.monotonic() + _PRIMARY_QUOTA_COOLDOWN_S
             fallback = _load_fallback_store(self._key)
             if fallback is None:
                 raise
-            log.warning("Embedding quota hit — searching '%s' via the %s fallback index.",
-                        self._key, _FALLBACK_MODEL)
+            log.warning("Embedding quota hit — searching '%s' via the %s fallback index "
+                        "(primary skipped for the next %.0fs).",
+                        self._key, _FALLBACK_MODEL, _PRIMARY_QUOTA_COOLDOWN_S)
             return fallback.similarity_search(query, k=self._k)
 
 

@@ -151,9 +151,23 @@ def _retrieve(retriever, queries: list[str]) -> list:
     return docs
 
 
+# Hard cap on the assembled retrieval context. The corrective loop can merge
+# 5 chunks × 3 queries × 2 rounds ≈ 30+ chunks — far more than Groq's free-tier
+# 6,000 tokens-per-MINUTE budget, which counts the WHOLE request (a 7,700-token
+# prompt is rejected outright with 413 "Request too large"). 3,000 tokens of
+# context + persona + history + reserved output stays comfortably under it.
+_MAX_CONTEXT_TOKENS = 3000
+
+
 def _format_context(docs: list) -> str:
-    """Join document contents into a single context block."""
-    return "\n\n".join((getattr(d, "page_content", "") or "").strip() for d in docs if getattr(d, "page_content", "").strip())
+    """Join document contents into a single context block (token-capped)."""
+    from backend.documents import clip_to_tokens
+
+    joined = "\n\n".join(
+        (getattr(d, "page_content", "") or "").strip()
+        for d in docs if getattr(d, "page_content", "").strip()
+    )
+    return clip_to_tokens(joined, _MAX_CONTEXT_TOKENS)
 
 
 def passage_view(docs: list, *, limit: int = 12, snippet: int = 320) -> list[dict]:
