@@ -84,4 +84,5 @@ def send_message(request: ChatMessageRequest) -> ChatMessageResponse:
         answer=result["answer"],
         steps=result.get("steps", []),
         sources=result.get("sources", []),
+        artifact=result.get("artifact"),
     )

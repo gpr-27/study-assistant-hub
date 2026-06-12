@@ -5,7 +5,8 @@ graceful no-op so the app runs identically without a database. EVERY read and wr
 is scoped by ``owner`` (the signed-in Clerk user id, or "local" when auth is off),
 so users never see each other's history.
 
-Artifact kinds: chats, quizzes, flashcards, plans, mindmaps, summaries.
+Artifact kinds: chats, quizzes, flashcards, plans, mindmaps, summaries, exams,
+teachbacks, predictions, attempts (progress events), cheatsheets, scans.
 """
 from __future__ import annotations
 
@@ -20,7 +21,10 @@ from backend import config
 
 log = logging.getLogger("backend.db")
 
-KINDS: tuple[str, ...] = ("chats", "quizzes", "flashcards", "plans", "mindmaps", "summaries")
+KINDS: tuple[str, ...] = (
+    "chats", "quizzes", "flashcards", "plans", "mindmaps", "summaries",
+    "exams", "teachbacks", "predictions", "attempts", "cheatsheets", "scans",
+)
 
 # Anonymous guest accounts live in their own collection. A guest's *artifacts* are NOT
 # embedded here — they live in the KINDS collections above under owner="guest_<uuid>",
@@ -30,7 +34,10 @@ GUESTS: str = "guests"
 GUEST_PREFIX: str = "guest_"
 
 # Big fields excluded from list summaries (the detail endpoint returns them).
-_HEAVY_FIELDS = ("questions", "cards", "messages", "root", "plan", "summaries")
+_HEAVY_FIELDS = (
+    "questions", "cards", "messages", "root", "plan", "summaries",
+    "patterns", "predicted_questions", "markdown", "per_question", "topic_breakdown",
+)
 # Text fields searched by the ?q= filter (missing fields simply don't match).
 _SEARCH_FIELDS = ("title", "source", "label", "topic", "subject", "messages.content")
 

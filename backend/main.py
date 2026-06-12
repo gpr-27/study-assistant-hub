@@ -24,7 +24,23 @@ from backend.config import (
 from backend import db
 from backend.documents import DocumentError
 from backend.gemini_embeddings import GeminiEmbeddingError, GeminiQuotaError
-from backend.routers import chat, flashcards, guest, history, mindmap, planner, quiz, subjects
+from backend.routers import (
+    chat,
+    cheatsheet,
+    exam,
+    flashcards,
+    guest,
+    history,
+    insights,
+    mindmap,
+    planner,
+    predictor,
+    progress,
+    quiz,
+    scannotes,
+    subjects,
+    teachback,
+)
 from backend.vector_store import warm_embeddings
 
 log = logging.getLogger("backend.main")
@@ -169,6 +185,13 @@ app.include_router(quiz.router)
 app.include_router(flashcards.router)
 app.include_router(planner.router)
 app.include_router(mindmap.router)
+app.include_router(exam.router)
+app.include_router(teachback.router)
+app.include_router(predictor.router)
+app.include_router(progress.router)
+app.include_router(insights.router)
+app.include_router(cheatsheet.router)
+app.include_router(scannotes.router)
 app.include_router(history.router)
 app.include_router(guest.router)
 

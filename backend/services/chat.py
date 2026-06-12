@@ -213,10 +213,21 @@ def ask(session_id: str, message: str) -> dict:
     first_turn = not history
     steps: list[str] = []
     sources: list[str] = []
+    artifact = None
 
     persona = session.get("persona") or _SUBJECT_PERSONA_BASE
 
-    if retriever is not None and config.AGENTIC_RAG:
+    # Tool orchestration: "create a quiz/flashcards/summary/plan/mind map" requests
+    # are detected (cheap gate + one small LLM call) and fulfilled by the matching
+    # tool, saved to its history. Anything else falls through to the normal answer.
+    from backend.services import chat_tools
+    intent = chat_tools.detect_intent(session["llm"], message)
+    tool_result = chat_tools.run_tool(session, intent, message) if intent else None
+    if tool_result is not None:
+        answer = tool_result["answer"]
+        steps = tool_result["steps"]
+        artifact = tool_result.get("artifact")
+    elif retriever is not None and config.AGENTIC_RAG:
         # Agentic RAG: an LLM-driven rewrite→retrieve→grade→correct loop.
         answer, steps, sources = agentic_rag.answer(
             retriever, session["llm"], message, _history_messages(history), persona
@@ -272,7 +283,7 @@ def ask(session_id: str, message: str) -> dict:
             threading.Thread(
                 target=_autoname_chat, args=(owner, chat_id, message, answer, session["llm"]), daemon=True
             ).start()
-    return {"answer": answer, "steps": steps, "sources": sources}
+    return {"answer": answer, "steps": steps, "sources": sources, "artifact": artifact}
 
 
 def resume_session(owner: str, chat_id: str) -> tuple[str, str, str, str, list[dict]]:

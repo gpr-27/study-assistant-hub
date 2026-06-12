@@ -403,6 +403,23 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border: 0; bo
 .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
 
 /* message footer: copy + sources + trace */
+/* Artifact card — the chat created something in another tool (quiz/cards/plan/…) */
+.chat-artifact {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: .7rem;
+  max-width: 78%; padding: .7rem .95rem; border-radius: 14px; text-decoration: none;
+  border: 1px solid hsl(var(--accent) / .45); background: hsl(var(--accent) / .1);
+  transition: border-color .18s, box-shadow .18s, transform .18s var(--ease-out);
+  animation: rise .4s var(--ease-spring) both;
+}
+.chat-artifact:hover { border-color: hsl(var(--accent) / .8); box-shadow: 0 6px 18px hsl(var(--accent) / .18); transform: translateY(-1px); }
+.chat-artifact-icon {
+  width: 34px; height: 34px; flex: none; display: grid; place-items: center; border-radius: 10px;
+  background: linear-gradient(150deg, hsl(var(--accent) / .95), hsl(var(--accent) / .6)); color: #fff; font-size: 1rem;
+}
+.chat-artifact-meta { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.chat-artifact-title { font-weight: 600; color: hsl(var(--ink)); font-size: .93rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-artifact-sub { font-size: .8rem; color: hsl(var(--accent)); font-weight: 600; }
+
 .msg-footer { display: flex; flex-direction: column; gap: .4rem; margin-top: .5rem; }
 .msg-sources { display: flex; flex-wrap: wrap; gap: .35rem; }
 .msg-source-chip {
@@ -986,4 +1003,81 @@ body.hist-scroll-lock { overflow: hidden; }
 /* Never allow horizontal overflow on small screens. */
 @media (max-width: 920px) {
   html, body { overflow-x: hidden; }
+}
+
+/* ============================================================
+   NEW FEATURE STYLES (exam, predictor accent, voice, progress, cheat sheet)
+   ============================================================ */
+
+/* AI insights panel (progress dashboard) */
+.prog-insight-headline { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; letter-spacing: -.01em; color: hsl(var(--ink)); margin: 0; }
+.prog-rec { display: block; text-decoration: none; color: inherit; padding: .75rem .9rem; transition: border-color .18s, transform .18s var(--ease-out); }
+a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(-1px); }
+.prog-rec-action { font-weight: 600; color: hsl(var(--ink)); font-size: .94rem; }
+.prog-rec-go { display: inline-block; margin-top: .25rem; font-size: .8rem; font-weight: 600; color: hsl(var(--accent)); }
+
+/* ============ Mock Exam Simulator ============ */
+/* Mock Exam (exam.js): selected-but-ungraded MCQ option highlight */
+.opt[aria-pressed="true"] { border-color: hsl(var(--accent)); background: hsl(var(--accent) / .14); }
+.opt[aria-pressed="true"] .key { background: hsl(var(--accent)); color: #fff; }
+
+/* ============ Past-paper Question Predictor ============ */
+:root { --c-predict: 350 88% 64%; }
+[data-accent="predictor"] { --accent: var(--c-predict); }
+
+/* ============ Voice tutor for the Chat Assistant ============ */
+/* ---- Voice tutor (voice.js): mic + read-aloud buttons in the chat composer ---- */
+#voiceMicBtn, #voiceTtsBtn { flex: none; position: relative; padding: .5rem .7rem; line-height: 1; }
+#voiceMicBtn.is-rec::after {
+  content: ""; position: absolute; top: 4px; right: 4px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #e5484d; box-shadow: 0 0 6px rgba(229, 72, 77, .8);
+  animation: voice-rec-pulse 1.2s ease-in-out infinite;
+}
+#voiceTtsBtn[aria-pressed="true"] { box-shadow: inset 0 0 0 1.5px currentColor; }
+@keyframes voice-rec-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .35; transform: scale(.7); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #voiceMicBtn.is-rec::after { animation: none; }
+}
+
+/* ============ Progress / Weakness Heatmap ============ */
+/* ---- Progress / weakness heatmap view ---- */
+.prog-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: .8rem; }
+.prog-tile { text-align: center; padding: 1.1rem .8rem; }
+.prog-tile-value { font-family: var(--font-display); font-weight: 800; font-size: clamp(1.4rem, 4vw, 2rem); letter-spacing: -.02em; }
+.prog-weak-name { font-weight: 600; font-size: .92rem; }
+.prog-bar { height: 10px; border-radius: 999px; background: hsl(var(--ink) / .12); overflow: hidden; }
+.prog-bar > i { display: block; height: 100%; border-radius: 999px; transition: width .5s var(--ease-spring); }
+.prog-subj { font-family: var(--font-display); font-weight: 700; letter-spacing: -.01em; }
+.prog-heat { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: .5rem; }
+.prog-cell { border-radius: var(--r-sm); padding: .6rem .65rem; color: #fff; display: flex; flex-direction: column; gap: .15rem; min-height: 58px; justify-content: space-between; box-shadow: inset 0 1px 1px hsl(0 0% 100% / .25); }
+.prog-cell-topic { font-weight: 600; font-size: .8rem; line-height: 1.25; overflow-wrap: anywhere; text-shadow: 0 1px 2px hsl(0 0% 0% / .35); }
+.prog-cell-acc { font-family: var(--font-display); font-weight: 700; font-size: .85rem; text-shadow: 0 1px 2px hsl(0 0% 0% / .35); }
+@media (max-width: 560px) { .prog-tiles { grid-template-columns: 1fr; } }
+
+/* ============ Cheat-sheet Generator ============ */
+/* ---- Cheat Sheet tool ---- */
+[data-accent="cheatsheet"] { --accent: 45 95% 58%; }
+
+/* Print only the rendered cheat sheet (hide nav, panels, backgrounds, everything else). */
+@media print {
+  body * { visibility: hidden; }
+  .sheet-print, .sheet-print * { visibility: visible; }
+  .sheet-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: #fff !important;
+  }
+  .sheet-print, .sheet-print * { color: #000 !important; background: transparent !important; }
+  .sheet-print table, .sheet-print th, .sheet-print td { border-color: #000 !important; }
 }

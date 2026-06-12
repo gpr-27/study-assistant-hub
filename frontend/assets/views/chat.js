@@ -124,6 +124,20 @@
     thread.append(ai);
   }
 
+  // ── Artifact card: the chat created something in another tool ──
+  function appendArtifactCard(thread, art) {
+    const card = el(`<a class="chat-artifact" href="${esc(art.route || "#home")}"></a>`);
+    card.append(el(`<span class="chat-artifact-icon" aria-hidden="true">✦</span>`));
+    const meta = el(`<span class="chat-artifact-meta"></span>`);
+    const t = el(`<span class="chat-artifact-title"></span>`);
+    t.textContent = art.title || "New artifact";
+    const s = el(`<span class="chat-artifact-sub"></span>`);
+    s.textContent = "Open in " + (art.tool || "the tool") + " →";
+    meta.append(t, s);
+    card.append(meta);
+    thread.append(card);
+  }
+
   // ── Agentic trace renderer ────────────────────────────────
   function stepIcon(step) {
     if (step.kind === "rewrite")  return "✎";
@@ -403,6 +417,7 @@
         steps: resp.steps || [],
         sources: resp.sources || [],
       });
+      if (resp.artifact) appendArtifactCard(thread, resp.artifact);
       if (firstTurn) {
         const hp = document.querySelector('.history-panel[data-kind="chats"]');
         if (hp?.refresh) hp.refresh();

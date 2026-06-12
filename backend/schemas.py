@@ -56,6 +56,7 @@ class ChatMessageResponse(BaseModel):
     answer: str
     steps: list[dict] = []   # structured agentic-trace events (kind/title/queries/passages/…)
     sources: list[str] = []
+    artifact: dict | None = None   # set when the chat created a tool artifact (kind/id/title/route/tool)
 
 
 class ChatMessage(BaseModel):

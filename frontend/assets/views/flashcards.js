@@ -30,6 +30,8 @@
       source: "subject",    // "subject" | "topic" | "upload"
       pdfFile: null,        // File chosen in upload mode
       busy: false,
+      meta: null,           // {subject, topic} of the current deck — for progress recording
+      recorded: false,      // true once this deck's session was sent to /progress/record
     };
   }
 
@@ -105,6 +107,7 @@
     function openSavedDeck(saved) {
       state.cards = ((saved && saved.cards) || []).map((c, i) => ({ id: "c" + i, front: c.front, back: c.back, topic: c.topic }));
       state.knowledge = {}; state.mode = "learn"; state.index = 0; state.flipped = false;
+      state.meta = { topic: (saved && saved.title) || null }; state.recorded = false;
       renderDeck(main);
     }
     aside.querySelector("#fc-hist").addEventListener("click", (e) =>
@@ -236,6 +239,7 @@
       const subject = subjEl && subjEl.value;
       const pdf = pdfEl && pdfEl.value;
       if (!subject || !pdf) { toast("Pick a subject and PDF first.", "error"); return; }
+      state.meta = { subject, topic: pdf };
       request = () => window.api.post("/flashcards/generate", {
         subject, pdf, num_cards: state.numCards, difficulty: state.difficulty, model,
       });
@@ -243,11 +247,13 @@
       const topicEl = document.querySelector("#fc-topic");
       const topic = topicEl ? topicEl.value.trim() : "";
       if (!topic) { toast("Enter a topic first.", "error"); return; }
+      state.meta = { topic };
       request = () => window.api.post("/flashcards/topic", {
         topic, num_cards: state.numCards, difficulty: state.difficulty, model,
       });
     } else {
       if (!state.pdfFile) { toast("Choose a PDF first.", "error"); return; }
+      state.meta = { topic: state.pdfFile.name };
       const fd = new FormData();
       fd.append("file", state.pdfFile);
       fd.append("num_cards", String(state.numCards));
@@ -275,6 +281,7 @@
       }
       state.cards = cards;
       state.knowledge = {};
+      state.recorded = false;
       state.mode = "learn";
       state.index = 0;
       state.flipped = false;
@@ -310,6 +317,7 @@
     const resetBtn = el(`<button class="btn-ghost">Reset</button>`);
     resetBtn.addEventListener("click", () => {
       state.knowledge = {};
+      state.recorded = false;
       state.mode = "learn";
       state.index = 0;
       state.flipped = false;
@@ -388,6 +396,13 @@
       const b = el(`<button class="btn${active ? "-accent" : ""}">${esc(meta.label)}</button>`);
       b.addEventListener("click", () => {
         state.knowledge[card.id] = key;
+        // Session complete (every card rated once) -> fire-and-forget progress event.
+        // Failures must never affect the deck UI.
+        if (!state.recorded && Object.keys(state.knowledge).length >= state.cards.length) {
+          state.recorded = true;
+          const knew = Object.values(state.knowledge).filter((v) => v === "knew_well").length;
+          try { window.api.post("/progress/record", Object.assign({ tool: "flashcards", correct: knew, total: state.cards.length }, state.meta || {})).catch(() => {}); } catch (_) {}
+        }
         // Advance within the CURRENT active list using an explicit index (no mod on a shrinking list).
         const after = activeList();
         if (after.length === 0) { renderDeck(main); return; }

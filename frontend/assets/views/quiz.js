@@ -11,6 +11,7 @@
   const DIFFICULTIES = ["easy", "medium", "hard"];
 
   let root = null;
+  let lastMeta = null; // {subject, topic} of the most recent quiz — for progress recording
 
   /* ---------------- setup screen ---------------- */
   async function renderSetup() {
@@ -62,7 +63,7 @@
       window.ui.openHistoryDrawer("quizzes", {
         title: "Saved quizzes",
         anchor: e.currentTarget,
-        onOpen: (saved) => renderRunner((saved && saved.questions) || []),
+        onOpen: (saved) => { lastMeta = { topic: (saved && saved.title) || null }; renderRunner((saved && saved.questions) || []); },
       }));
 
     const srcSeg = panel.querySelector("#q-src");
@@ -207,14 +208,17 @@
         const subject = srcCtl.querySelector("#q-subject") && srcCtl.querySelector("#q-subject").value;
         const pdf = srcCtl.querySelector("#q-pdf") && srcCtl.querySelector("#q-pdf").value;
         if (!subject || !pdf) { toast("Pick a subject and a document first.", "error"); return; }
+        lastMeta = { subject, topic: pdf };
         request = () => api.post("/quiz/generate", { subject, pdf, num_questions: num, difficulty, model });
       } else if (source === "topic") {
         const topicEl = srcCtl.querySelector("#q-topic");
         const topic = topicEl ? topicEl.value.trim() : "";
         if (!topic) { toast("Enter a topic first.", "error"); return; }
+        lastMeta = { topic };
         request = () => api.post("/quiz/topic", { topic, num_questions: num, difficulty, model });
       } else {
         if (!pdfFile) { toast("Choose a PDF first.", "error"); return; }
+        lastMeta = { topic: pdfFile.name };
         const fd = new FormData();
         fd.append("file", pdfFile);
         fd.append("num_questions", String(num));
@@ -329,6 +333,11 @@
     const total = questions.length;
     const correct = answers.reduce((n, sel, i) => n + (sel === questions[i].correct ? 1 : 0), 0);
     const pct = total ? Math.round((correct / total) * 100) : 0;
+
+    // Fire-and-forget progress event — failures must never affect the quiz UI.
+    if (total > 0) {
+      try { window.api.post("/progress/record", Object.assign({ tool: "quiz", correct, total }, lastMeta || {})).catch(() => {}); } catch (_) {}
+    }
 
     let line;
     if (pct === 100) line = "Perfect score — outstanding work.";
