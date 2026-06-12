@@ -106,6 +106,20 @@ def _oid(id_str: str):
         return None
 
 
+def _iso_utc(value: datetime) -> str:
+    """ISO-format a stored timestamp, ALWAYS with an explicit UTC offset.
+
+    PyMongo returns datetimes naive (tzinfo stripped) even though they are UTC.
+    Serializing those naively yields "2026-06-12T18:25:00" — no offset — which
+    browsers then parse as LOCAL time, displaying every history entry shifted
+    by the user's UTC offset. Tagging UTC first yields "…+00:00", which
+    `new Date()` converts correctly to the viewer's local time.
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
+
+
 def _public(doc: dict | None) -> dict | None:
     """Stringify _id -> id and ISO-format timestamps for JSON responses."""
     if not doc:
@@ -115,7 +129,7 @@ def _public(doc: dict | None) -> dict | None:
     doc.pop("owner", None)
     for key in ("created_at", "updated_at"):
         if isinstance(doc.get(key), datetime):
-            doc[key] = doc[key].isoformat()
+            doc[key] = _iso_utc(doc[key])
     return doc
 
 
@@ -152,7 +166,7 @@ def _public_guest(doc: dict | None) -> dict | None:
     doc.pop("_id", None)
     for key in ("createdAt", "lastActiveAt", "migratedAt"):
         if isinstance(doc.get(key), datetime):
-            doc[key] = doc[key].isoformat()
+            doc[key] = _iso_utc(doc[key])
     return doc
 
 
