@@ -99,12 +99,14 @@
       URL.revokeObjectURL(url);
       toast("Downloaded cheat sheet.", "ok");
     });
-    const printBtn = el(`<button class="btn" type="button">Print</button>`);
-    printBtn.addEventListener("click", () => window.print());
+    const sheet = md(markdown);
+    sheet.classList.add("panel", "day");
+
+    const printBtn = el(`<button class="btn" type="button">🖨 Print / PDF</button>`);
+    printBtn.addEventListener("click", () =>
+      window.ui.printDoc(title || "Cheat sheet", sheet.innerHTML));
     actions.append(dl, printBtn);
 
-    const sheet = md(markdown);
-    sheet.classList.add("panel", "day", "sheet-print");
     result.append(head, sheet);
   }
 

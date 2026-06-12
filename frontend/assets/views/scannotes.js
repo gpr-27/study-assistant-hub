@@ -143,7 +143,7 @@
           <span class="badge badge-accent" style="align-self:flex-start">${pages} page${pages === 1 ? "" : "s"}</span>
         </div>
         <div class="row row-wrap">
-          <button id="sn-copy" class="btn" type="button">Copy</button>
+          <button id="sn-print" class="btn" type="button">🖨 Print / PDF</button>
           <button id="sn-dl" class="btn" type="button">Download .md</button>
         </div>
         <div class="panel-soft" id="sn-md" style="overflow-x:auto"></div>
@@ -152,9 +152,10 @@
     `);
     root.append(panel);
 
-    panel.querySelector("#sn-md").append(md(markdown));
-    panel.querySelector("#sn-copy").addEventListener("click", (e) =>
-      window.ui.copy(markdown, e.currentTarget));
+    const rendered = md(markdown);
+    panel.querySelector("#sn-md").append(rendered);
+    panel.querySelector("#sn-print").addEventListener("click", () =>
+      window.ui.printDoc(title, rendered.innerHTML));
     panel.querySelector("#sn-dl").addEventListener("click", () => downloadMd(title, markdown));
     panel.querySelector("#sn-again").addEventListener("click", renderPicker);
   }

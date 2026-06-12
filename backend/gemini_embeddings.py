@@ -85,11 +85,20 @@ class GeminiEmbeddings(Embeddings):
         self._session = requests.Session()
 
     # ── internal request helper (honors 429 retryDelay + backoff) ───────────
-    def _post(self, endpoint: str, payload: dict) -> dict:
+    def _post(self, endpoint: str, payload: dict, *,
+              max_retries: int | None = None, max_quota_wait: float | None = None) -> dict:
+        """``max_retries``/``max_quota_wait`` let interactive callers fail fast.
+
+        Index builds want the patient default loop (waiting out a per-minute
+        window is fine in a background build). A live chat message does NOT:
+        phones/proxies kill the connection at ~60s, so a long quota wait turns
+        into a dead "Load failed" instead of a clean, retryable 429.
+        """
+        retries = max_retries or _MAX_RETRIES
         url = f"{_API_ROOT}/{self._model}:{endpoint}?key={self._api_key}"
         last_err: Exception | None = None
         quota_hit = False
-        for attempt in range(_MAX_RETRIES):
+        for attempt in range(retries):
             try:
                 resp = self._session.post(url, json=payload, timeout=_TIMEOUT)
             except requests.RequestException as exc:  # network blip → retry
@@ -113,8 +122,8 @@ class GeminiEmbeddings(Embeddings):
                     delay = _retry_after_seconds(resp.json())
                 except ValueError:
                     delay = None
-                wait = min((delay or 2 ** attempt) + 1, _MAX_BACKOFF)
-                log.info("Gemini embed quota hit; waiting %.0fs (attempt %d/%d).", wait, attempt + 1, _MAX_RETRIES)
+                wait = min((delay or 2 ** attempt) + 1, max_quota_wait or _MAX_BACKOFF)
+                log.info("Gemini embed quota hit; waiting %.0fs (attempt %d/%d).", wait, attempt + 1, retries)
                 time.sleep(wait)
                 continue
             if resp.status_code in _RETRYABLE_STATUS:
@@ -129,7 +138,7 @@ class GeminiEmbeddings(Embeddings):
                 "Gemini embedding quota exhausted (free tier: 100 requests/minute). "
                 "Wait a minute and try again, or use a key with higher limits."
             )
-        raise GeminiEmbeddingError(f"Gemini embeddings failed after {_MAX_RETRIES} attempts: {last_err}")
+        raise GeminiEmbeddingError(f"Gemini embeddings failed after {retries} attempts: {last_err}")
 
     def _content(self, text: str, task_type: str) -> dict:
         req: dict = {
@@ -163,7 +172,10 @@ class GeminiEmbeddings(Embeddings):
 
     def embed_query(self, text: str) -> list[float]:
         """Embed a single search query (taskType=RETRIEVAL_QUERY)."""
-        data = self._post("embedContent", self._content(text, "RETRIEVAL_QUERY"))
+        # Interactive path (chat retrieval): fail FAST on quota so the user gets a
+        # clean 429 toast in seconds — not a connection killed mid-wait.
+        data = self._post("embedContent", self._content(text, "RETRIEVAL_QUERY"),
+                          max_retries=2, max_quota_wait=8)
         values = data.get("embedding", {}).get("values")
         if not values:
             raise GeminiEmbeddingError(f"Gemini query embedding returned no vector: {str(data)[:200]}")

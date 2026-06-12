@@ -1075,22 +1075,6 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
 /* ---- Cheat Sheet tool ---- */
 [data-accent="cheatsheet"] { --accent: 45 95% 58%; }
 
-/* Print only the rendered cheat sheet (hide nav, panels, backgrounds, everything else). */
-@media print {
-  body * { visibility: hidden; }
-  .sheet-print, .sheet-print * { visibility: visible; }
-  .sheet-print {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    margin: 0;
-    padding: 0;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-    background: #fff !important;
-  }
-  .sheet-print, .sheet-print * { color: #000 !important; background: transparent !important; }
-  .sheet-print table, .sheet-print th, .sheet-print td { border-color: #000 !important; }
-}
+/* Printing is handled by ui.printDoc (app.js): a standalone, print-tuned
+   document window — the old in-page @media print visibility hack produced
+   broken PDFs over the glassy shell. */

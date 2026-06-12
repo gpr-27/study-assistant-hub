@@ -69,17 +69,31 @@
     } catch (_) { /* localStorage unavailable — proceed without the guest header */ }
     return headers;
   }
+  // A fetch that dies at the network layer (Safari: "Load failed", Chrome:
+  // "Failed to fetch") usually means the connection was cut while the server
+  // was still working — e.g. a long LLM/rate-limit wait outliving the phone's
+  // ~60s fetch limit. Surface something the user can act on instead.
+  function netFail(e) {
+    if (e instanceof TypeError) {
+      const err = new Error(
+        "Connection dropped — the server is busy (likely a free-tier rate limit). Wait a moment and try again."
+      );
+      err.status = 0;
+      throw err;
+    }
+    throw e;
+  }
   window.api = {
-    get: (p) => authHeaders().then((h) => fetch(apiUrl(p), { headers: h })).then(handle),
+    get: (p) => authHeaders().then((h) => fetch(apiUrl(p), { headers: h }).catch(netFail)).then(handle),
     post: (p, body) => authHeaders({ "Content-Type": "application/json" }).then((h) =>
-      fetch(apiUrl(p), { method: "POST", headers: h, body: JSON.stringify(body || {}) })
+      fetch(apiUrl(p), { method: "POST", headers: h, body: JSON.stringify(body || {}) }).catch(netFail)
     ).then(handle),
     postForm: (p, formData) => authHeaders().then((h) =>
-      fetch(apiUrl(p), { method: "POST", headers: h, body: formData })
+      fetch(apiUrl(p), { method: "POST", headers: h, body: formData }).catch(netFail)
     ).then(handle),
-    del: (p) => authHeaders().then((h) => fetch(apiUrl(p), { method: "DELETE", headers: h })).then(handle),
+    del: (p) => authHeaders().then((h) => fetch(apiUrl(p), { method: "DELETE", headers: h }).catch(netFail)).then(handle),
     patch: (p, body) => authHeaders({ "Content-Type": "application/json" }).then((h) =>
-      fetch(apiUrl(p), { method: "PATCH", headers: h, body: JSON.stringify(body || {}) })
+      fetch(apiUrl(p), { method: "PATCH", headers: h, body: JSON.stringify(body || {}) }).catch(netFail)
     ).then(handle),
   };
 
@@ -458,9 +472,63 @@
     }
   }
 
+  /* ---------------- clean print (PDF via the browser's print dialog) ----------------
+     Opens a standalone window with a minimal, print-tuned document (white page,
+     dark text, document typography) and the rendered markdown HTML inside.
+     Far more reliable than @media print visibility hacks over the glassy app
+     shell — dark-theme colors, fixed overlays and backdrop filters all used to
+     leak into the printed PDF. */
+  function printDoc(title, contentHtml) {
+    const w = window.open("", "_blank");
+    if (!w) { toast("Allow pop-ups to print.", "error"); return; }
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>${esc(title || "Document")}</title>
+<style>
+  @page { margin: 16mm 14mm; }
+  * { box-sizing: border-box; }
+  html, body { background: #fff; color: #111; margin: 0; }
+  body { font: 11pt/1.55 Georgia, "Times New Roman", serif; padding: 24px 28px; }
+  .doc-title { font: 700 17pt/1.2 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+               letter-spacing: -.01em; margin: 0 0 2pt; }
+  .doc-sub { color: #666; font: 9pt -apple-system, "Segoe UI", sans-serif; margin: 0 0 14pt;
+             padding-bottom: 8pt; border-bottom: 1.5pt solid #111; }
+  h1, h2, h3, h4 { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+                   letter-spacing: -.01em; line-height: 1.25; margin: 14pt 0 5pt;
+                   break-after: avoid-page; }
+  h1 { font-size: 14.5pt; } h2 { font-size: 12.5pt; }
+  h3 { font-size: 11.5pt; } h4 { font-size: 11pt; }
+  p { margin: 5pt 0; }
+  ul, ol { margin: 5pt 0 5pt 16pt; padding: 0; }
+  li { margin: 2.5pt 0; }
+  strong { color: #000; }
+  code { font: 9.5pt "SF Mono", Menlo, Consolas, monospace; background: #f2f2f2;
+         padding: .5pt 3pt; border-radius: 3pt; }
+  pre { background: #f6f6f6; border: .75pt solid #ddd; border-radius: 4pt;
+        padding: 7pt 9pt; overflow-x: hidden; white-space: pre-wrap;
+        word-wrap: break-word; break-inside: avoid-page; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 7pt 0; font-size: 10pt;
+          break-inside: avoid-page; }
+  th, td { border: .75pt solid #bbb; padding: 4pt 7pt; text-align: left; vertical-align: top; }
+  th { background: #f0f0f0; font-family: -apple-system, "Segoe UI", sans-serif; }
+  blockquote { margin: 7pt 0; padding: 2pt 0 2pt 10pt; border-left: 2.5pt solid #888; color: #444; }
+  hr { border: 0; border-top: .75pt solid #ccc; margin: 10pt 0; }
+  img { max-width: 100%; }
+  /* strip app-specific chrome that travels inside rendered markdown */
+  .cb-copy, .codeblock-head button { display: none !important; }
+</style></head><body>
+<div class="doc-title">${esc(title || "Document")}</div>
+<div class="doc-sub">Study Assistant Hub</div>
+${contentHtml}
+</body></html>`);
+    w.document.close();
+    // Give the new document a beat to lay out before invoking the dialog.
+    setTimeout(() => { try { w.focus(); w.print(); } catch (_) {} }, 350);
+  }
+
   window.ui = {
     el, clear, esc, spinner, empty, toast, md: renderMarkdown, copy: copyToClipboard,
-    modelSelect, selectedModel, historyPanel, openHistoryDrawer,
+    modelSelect, selectedModel, historyPanel, openHistoryDrawer, printDoc,
   };
 
   /* ---------------- view registry ---------------- */
