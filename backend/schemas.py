@@ -54,6 +54,8 @@ class ChatMessageRequest(BaseModel):
 
 class ChatMessageResponse(BaseModel):
     answer: str
+    steps: list[dict] = []   # structured agentic-trace events (kind/title/queries/passages/…)
+    sources: list[str] = []
 
 
 class ChatMessage(BaseModel):

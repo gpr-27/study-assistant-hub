@@ -10,9 +10,8 @@ import datetime
 from dateutil import parser as date_parser
 from groq import APIError
 
-from backend import chunk_summaries
 from backend.config import MAX_CONTENT_TOKENS, model_for, require_groq_key
-from backend.documents import clip_to_tokens, pdf_signature
+from backend.documents import clip_to_tokens, pdf_signature, read_pdf
 
 _HOURS_PER_DAY: int = 2
 
@@ -99,8 +98,7 @@ def _summarize_one(subject: str, pdf: str, model: str | None = None, owner: str 
     cache_key = (subject, pdf, pdf_signature(subject, pdf, owner), resolved)
     if cache_key in _summary_cache:
         return _summary_cache[cache_key]
-    chunks = chunk_summaries.get_or_build(subject, pdf, model, owner)
-    summary = _summarize_text(pdf, chunk_summaries.summaries_as_content(chunks), model=model)
+    summary = _summarize_text(pdf, read_pdf(subject, pdf, owner), model=model)
     _summary_cache[cache_key] = summary
     return summary
 
@@ -113,19 +111,10 @@ def summarize_pdfs(subject: str, pdfs: list[str], model: str | None = None, owne
 
 
 def summarize_named_texts(items: list[tuple[str, str]], model: str | None = None) -> dict[str, str]:
-    """Summarize uploaded (name, text) documents.
-
-    Each upload is first chunked and chunk-summarized (cached/saved by content, like a
-    subject PDF), then the TOPICS/SUMMARY view is built from those chunk summaries rather
-    than the raw text — so a re-upload reuses the saved work instead of re-billing it.
-    """
+    """Summarize uploaded (name, text) documents."""
     if not items:
         raise PlannerError("No documents provided to summarize.")
-    out: dict[str, str] = {}
-    for name, text in items:
-        chunks = chunk_summaries.get_or_build_for_text(text, name, model)
-        out[name] = _summarize_text(name, chunk_summaries.summaries_as_content(chunks), model=model)
-    return out
+    return {name: _summarize_text(name, text, model=model) for name, text in items}
 
 
 def _days_until(target_date: str) -> tuple[datetime.date, datetime.date, int]:

@@ -349,9 +349,12 @@
       const layout = el(`
         <div class="stack">
           <div class="panel stack">
-            <div class="stack-sm">
-              <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em">Create a mind map</h3>
-              <p class="muted">From one PDF in a subject, a topic you type, or a PDF you upload.</p>
+            <div class="between" style="align-items:flex-start">
+              <div class="stack-sm" style="flex:1">
+                <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em">Create a mind map</h3>
+                <p class="muted">From one PDF in a subject, a topic you type, or a PDF you upload.</p>
+              </div>
+              <button id="mm-hist" class="btn" type="button" style="flex:none;padding:.4rem .8rem;font-size:.85rem">≡ History</button>
             </div>
             <div class="seg" role="tablist" aria-label="Mind map source">
               <button type="button" data-src="subject" aria-pressed="true">Subject PDF</button>
@@ -381,7 +384,8 @@
         result.append(head);
         mountMindmap(tree, result);
       }
-      layout.append(window.ui.historyPanel("mindmaps", { title: "Saved mind maps", onOpen: openSavedMindmap }));
+      layout.querySelector("#mm-hist").addEventListener("click", (e) =>
+        window.ui.openHistoryDrawer("mindmaps", { title: "Saved mind maps", anchor: e.currentTarget, onOpen: openSavedMindmap }));
 
       const seg = layout.querySelector(".seg");
       const sourceCtl = layout.querySelector("#mmSourceCtl");

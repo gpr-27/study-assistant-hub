@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 
 from groq import APIError
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -76,6 +77,11 @@ def _extract_json(text: str) -> dict:
     return {}
 
 
+def _prompt_text(system: str, user: str) -> str:
+    """Render a system+user message pair as a single readable prompt for the trace UI."""
+    return f"SYSTEM:\n{system}\n\nUSER:\n{user}"
+
+
 def _rewrite(
     llm,
     question: str,
@@ -83,11 +89,12 @@ def _rewrite(
     *,
     previous: list[str] | None = None,
     missing: str | None = None,
-) -> list[str]:
+) -> tuple[list[str], str]:
     """Produce up to ``AGENTIC_RAG_QUERIES`` search queries for ``question``.
 
     On the corrective pass, ``previous``/``missing`` steer it toward *different* angles
-    and the still-missing information. Falls back to ``[question]`` on any failure.
+    and the still-missing information. Returns ``(queries, prompt)`` — the prompt is
+    surfaced in the agentic trace. Falls back to ``[question]`` on any failure.
     """
     n = config.AGENTIC_RAG_QUERIES
     instruction = (
@@ -103,6 +110,7 @@ def _rewrite(
             + "; ".join(previous)
         )
     instruction += '\n\nReturn ONLY JSON: {"queries": ["...", "..."]}'
+    prompt = _prompt_text(_REWRITE_SYSTEM, instruction)
 
     messages = [SystemMessage(content=_REWRITE_SYSTEM), *history_messages, HumanMessage(content=instruction)]
     try:
@@ -111,7 +119,7 @@ def _rewrite(
         raise
     except Exception:  # noqa: BLE001 — rewriting is best-effort
         log.debug("Query rewrite failed; using the raw question.", exc_info=True)
-        return [question]
+        return [question], prompt
 
     raw = data.get("queries") if isinstance(data, dict) else None
     queries: list[str] = []
@@ -119,7 +127,7 @@ def _rewrite(
         for q in raw:
             if isinstance(q, str) and q.strip() and q.strip() not in queries:
                 queries.append(q.strip())
-    return queries[:n] or [question]
+    return (queries[:n] or [question]), prompt
 
 
 def _retrieve(retriever, queries: list[str]) -> list:
@@ -148,16 +156,42 @@ def _format_context(docs: list) -> str:
     return "\n\n".join((getattr(d, "page_content", "") or "").strip() for d in docs if getattr(d, "page_content", "").strip())
 
 
-def _grade(llm, question: str, context: str) -> tuple[bool, str]:
-    """Return (sufficient, missing). On any failure, assume sufficient (degrade to naive RAG)."""
-    if not context.strip():
-        return False, "no context retrieved"
+def passage_view(docs: list, *, limit: int = 12, snippet: int = 320) -> list[dict]:
+    """Project retrieved documents into a compact, JSON-safe shape for the trace UI.
+
+    Each entry: ``{source, page, text}`` — the source PDF filename, 1-based page
+    number (when known), and a truncated text snippet. Shared with the classic-RAG
+    path in the chat service so both render passages identically.
+    """
+    out: list[dict] = []
+    for d in docs[:limit]:
+        meta = getattr(d, "metadata", {}) or {}
+        src = meta.get("source", "") or ""
+        page = meta.get("page")
+        text = (getattr(d, "page_content", "") or "").strip()
+        out.append({
+            "source": Path(src).name if src else "—",
+            "page": (page + 1) if isinstance(page, int) else None,
+            "text": text[:snippet] + ("…" if len(text) > snippet else ""),
+        })
+    return out
+
+
+def _grade(llm, question: str, context: str) -> tuple[bool, str, str]:
+    """Return ``(sufficient, missing, prompt)``. On any failure, assume sufficient.
+
+    The prompt is surfaced in the trace. A truncated context is shown there to keep
+    the grading prompt readable.
+    """
     instruction = (
         f"Question: {question}\n\n"
         f"Context passages:\n{context}\n\n"
         "Can the question be fully answered using ONLY these passages? "
         'Return ONLY JSON: {"sufficient": true|false, "missing": "what is missing, if any"}'
     )
+    prompt = _prompt_text(_GRADE_SYSTEM, instruction)
+    if not context.strip():
+        return False, "no context retrieved", prompt
     messages = [SystemMessage(content=_GRADE_SYSTEM), HumanMessage(content=instruction)]
     try:
         data = _extract_json(_invoke(llm, messages))
@@ -165,51 +199,135 @@ def _grade(llm, question: str, context: str) -> tuple[bool, str]:
         raise
     except Exception:  # noqa: BLE001 — grading is best-effort
         log.debug("Context grading failed; treating context as sufficient.", exc_info=True)
-        return True, ""
+        return True, "", prompt
     if not isinstance(data, dict) or "sufficient" not in data:
-        return True, ""  # unparseable grade → don't loop; answer with what we have
-    return bool(data.get("sufficient")), str(data.get("missing") or "")
+        return True, "", prompt  # unparseable grade → don't loop; answer with what we have
+    return bool(data.get("sufficient")), str(data.get("missing") or ""), prompt
 
 
-def _generate(llm, persona: str, history_messages: list, question: str, context: str) -> str:
-    """Produce the final answer grounded in the gathered context."""
-    user = (
+def _generate_user(question: str, context: str) -> str:
+    """Build the user message for the final generation step."""
+    return (
         f"Context:\n{context}\n\nQuestion: {question}"
         if context.strip()
         else f"Question: {question}\n\n(No relevant context was found in the notes.)"
     )
-    messages = [SystemMessage(content=persona), *history_messages, HumanMessage(content=user)]
+
+
+def _generate(llm, persona: str, history_messages: list, question: str, context: str) -> str:
+    """Produce the final answer grounded in the gathered context."""
+    messages = [SystemMessage(content=persona), *history_messages, HumanMessage(content=_generate_user(question, context))]
     return _invoke(llm, messages)
 
 
-def answer(retriever, llm, question: str, history_messages: list, persona: str, *, max_iters: int | None = None) -> str:
-    """Run the agentic retrieval loop and return a grounded answer.
+def answer(
+    retriever, llm, question: str, history_messages: list, persona: str, *, max_iters: int | None = None
+) -> tuple[str, list[dict], list[str]]:
+    """Run the agentic retrieval loop and return ``(answer, steps, sources)``.
 
-    ``history_messages`` is the already-rendered list of prior Human/AI messages (so this
-    module doesn't need to know how the caller stores history). Reuses the session ``llm``
-    (a ChatGroq) for every step.
+    ``steps`` is a list of structured trace events (one dict per step), each with a
+    ``kind`` (rewrite | retrieve | grade | generate), a human ``title``, and the real
+    internals for that step — the queries written, the passages retrieved (source,
+    page, snippet), the grade verdict + what's missing, and the prompt sent to the
+    LLM — so the UI can show exactly what happened, not just a summary.
+
+    ``history_messages`` is the already-rendered list of prior Human/AI messages.
+    Reuses the session ``llm`` (a ChatGroq) for every step.
     """
     rounds = max_iters or config.AGENTIC_RAG_MAX_ITERS
     docs: list = []
     seen: set[str] = set()
-    queries = _rewrite(llm, question, history_messages)
+    steps: list[dict] = []
+
+    queries, rewrite_prompt = _rewrite(llm, question, history_messages)
+    q_word = "query" if len(queries) == 1 else "queries"
+    steps.append({
+        "kind": "rewrite",
+        "title": f"Rewrote your question into {len(queries)} search {q_word}",
+        "queries": queries,
+        "prompt": rewrite_prompt,
+    })
 
     for attempt in range(rounds):
-        for doc in _retrieve(retriever, queries):
+        round_docs = list(_retrieve(retriever, queries))
+        round_new: list = []
+        for doc in round_docs:
             key = (getattr(doc, "page_content", "") or "").strip()
             if key and key not in seen:
                 seen.add(key)
                 docs.append(doc)
+                round_new.append(doc)
+        n_new = len(round_new)
+        steps.append({
+            "kind": "retrieve",
+            "title": (
+                f"Retrieved {n_new} new passage{'' if n_new == 1 else 's'}"
+                + (f" ({len(docs)} total)" if len(docs) != n_new else "")
+            ),
+            "round": attempt + 1,
+            "queries": list(queries),
+            "passages": passage_view(round_new),
+        })
+
         context = _format_context(docs)
-        sufficient, missing = _grade(llm, question, context)
+        sufficient, missing, grade_prompt = _grade(llm, question, context)
         log.info(
             "Agentic RAG round %d/%d: %d queries, %d docs, sufficient=%s.",
             attempt + 1, rounds, len(queries), len(docs), sufficient,
         )
-        if sufficient or attempt == rounds - 1:
+        if sufficient:
+            steps.append({
+                "kind": "grade", "verdict": "sufficient",
+                "title": "Context verified — enough to answer",
+                "missing": "", "prompt": grade_prompt,
+            })
             break
-        queries = _rewrite(llm, question, history_messages, previous=queries, missing=missing)
+        if attempt == rounds - 1:
+            steps.append({
+                "kind": "grade", "verdict": "limit",
+                "title": "Reached the retrieval limit — answering with best context",
+                "missing": missing, "prompt": grade_prompt,
+            })
+            break
+        steps.append({
+            "kind": "grade", "verdict": "insufficient",
+            "title": "Context looks insufficient — searching again",
+            "missing": missing, "prompt": grade_prompt,
+        })
+        queries, rewrite_prompt = _rewrite(llm, question, history_messages, previous=queries, missing=missing)
+        steps.append({
+            "kind": "rewrite",
+            "title": f"Reformulated into {len(queries)} new {'query' if len(queries) == 1 else 'queries'}",
+            "queries": queries,
+            "missing": missing,
+            "prompt": rewrite_prompt,
+        })
         if not queries:
             break
 
-    return _generate(llm, persona, history_messages, question, _format_context(docs))
+    final_context = _format_context(docs)
+    steps.append({
+        "kind": "generate",
+        "title": "Writing the grounded answer",
+        "passages_used": len(docs),
+        "context_chars": len(final_context),
+        # Show the prompt skeleton without re-dumping the (already-listed) passages.
+        "prompt": _prompt_text(
+            persona,
+            f"Context:\n[{len(docs)} retrieved passage(s), {len(final_context)} chars — shown above]"
+            f"\n\nQuestion: {question}",
+        ),
+    })
+    final_answer = _generate(llm, persona, history_messages, question, final_context)
+
+    seen_names: set[str] = set()
+    sources: list[str] = []
+    for doc in docs:
+        src = (getattr(doc, "metadata", {}) or {}).get("source", "")
+        if src:
+            name = Path(src).name
+            if name not in seen_names:
+                seen_names.add(name)
+                sources.append(name)
+
+    return final_answer, steps, sources

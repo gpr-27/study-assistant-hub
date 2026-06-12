@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from backend import config, db
 from backend.auth import current_owner
-from backend.chunk_summaries import ChunkSummaryError, content_for, content_for_text
-from backend.documents import extract_pdf_text
+from backend.config import MAX_CONTENT_TOKENS
+from backend.documents import clip_to_tokens, extract_pdf_text, read_pdf
 from backend.schemas import (
     Flashcard,
     FlashcardsRequest,
@@ -43,16 +43,8 @@ def _finalize(result: dict, owner: str, *, title: str, source: str, difficulty: 
 
 @router.post("/generate", response_model=FlashcardsResponse)
 def generate_flashcards(request: FlashcardsRequest, owner: str = Depends(current_owner)) -> FlashcardsResponse:
-    """Generate flashcards from the requested subject PDF's pre-computed chunk summaries.
-
-    The summaries (covering the whole document) are built once and cached, so the full
-    PDF is never re-read here. Document/key errors bubble to global handlers (404 / 503).
-    Generation or parse failures map to 502; an empty result is treated as a 502 too.
-    """
-    try:
-        content = content_for(request.subject, request.pdf, request.model, owner)
-    except ChunkSummaryError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    """Generate flashcards from the requested subject PDF's extracted text."""
+    content = clip_to_tokens(read_pdf(request.subject, request.pdf, owner), MAX_CONTENT_TOKENS)
     try:
         result = make_flashcards(
             content=content,
@@ -105,12 +97,7 @@ async def generate_flashcards_upload(
     if not text:
         raise HTTPException(status_code=422, detail="No extractable text found in that PDF.")
     fname = file.filename or "uploaded.pdf"
-    # Chunk + summarize the upload (saved/cached by content), then generate from those
-    # summaries — same pipeline as a saved subject PDF. A re-upload reuses the cache.
-    try:
-        content = content_for_text(text, fname, model)
-    except ChunkSummaryError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    content = clip_to_tokens(text, MAX_CONTENT_TOKENS)
     try:
         result = make_flashcards(content=content, num_cards=num_cards, difficulty=difficulty, model=model)
     except FlashcardError as exc:

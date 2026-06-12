@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from backend import config, db
 from backend.auth import current_owner
-from backend.chunk_summaries import ChunkSummaryError, content_for, content_for_text
-from backend.documents import extract_pdf_text
+from backend.config import MAX_CONTENT_TOKENS
+from backend.documents import clip_to_tokens, extract_pdf_text, read_pdf
 from backend.schemas import MindmapNode, MindmapRequest, MindmapResponse
 from backend.services import mindmap as mindmap_service
 
@@ -42,10 +42,7 @@ def generate(request: MindmapRequest, owner: str = Depends(current_owner)) -> Mi
     if request.mode == "subject":
         if not request.subject or not request.pdf:
             raise HTTPException(status_code=400, detail="A subject and one PDF are required.")
-        try:
-            content = content_for(request.subject, request.pdf, request.model, owner)
-        except ChunkSummaryError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        content = clip_to_tokens(read_pdf(request.subject, request.pdf, owner), MAX_CONTENT_TOKENS)
         return _build(owner, title=f"Mind map · {request.subject} / {request.pdf}",
                       source=f"{request.subject} / {request.pdf}", content=content, model=request.model)
     if request.mode == "topic":
@@ -70,9 +67,5 @@ async def upload(
     if not text:
         raise HTTPException(status_code=422, detail="No extractable text found in that PDF.")
     fname = file.filename or "uploaded.pdf"
-    # Chunk + summarize the upload (saved/cached by content), then build from those summaries.
-    try:
-        content = content_for_text(text, fname, model)
-    except ChunkSummaryError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    content = clip_to_tokens(text, MAX_CONTENT_TOKENS)
     return _build(owner, title=f"Mind map · {fname}", source=fname, content=content, model=model)

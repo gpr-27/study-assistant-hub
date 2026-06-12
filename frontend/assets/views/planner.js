@@ -42,6 +42,10 @@
       root.append(el(`
         <div class="layout-aside">
           <aside class="panel stack" id="pl-controls">
+            <div class="between" style="align-items:center">
+              <span style="font-family:var(--font-display);font-weight:700;font-size:1.05rem;letter-spacing:-.01em;color:hsl(var(--ink))">Planner</span>
+              <button id="pl-hist" class="btn" type="button" style="padding:.4rem .8rem;font-size:.85rem">≡ History</button>
+            </div>
             <div class="field" style="margin:0">
               <span class="label">Source</span>
               <div class="seg" id="pl-src" role="tablist" aria-label="Plan source">
@@ -86,7 +90,8 @@
         wrap.append(planBox);
         showResults(wrap);
       }
-      root.querySelector("#pl-controls").append(window.ui.historyPanel("plans", { title: "Saved plans", onOpen: openSavedPlan }));
+      root.querySelector("#pl-hist").addEventListener("click", (e) =>
+        window.ui.openHistoryDrawer("plans", { title: "Saved plans", anchor: e.currentTarget, onOpen: openSavedPlan }));
 
       root.querySelector("#pl-modelctl").append(window.ui.modelSelect());
 

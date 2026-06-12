@@ -24,3 +24,8 @@ render-upload.env
 
 # Claude Code local tooling (personal settings + installed skills)
 .claude/
+
+# User-uploaded subjects (per-user private data; in production these live in MongoDB
+# and are re-hydrated at startup). Only bundled demo subjects are committed.
+documents/user__*/
+faiss_index/user__*/

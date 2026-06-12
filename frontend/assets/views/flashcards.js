@@ -90,7 +90,10 @@
     const genBtn = el(`<button class="btn-accent btn-lg btn-block">Generate flashcards</button>`);
 
     aside.append(
-      el(`<div class="section-head" style="margin:0"><h3>Setup</h3><span>build a deck</span></div>`),
+      el(`<div class="between" style="align-items:center;margin-bottom:.1rem">
+        <div class="section-head" style="margin:0"><h3>Setup</h3><span>build a deck</span></div>
+        <button id="fc-hist" class="btn" type="button" style="padding:.4rem .8rem;font-size:.85rem">≡ History</button>
+      </div>`),
       buildField("Source", srcSeg),
       srcCtl,
       buildField("Difficulty", diffSeg),
@@ -104,7 +107,8 @@
       state.knowledge = {}; state.mode = "learn"; state.index = 0; state.flipped = false;
       renderDeck(main);
     }
-    aside.append(window.ui.historyPanel("flashcards", { title: "Saved decks", onOpen: openSavedDeck }));
+    aside.querySelector("#fc-hist").addEventListener("click", (e) =>
+      window.ui.openHistoryDrawer("flashcards", { title: "Saved decks", anchor: e.currentTarget, onOpen: openSavedDeck }));
 
     // --- source builders (closures: need srcCtl / genBtn / main) ---
     async function buildSubjectMode() {

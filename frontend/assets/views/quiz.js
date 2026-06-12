@@ -21,9 +21,12 @@
 
     const panel = el(`
       <div class="panel stack" style="max-width:640px;margin:0 auto">
-        <div class="stack-sm">
-          <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em">Build a quiz</h3>
-          <p class="muted">Pick a source, choose how hard and how many — Groq writes the questions.</p>
+        <div class="between" style="align-items:flex-start">
+          <div class="stack-sm" style="flex:1">
+            <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em">Build a quiz</h3>
+            <p class="muted">Pick a source, choose how hard and how many — Groq writes the questions.</p>
+          </div>
+          <button id="q-hist" class="btn" type="button" style="flex:none;padding:.4rem .8rem;font-size:.85rem;gap:.35rem">≡ History</button>
         </div>
 
         <div class="field">
@@ -55,10 +58,12 @@
     `);
     root.append(panel);
 
-    root.append(window.ui.historyPanel("quizzes", {
-      title: "Saved quizzes",
-      onOpen: (saved) => renderRunner((saved && saved.questions) || []),
-    }));
+    panel.querySelector("#q-hist").addEventListener("click", (e) =>
+      window.ui.openHistoryDrawer("quizzes", {
+        title: "Saved quizzes",
+        anchor: e.currentTarget,
+        onOpen: (saved) => renderRunner((saved && saved.questions) || []),
+      }));
 
     const srcSeg = panel.querySelector("#q-src");
     const srcCtl = panel.querySelector("#q-srcctl");

@@ -8,6 +8,14 @@ import os
 import sys
 from pathlib import Path
 
+# FAISS and the embedding runtime (onnxruntime/torch) each ship their own copy of
+# libomp. On macOS, loading both into one process aborts with "OMP: Error #15:
+# Initializing libomp.dylib, but found libomp.dylib already initialized" — which
+# crashed the server the moment a subject's embeddings were loaded for chat. Allow
+# the duplicate runtime (the standard, supported-enough workaround). Set before any
+# heavy import and before the venv re-exec so every child process inherits it.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 ROOT = Path(__file__).resolve().parent
 VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
 

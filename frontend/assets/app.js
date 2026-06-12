@@ -401,9 +401,55 @@
     return panel;
   }
 
+  function openHistoryDrawer(kind, opts) {
+    opts = opts || {};
+    const anchor = opts.anchor || null;
+
+    const existing = document.getElementById("histPopover");
+    if (existing) { existing.remove(); document.getElementById("histPopoverBg")?.remove(); return; }
+
+    const backdrop = el(`<div id="histPopoverBg" class="hist-popover-backdrop"></div>`);
+    const popover = el(`<div id="histPopover" class="hist-popover stack-sm"></div>`);
+
+    const close = () => {
+      backdrop.classList.remove("hist-popover-backdrop--open");
+      popover.remove();
+      setTimeout(() => backdrop.remove(), 200);
+    };
+    backdrop.addEventListener("mousedown", close);
+
+    const head = el(`<div class="hist-popover-head">
+      <span class="hist-popover-title">${esc(opts.title || "History")}</span>
+      <button class="btn-ghost" type="button" title="Close" style="padding:.25rem .5rem;font-size:1rem">✕</button>
+    </div>`);
+    head.querySelector("button").addEventListener("click", close);
+
+    popover.append(head, historyPanel(kind, {
+      title: "",
+      onOpen: (item) => { close(); opts.onOpen && opts.onOpen(item); },
+    }));
+
+    document.body.append(backdrop, popover);
+    requestAnimationFrame(() => backdrop.classList.add("hist-popover-backdrop--open"));
+
+    // Position below and right-aligned with the anchor button (clamped to viewport)
+    if (anchor) {
+      const rect = anchor.getBoundingClientRect();
+      const right = Math.max(12, window.innerWidth - rect.right);
+      const top = rect.bottom + 8;
+      // Cap at ~70% of the viewport so the list scrolls instead of running long,
+      // but never overflow the space actually available below the button.
+      const fit = Math.max(200, window.innerHeight - top - 16);
+      const maxH = Math.min(fit, Math.round(window.innerHeight * 0.7));
+      popover.style.cssText = `position:fixed;top:${top}px;right:${right}px;width:320px;max-height:${maxH}px;z-index:200`;
+    } else {
+      popover.style.cssText = `position:fixed;top:80px;right:24px;width:320px;max-height:70vh;z-index:200`;
+    }
+  }
+
   window.ui = {
     el, clear, esc, spinner, empty, toast, md: renderMarkdown, copy: copyToClipboard,
-    modelSelect, selectedModel, historyPanel,
+    modelSelect, selectedModel, historyPanel, openHistoryDrawer,
   };
 
   /* ---------------- view registry ---------------- */

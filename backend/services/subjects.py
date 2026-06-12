@@ -7,10 +7,9 @@ index is (re)built and persisted to disk. Existing subjects are left untouched â
 only the affected subject is embedded.
 """
 import logging
-import threading
 from dataclasses import dataclass
 
-from backend import chunk_summaries, db, vector_store
+from backend import db, vector_store
 from backend.documents import DocumentError, restore_uploaded_pdf, save_pdf
 
 log = logging.getLogger(__name__)
@@ -59,19 +58,7 @@ def add_subject(name: str, files: list[tuple[str, bytes]], owner: str | None = N
             "If these are scanned documents, they need a text layer (OCR)."
         ) from exc
 
-    threading.Thread(
-        target=_safe_build_summaries, args=(name, None, owner), name="summary-build", daemon=True
-    ).start()
-
     return AddSubjectResult(subject=name, saved_pdfs=saved, chunk_count=chunk_count)
-
-
-def _safe_build_summaries(subject: str, model: str | None, owner: str | None = None) -> None:
-    """Background helper: build a subject's chunk summaries, swallowing any error."""
-    try:
-        chunk_summaries.build_for_subject(subject, model, owner)
-    except Exception:  # noqa: BLE001 â€” pre-build is best-effort; lazy build covers misses
-        log.warning("Background chunk-summary build failed for subject '%s'.", subject, exc_info=True)
 
 
 def restore_uploaded_pdfs() -> int:

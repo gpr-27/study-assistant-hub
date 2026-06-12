@@ -22,8 +22,8 @@ from backend.config import (
     has_groq_key,
 )
 from backend import db
-from backend.chunk_summaries import ChunkSummaryError
 from backend.documents import DocumentError
+from backend.gemini_embeddings import GeminiEmbeddingError, GeminiQuotaError
 from backend.routers import chat, flashcards, guest, history, mindmap, planner, quiz, subjects
 from backend.vector_store import warm_embeddings
 
@@ -91,13 +91,6 @@ async def _on_document_error(_request, exc: DocumentError) -> JSONResponse:
     return JSONResponse(status_code=404, content={"detail": str(exc)})
 
 
-@app.exception_handler(ChunkSummaryError)
-async def _on_chunk_summary_error(_request, exc: ChunkSummaryError) -> JSONResponse:
-    # Raised when a PDF's per-chunk summaries can't be built/parsed (e.g. unreadable PDF
-    # or malformed model output). Surface a clear 502 instead of a bare 500.
-    log.info("Chunk summary error: %s", exc)
-    return JSONResponse(status_code=502, content={"detail": str(exc)})
-
 
 @app.exception_handler(MissingApiKeyError)
 async def _on_missing_key(_request, exc: MissingApiKeyError) -> JSONResponse:
@@ -122,6 +115,18 @@ async def _on_rate_limit(_request, _exc: RateLimitError) -> JSONResponse:
             "https://console.groq.com/settings/billing."
         )},
     )
+
+
+@app.exception_handler(GeminiEmbeddingError)
+async def _on_embedding_error(_request, exc: GeminiEmbeddingError) -> JSONResponse:
+    # Embedding-backend failures (Gemini): quota exhaustion → 429 (retry-able),
+    # anything else → 502. Surfaces a clear message instead of a stuck spinner.
+    detail = str(exc)
+    if isinstance(exc, GeminiQuotaError):
+        log.warning("Gemini embedding quota reached: %s", detail)
+        return JSONResponse(status_code=429, content={"detail": detail})
+    log.error("Embedding backend error: %s", detail)
+    return JSONResponse(status_code=502, content={"detail": f"The embedding service failed: {detail}"})
 
 
 @app.exception_handler(APIError)

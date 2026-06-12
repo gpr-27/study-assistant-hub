@@ -30,11 +30,12 @@ except ImportError:  # pragma: no cover — non-POSIX (e.g. Windows): no cross-p
     fcntl = None
 
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_community.vectorstores import FAISS
+from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from backend.config import EMBEDDING_MODEL, FAISS_INDEX_DIR
+from backend import config
+from backend.config import EMBEDDING_DIM, EMBEDDING_MODEL, EMBEDDING_PROVIDER, FAISS_INDEX_DIR
 from backend.documents import _USER_PREFIX, list_pdf_paths, subject_internal_key
 
 log = logging.getLogger(__name__)
@@ -55,8 +56,8 @@ _cache: OrderedDict[str, FAISS] = OrderedDict()
 # build the same subject twice at once.
 _build_lock = threading.Lock()
 
-# Singleton embedding model — one load per process, shared across all subjects.
-_embeddings_instance: FastEmbedEmbeddings | None = None
+# Singleton embedding backend — built once per process, shared across all subjects.
+_embeddings_instance: Embeddings | None = None
 _embeddings_lock = threading.Lock()
 
 
@@ -64,21 +65,42 @@ class VectorStoreError(Exception):
     """Raised when an index cannot be built (e.g. no readable text in the PDFs)."""
 
 
-def _embeddings() -> FastEmbedEmbeddings:
-    """Return the process-wide embedding model, loading it once on first call."""
+def _build_embeddings() -> Embeddings:
+    """Construct the embedding backend selected by EMBEDDING_PROVIDER.
+
+    Imports are deferred so that the unused backend's heavy dependency (fastembed/
+    onnxruntime for local; nothing extra for gemini) is never loaded.
+    """
+    if EMBEDDING_PROVIDER == "gemini":
+        from backend.gemini_embeddings import GeminiEmbeddings
+
+        return GeminiEmbeddings(
+            model=EMBEDDING_MODEL,
+            api_key=config.GEMINI_API_KEY,
+            output_dimensionality=EMBEDDING_DIM,
+        )
+    # Legacy local fallback (EMBEDDING_PROVIDER=local): keyless on-device model.
+    from langchain_community.embeddings import FastEmbedEmbeddings
+
+    return FastEmbedEmbeddings(model_name=EMBEDDING_MODEL)
+
+
+def _embeddings() -> Embeddings:
+    """Return the process-wide embedding backend, building it once on first call."""
     global _embeddings_instance
     if _embeddings_instance is not None:
         return _embeddings_instance
     with _embeddings_lock:
         if _embeddings_instance is None:
-            _embeddings_instance = FastEmbedEmbeddings(model_name=EMBEDDING_MODEL)
+            _embeddings_instance = _build_embeddings()
     return _embeddings_instance
 
 
 def warm_embeddings() -> None:
-    """Pre-load the local embedding model (downloads ~once) so the first build
-    isn't a cold wait. Safe to call in a background thread; errors are swallowed
-    because this is best-effort warmup."""
+    """Warm the embedding backend so the first real request isn't a cold wait.
+
+    For gemini this validates the API key + connectivity with one tiny call; for
+    local it triggers the one-time model download. Best-effort: errors swallowed."""
     try:
         _embeddings().embed_query("warm up")
     except Exception:
@@ -150,7 +172,9 @@ def _fingerprint(subject: str) -> dict:
             "sha256": _file_sha256(path),
         })
     return {
+        "provider": EMBEDDING_PROVIDER,
         "model": EMBEDDING_MODEL,
+        "dim": EMBEDDING_DIM,
         "chunk_size": _CHUNK_SIZE,
         "chunk_overlap": _CHUNK_OVERLAP,
         "files": files,

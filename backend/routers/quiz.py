@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from backend import config, db
 from backend.auth import current_owner
-from backend.chunk_summaries import ChunkSummaryError, content_for, content_for_text
-from backend.documents import extract_pdf_text
+from backend.config import MAX_CONTENT_TOKENS
+from backend.documents import clip_to_tokens, extract_pdf_text, read_pdf
 from backend.schemas import QuizQuestion, QuizRequest, QuizResponse, QuizTopicRequest
 from backend.services.quiz import QuizError, make_quiz, make_quiz_from_topic
 
@@ -31,16 +31,8 @@ def _finalize(data: dict, owner: str, *, title: str, source: str, difficulty: st
 
 @router.post("/generate", response_model=QuizResponse)
 def generate_quiz(request: QuizRequest, owner: str = Depends(current_owner)) -> QuizResponse:
-    """Build the quiz from the chosen subject PDF's pre-computed chunk summaries.
-
-    The summaries (which cover the whole document) are built once and cached, so we
-    never re-read the full PDF here. DocumentError (unknown subject/PDF) and
-    MissingApiKeyError (no Groq key) bubble up to the global handlers (404 / 503).
-    """
-    try:
-        content = content_for(request.subject, request.pdf, request.model, owner)
-    except ChunkSummaryError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    """Build the quiz from the chosen subject PDF's extracted text."""
+    content = clip_to_tokens(read_pdf(request.subject, request.pdf, owner), MAX_CONTENT_TOKENS)
     try:
         data = make_quiz(
             content=content,
@@ -93,12 +85,7 @@ async def generate_quiz_upload(
     if not text:
         raise HTTPException(status_code=422, detail="No extractable text found in that PDF.")
     fname = file.filename or "uploaded.pdf"
-    # Chunk + summarize the upload (saved/cached by content), then generate from those
-    # summaries — same pipeline as a saved subject PDF. A re-upload reuses the cache.
-    try:
-        content = content_for_text(text, fname, model)
-    except ChunkSummaryError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    content = clip_to_tokens(text, MAX_CONTENT_TOKENS)
     try:
         data = make_quiz(content=content, num_questions=num_questions, difficulty=difficulty, model=model)
     except QuizError as exc:

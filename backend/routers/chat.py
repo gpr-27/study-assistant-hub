@@ -76,8 +76,12 @@ def resume_session(request: ChatResumeRequest, owner: str = Depends(current_owne
 def send_message(request: ChatMessageRequest) -> ChatMessageResponse:
     """Send a message within an existing session and return the assistant reply."""
     try:
-        answer = chat_service.ask(request.session_id, request.message)
+        result = chat_service.ask(request.session_id, request.message)
     except chat_service.ChatSessionError as exc:
         raise HTTPException(status_code=404, detail="Session expired, start a new chat.") from exc
 
-    return ChatMessageResponse(answer=answer)
+    return ChatMessageResponse(
+        answer=result["answer"],
+        steps=result.get("steps", []),
+        sources=result.get("sources", []),
+    )

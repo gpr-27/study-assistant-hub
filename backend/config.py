@@ -219,6 +219,9 @@ API_BASE_URL: str | None = _get("API_BASE_URL")
 # Provider / secret
 LLM_PROVIDER: str | None = _get("LLM_PROVIDER")
 GROQ_API_KEY: str | None = _get("GROQ_API_KEY")
+# Embeddings: hosted Google Gemini (default) instead of a local fastembed model.
+# Set EMBEDDING_PROVIDER=local to fall back to the keyless on-device model.
+GEMINI_API_KEY: str | None = _get("GEMINI_API_KEY")
 
 # Auth (optional, Clerk). CLERK_PUBLISHABLE_KEY is a PUBLIC key (safe to send to the
 # browser — that is its purpose); its presence enables the sign-in gate, its absence
@@ -259,8 +262,20 @@ TOOL_MODEL_OVERRIDES: dict[str, str | None] = {
     tool: _get(env_name) for tool, env_name in TOOL_MODEL_ENV.items()
 }
 
-# Local embedding model (fastembed) used for FAISS retrieval — no API key needed.
+# Embedding backend for FAISS retrieval.
+#   EMBEDDING_PROVIDER=gemini  → hosted Google Gemini API (default; needs GEMINI_API_KEY).
+#                                No model loaded in-process: frees ~150–250 MB of RAM and
+#                                avoids the local onnxruntime/faiss libomp clash.
+#   EMBEDDING_PROVIDER=local   → keyless on-device fastembed model (legacy fallback).
+# EMBEDDING_MODEL is the model id for the active provider (e.g. "gemini-embedding-2"
+# for gemini, or "BAAI/bge-small-en-v1.5" for local).
+EMBEDDING_PROVIDER: str = (_get("EMBEDDING_PROVIDER") or "gemini").lower()
 EMBEDDING_MODEL: str | None = _get("EMBEDDING_MODEL")
+# Optional: request a smaller embedding dimension (gemini supports Matryoshka
+# truncation; default keeps the model's full, already-normalized output).
+EMBEDDING_DIM: int | None = _get_int("EMBEDDING_DIM")[0]
+
+_SUPPORTED_EMBEDDING_PROVIDERS = ("gemini", "local")
 
 # Generation tuning — not environment-specific (same value dev & prod). Documented
 # default so the app stays usable if the knob is omitted; override in .env to tune.
@@ -296,6 +311,11 @@ def require_groq_key() -> None:
         raise MissingApiKeyError(
             "GROQ_API_KEY is not set. Copy .env.example to .env and add your Groq key."
         )
+
+
+def has_gemini_key() -> bool:
+    """Return True if a Gemini API key is configured (for hosted embeddings)."""
+    return bool(GEMINI_API_KEY)
 
 
 def model_for(tool: str, requested: str | None = None) -> str | None:
@@ -405,8 +425,15 @@ def validate_config() -> None:
                 f"{TOOL_MODEL_ENV[tool]}={mid!r} is not listed in AVAILABLE_MODELS"
             )
 
+    if EMBEDDING_PROVIDER not in _SUPPORTED_EMBEDDING_PROVIDERS:
+        errors.append(
+            f"EMBEDDING_PROVIDER={EMBEDDING_PROVIDER!r} — supported: "
+            + ", ".join(_SUPPORTED_EMBEDDING_PROVIDERS)
+        )
     if not EMBEDDING_MODEL:
-        errors.append("EMBEDDING_MODEL (local fastembed model id)")
+        errors.append("EMBEDDING_MODEL (embedding model id, e.g. gemini-embedding-2)")
+    if EMBEDDING_PROVIDER == "gemini" and not GEMINI_API_KEY:
+        errors.append("GEMINI_API_KEY (required when EMBEDDING_PROVIDER=gemini; get one at https://aistudio.google.com/apikey)")
 
     # Auth is optional, but a misformatted publishable key is almost always a typo.
     if CLERK_PUBLISHABLE_KEY and not CLERK_PUBLISHABLE_KEY.startswith("pk_"):
@@ -460,7 +487,9 @@ def startup_diagnostics() -> list[str]:
         f" LLM_PROVIDER     {LLM_PROVIDER}",
         f" DEFAULT_MODEL    {DEFAULT_MODEL}",
         f" AVAILABLE_MODELS {len(AVAILABLE_MODELS)} ({models})",
-        f" EMBEDDING_MODEL  {EMBEDDING_MODEL}",
+        f" EMBEDDINGS       {EMBEDDING_PROVIDER} · {EMBEDDING_MODEL}"
+        + (f" ({EMBEDDING_DIM}d)" if EMBEDDING_DIM else "")
+        + (" · key ✓" if (EMBEDDING_PROVIDER == 'gemini' and GEMINI_API_KEY) else ""),
         f" CHAT RETRIEVAL   {('agentic (rewrite→retrieve→grade→correct, ≤' + str(AGENTIC_RAG_MAX_ITERS) + ' rounds)') if AGENTIC_RAG else 'classic single-shot RAG'}",
         f" GROQ_API_KEY     {'✓ loaded' if has_groq_key() else '✗ MISSING'}",
         f" CORS_ORIGINS     {', '.join(CORS_ORIGINS) if CORS_ORIGINS else '(none — same-origin)'}",

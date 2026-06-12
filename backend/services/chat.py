@@ -15,7 +15,7 @@ module never requires a Groq key and stays fast.
 """
 import tempfile
 import threading
-from pathlib import Path
+from pathlib import Path as _Path
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -24,6 +24,7 @@ from langchain_groq import ChatGroq
 from backend import agentic_rag, config, db, vector_store
 from backend.auth import LOCAL_OWNER
 from backend.config import model_for, require_groq_key
+from backend.documents import list_pdf_names
 
 # In-memory session store. Each value holds: mode, retriever (or None), llm,
 # history (list of (question, answer) tuples), label, topic (topic mode only),
@@ -38,13 +39,25 @@ _HISTORY_TURNS: int = 6
 # oldest sessions are evicted first; an evicted session simply needs restarting.
 _MAX_SESSIONS: int = 200
 
-_SUBJECT_PERSONA: str = (
+_SUBJECT_PERSONA_BASE: str = (
     "You are a skilled, thoughtful teaching assistant. Help the student understand "
     "the course material by guiding them through ideas. Answer using ONLY the provided "
     "context; if the answer is not supported by the context, clearly say you don't know. "
     "Keep responses clear, concise, and focused. Break complex concepts into simpler "
     "parts, use analogies or examples when helpful, and encourage critical thinking."
 )
+
+
+def _subject_persona(subject: str, owner: str | None = None) -> str:
+    """Build the system persona for a subject session, including the PDF list."""
+    names = list_pdf_names(subject, owner)
+    if not names:
+        return _SUBJECT_PERSONA_BASE
+    pdf_list = "\n".join(f"  - {n}" for n in names)
+    return (
+        f"{_SUBJECT_PERSONA_BASE}\n\n"
+        f"This subject contains {len(names)} PDF(s):\n{pdf_list}"
+    )
 _GENERIC_PERSONA: str = (
     "You are a skilled, thoughtful teaching assistant. Help the student learn through "
     "clear explanations and examples. Keep responses clear, concise, and focused."
@@ -90,6 +103,7 @@ def start_subject_session(subject: str, model: str | None = None, owner: str = L
         "subject": subject,
         "owner": owner,
         "chat_id": chat_id,
+        "persona": _subject_persona(subject, owner),
     })
     return session_id, label, chat_id
 
@@ -119,11 +133,11 @@ def start_pdf_session(file_bytes: bytes, filename: str, model: str | None = None
     try:
         tmp.write(file_bytes)
         tmp.close()
-        store = vector_store.build_index_from_paths([Path(tmp.name)])
+        store = vector_store.build_index_from_paths([_Path(tmp.name)])
     except vector_store.VectorStoreError as exc:
         raise ChatSessionError(str(exc)) from exc
     finally:
-        Path(tmp.name).unlink(missing_ok=True)
+        _Path(tmp.name).unlink(missing_ok=True)
 
     retriever = store.as_retriever(search_kwargs={"k": _RETRIEVE_K})
     label = f"PDF · {filename}"
@@ -182,8 +196,12 @@ def _history_messages(history: list[tuple[str, str]]) -> list:
     return messages
 
 
-def ask(session_id: str, message: str) -> str:
-    """Answer a question within an existing session and record the exchange."""
+def ask(session_id: str, message: str) -> dict:
+    """Answer a question within an existing session and record the exchange.
+
+    Returns a dict with ``answer``, ``steps`` (agentic trace), and ``sources``
+    (PDF filenames referenced in retrieved passages).
+    """
     session = _sessions.get(session_id)
     if session is None:
         raise ChatSessionError(f"Unknown or expired chat session: {session_id}")
@@ -193,27 +211,52 @@ def ask(session_id: str, message: str) -> str:
     history: list[tuple[str, str]] = session["history"]
     retriever = session["retriever"]
     first_turn = not history
+    steps: list[str] = []
+    sources: list[str] = []
+
+    persona = session.get("persona") or _SUBJECT_PERSONA_BASE
 
     if retriever is not None and config.AGENTIC_RAG:
-        # Agentic RAG: an LLM-driven rewrite→retrieve→grade→correct loop over the
-        # session's index, instead of a single top-k retrieval.
-        answer = str(
-            agentic_rag.answer(retriever, session["llm"], message, _history_messages(history), _SUBJECT_PERSONA)
+        # Agentic RAG: an LLM-driven rewrite→retrieve→grade→correct loop.
+        answer, steps, sources = agentic_rag.answer(
+            retriever, session["llm"], message, _history_messages(history), persona
         )
+        answer = str(answer)
     elif retriever is not None:
         # Classic single-shot RAG (AGENTIC_RAG disabled).
         docs = retriever.invoke(message)
         context = "\n\n".join(doc.page_content for doc in docs)
-        messages = [SystemMessage(content=_SUBJECT_PERSONA)]
-        messages.extend(_history_messages(history))
-        messages.append(HumanMessage(content=f"Context:\n{context}\n\nQuestion: {message}"))
-        answer = str(session["llm"].invoke(messages).content)
+        steps = [
+            {
+                "kind": "retrieve",
+                "title": f"Retrieved {len(docs)} passage{'s' if len(docs) != 1 else ''}",
+                "queries": [message],
+                "passages": agentic_rag.passage_view(docs),
+            },
+            {"kind": "generate", "title": "Writing the answer", "passages_used": len(docs)},
+        ]
+        seen_names: set[str] = set()
+        for doc in docs:
+            src = (getattr(doc, "metadata", {}) or {}).get("source", "")
+            if src:
+                name = _Path(src).name
+                if name not in seen_names:
+                    seen_names.add(name)
+                    sources.append(name)
+        msgs = [SystemMessage(content=persona)]
+        msgs.extend(_history_messages(history))
+        msgs.append(HumanMessage(content=f"Context:\n{context}\n\nQuestion: {message}"))
+        answer = str(session["llm"].invoke(msgs).content)
     else:
-        persona = _topic_persona(session["topic"]) if session.get("topic") else _GENERIC_PERSONA
-        messages = [SystemMessage(content=persona)]
-        messages.extend(_history_messages(history))
-        messages.append(HumanMessage(content=message))
-        answer = str(session["llm"].invoke(messages).content)
+        _persona = _topic_persona(session["topic"]) if session.get("topic") else _GENERIC_PERSONA
+        steps = [{
+            "kind": "generate",
+            "title": "Answered from topic knowledge (no document retrieval)",
+        }]
+        msgs = [SystemMessage(content=_persona)]
+        msgs.extend(_history_messages(history))
+        msgs.append(HumanMessage(content=message))
+        answer = str(session["llm"].invoke(msgs).content)
 
     history.append((message, answer))
 
@@ -229,7 +272,7 @@ def ask(session_id: str, message: str) -> str:
             threading.Thread(
                 target=_autoname_chat, args=(owner, chat_id, message, answer, session["llm"]), daemon=True
             ).start()
-    return answer
+    return {"answer": answer, "steps": steps, "sources": sources}
 
 
 def resume_session(owner: str, chat_id: str) -> tuple[str, str, str, str, list[dict]]:
@@ -274,6 +317,7 @@ def resume_session(owner: str, chat_id: str) -> tuple[str, str, str, str, list[d
         "subject": subject,
         "owner": owner,
         "chat_id": chat_id,
+        "persona": _subject_persona(subject, owner) if mode == "subject" and subject else None,
     })
     messages = [{"role": m.get("role"), "content": m.get("content", "")} for m in stored]
     return session_id, label, mode, chat_id, messages

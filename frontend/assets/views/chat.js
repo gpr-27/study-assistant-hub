@@ -1,111 +1,296 @@
 /* ============================================================
-   Chat Assistant (RAG) view.
-   Pick a source — Subject / Topic / Upload PDF — start a session,
-   then chat. A sidebar lists your saved chats (search + delete +
-   resume) and a "New chat" button. Answers render as rich, safe
-   markdown. Composer is locked until a session exists.
+   Chat Assistant — redesigned: single-panel layout, floating
+   history drawer, source attribution, agentic trace display.
    ============================================================ */
 (() => {
   "use strict";
   const { el, esc, clear, toast, md, spinner, copy } = window.ui;
 
   let session = null;       // { id, label }
-  let source = "subject";   // "subject" | "topic" | "upload"
-  let pdfFile = null;       // File chosen for upload
+  let source  = "subject";  // "subject" | "topic" | "upload"
+  let pdfFile = null;
 
-  function buildSourceControl(host) {
+  // ── History popover (shared solid drawer, same as the other tools) ────────
+  function openHistoryDrawer(anchor) {
+    window.ui.openHistoryDrawer("chats", {
+      title: "Recent chats",
+      anchor,
+      onOpen: (saved) => resumeChat(saved),
+    });
+  }
+
+  // ── Source control (inline compact) ───────────────────────
+  function buildSourceRow(host) {
     clear(host);
+    host.dataset.src = source;
+
     if (source === "subject") {
-      const field = el(`
-        <div class="field">
-          <label class="label" for="chatSubject">Subject</label>
-          <select id="chatSubject" class="select"><option value="">Loading subjects…</option></select>
-          <div class="hint">Chat across every PDF filed under this subject.</div>
-        </div>`);
-      host.append(field);
-      const sel = field.querySelector("#chatSubject");
+      host.append(el(`
+        <select id="chatSubject" class="select" style="max-width:220px">
+          <option value="">Loading…</option>
+        </select>`));
+      const sel = host.querySelector("#chatSubject");
       window.api.get("/subjects").then((d) => {
         const subjects = d.subjects || [];
         clear(sel);
-        if (!subjects.length) {
-          sel.append(el(`<option value="">No subjects found</option>`));
-          return;
-        }
+        if (!subjects.length) { sel.append(el(`<option value="">No subjects</option>`)); return; }
         subjects.forEach((s) => sel.append(el(`<option value="${esc(s)}">${esc(s)}</option>`)));
         sel.value = subjects[0];
-      }).catch((e) => {
-        clear(sel);
-        sel.append(el(`<option value="">Couldn’t load subjects</option>`));
-        toast(e.message, "error");
+      }).catch(() => {
+        clear(sel); sel.append(el(`<option value="">Error loading</option>`));
       });
     } else if (source === "topic") {
       host.append(el(`
-        <div class="field">
-          <label class="label" for="chatTopic">Topic</label>
-          <input id="chatTopic" class="input" type="text" placeholder="e.g. Binary search trees" autocomplete="off" />
-          <div class="hint">Learn a topic with a specialised tutor — no documents needed.</div>
-        </div>`));
+        <input id="chatTopic" class="input" type="text" placeholder="e.g. Binary search trees"
+          autocomplete="off" style="max-width:260px" />`));
     } else {
-      const field = el(`
-        <div class="field">
-          <label class="label">PDF</label>
-          <div class="row row-wrap">
-            <label class="btn" for="chatPdf" style="cursor:pointer;">Choose PDF…</label>
-            <span class="muted" id="chatPdfName">No file selected</span>
-          </div>
-          <input id="chatPdf" type="file" accept="application/pdf" hidden />
-          <div class="hint">Upload a PDF and chat about its contents.</div>
-        </div>`);
-      host.append(field);
-      const input = field.querySelector("#chatPdf");
-      const nameSlot = field.querySelector("#chatPdfName");
-      input.addEventListener("change", () => {
-        pdfFile = input.files && input.files[0] ? input.files[0] : null;
-        nameSlot.textContent = pdfFile ? pdfFile.name : "No file selected";
+      const wrap = el(`<div class="row"></div>`);
+      const lbl = el(`<label class="btn" for="chatPdfUp" style="cursor:pointer;padding:.55rem .9rem">Choose PDF…</label>`);
+      const name = el(`<span id="chatPdfName" class="muted" style="font-size:.85rem">No file chosen</span>`);
+      const inp = el(`<input id="chatPdfUp" type="file" accept="application/pdf" hidden />`);
+      inp.addEventListener("change", () => {
+        pdfFile = inp.files[0] || null;
+        name.textContent = pdfFile ? pdfFile.name : "No file chosen";
       });
+      wrap.append(lbl, name, inp);
+      host.append(wrap);
     }
   }
 
-  function setReady(thread, text) {
-    clear(thread);
-    thread.append(el(`<div class="empty"><div class="big">✦</div><div>${esc(text)}</div></div>`));
-  }
-
-  // Render one stored/streamed message into the thread (user = plain, assistant = markdown + copy).
-  function appendMessage(thread, role, content) {
+  // ── Render one message (user or AI) ───────────────────────
+  function appendMessage(thread, role, content, { steps = [], sources = [] } = {}) {
     if (role === "user") {
       const me = el(`<div class="msg me"></div>`);
       me.textContent = content;
       thread.append(me);
-    } else {
-      const ai = el(`<div class="msg ai"></div>`);
-      ai.append(md(content));
-      const cp = el(`<button class="msg-copy" type="button">Copy</button>`);
-      cp.addEventListener("click", () => copy(content, cp));
-      ai.append(cp);
-      thread.append(ai);
+      return;
+    }
+
+    const ai = el(`<div class="msg ai"></div>`);
+    ai.append(md(content));
+
+    const footer = el(`<div class="msg-footer"></div>`);
+
+    // Copy button
+    const cp = el(`<button class="msg-copy" type="button">Copy</button>`);
+    cp.addEventListener("click", () => copy(content, cp));
+    footer.append(cp);
+
+    // Source chips
+    if (sources.length) {
+      const srcs = el(`<div class="msg-sources"></div>`);
+      sources.forEach((s) => srcs.append(el(`<span class="msg-source-chip">${esc(s)}</span>`)));
+      footer.append(srcs);
+    }
+
+    // Agentic trace — structured, expandable timeline of what actually happened
+    if (steps.length) footer.append(buildTrace(steps));
+
+    ai.append(footer);
+    thread.append(ai);
+  }
+
+  // ── Agentic trace renderer ────────────────────────────────
+  function stepIcon(step) {
+    if (step.kind === "rewrite")  return "✎";
+    if (step.kind === "retrieve") return "⌕";
+    if (step.kind === "grade")    return step.verdict === "sufficient" ? "✓" : step.verdict === "limit" ? "◐" : "⚠";
+    return "✦"; // generate
+  }
+
+  function traceNote(text) {
+    const n = el(`<div class="trace-note"></div>`);
+    n.textContent = text;
+    return n;
+  }
+
+  function promptDisclosure(text) {
+    if (!text) return null;
+    const wrap = el(`<div class="trace-prompt-wrap"></div>`);
+    const btn = el(`<button class="trace-prompt-btn" type="button">⌗ View prompt</button>`);
+    const pre = el(`<pre class="trace-prompt" hidden></pre>`);
+    pre.textContent = text;
+    btn.addEventListener("click", () => {
+      pre.hidden = !pre.hidden;
+      btn.textContent = (pre.hidden ? "⌗ View prompt" : "⌗ Hide prompt");
+      btn.classList.toggle("is-open", !pre.hidden);
+    });
+    wrap.append(btn, pre);
+    return wrap;
+  }
+
+  function passageCard(p) {
+    const card = el(`<div class="trace-pass"></div>`);
+    const head = el(`<div class="trace-pass-head"></div>`);
+    const src = el(`<span class="trace-pass-src"></span>`);
+    src.textContent = p.source || "—";
+    head.append(src);
+    if (p.page) {
+      const pg = el(`<span class="trace-pass-pg"></span>`);
+      pg.textContent = "p." + p.page;
+      head.append(pg);
+    }
+    const body = el(`<div class="trace-pass-text"></div>`);
+    body.textContent = p.text || "";
+    card.append(head, body);
+    return card;
+  }
+
+  function stepDetail(step) {
+    const d = el(`<div class="trace-detail-inner"></div>`);
+    if (step.kind === "rewrite") {
+      if (step.missing) d.append(traceNote("Addressing gap → " + step.missing));
+      if (step.queries && step.queries.length) {
+        const ql = el(`<div class="trace-queries"></div>`);
+        step.queries.forEach((q) => {
+          const chip = el(`<span class="trace-q"></span>`);
+          chip.textContent = q;
+          ql.append(chip);
+        });
+        d.append(ql);
+      }
+    } else if (step.kind === "retrieve") {
+      if (step.passages && step.passages.length) {
+        step.passages.forEach((p) => d.append(passageCard(p)));
+      } else {
+        d.append(traceNote("No new passages this round."));
+      }
+    } else if (step.kind === "grade") {
+      const label = step.verdict === "sufficient" ? "✓ Sufficient"
+                  : step.verdict === "limit" ? "◐ Limit reached" : "⚠ Insufficient";
+      const pill = el(`<span class="trace-verdict trace-verdict--${esc(step.verdict || "")}"></span>`);
+      pill.textContent = label;
+      d.append(pill);
+      if (step.missing) d.append(traceNote("Missing → " + step.missing));
+    } else if (step.kind === "generate" && step.passages_used != null) {
+      const n = step.passages_used;
+      const chars = step.context_chars ? " · " + step.context_chars.toLocaleString() + " chars of context" : "";
+      d.append(traceNote(n + " passage" + (n === 1 ? "" : "s") + " grounding the answer" + chars));
+    }
+    const pd = promptDisclosure(step.prompt);
+    if (pd) d.append(pd);
+    return d;
+  }
+
+  function buildTrace(steps) {
+    const wrap = el(`<div class="msg-trace-wrap"></div>`);
+    const btn = el(`<button class="msg-trace-btn" type="button"></button>`);
+    const timeline = el(`<ol class="trace-timeline" hidden></ol>`);
+    const n = steps.length;
+    const setLabel = (open) =>
+      btn.innerHTML = `<span class="trace-chev">${open ? "▾" : "▸"}</span> ${open ? "Hide" : "Show"} reasoning`
+        + ` <span class="trace-count">${n} step${n === 1 ? "" : "s"}</span>`;
+
+    steps.forEach((step) => {
+      const kind = step.kind || "generate";
+      const node = el(`<li class="trace-node trace-node--${esc(kind)}${step.verdict ? " trace-v--" + esc(step.verdict) : ""}"></li>`);
+      const dot = el(`<span class="trace-dot"></span>`);
+      dot.textContent = stepIcon(step);
+      const body = el(`<div class="trace-node-body"></div>`);
+      const head = el(`<button class="trace-node-head" type="button"></button>`);
+      const title = el(`<span class="trace-node-title"></span>`);
+      title.textContent = step.title || kind;
+      head.append(title, el(`<span class="trace-node-chev">›</span>`));
+      const detail = el(`<div class="trace-node-detail" hidden></div>`);
+      detail.append(stepDetail(step));
+      head.addEventListener("click", () => {
+        detail.hidden = !detail.hidden;
+        node.classList.toggle("is-open", !detail.hidden);
+      });
+      body.append(head, detail);
+      node.append(dot, body);
+      timeline.append(node);
+    });
+
+    setLabel(false);
+    btn.addEventListener("click", () => {
+      timeline.hidden = !timeline.hidden;
+      setLabel(!timeline.hidden);
+    });
+    wrap.append(btn, timeline);
+    return wrap;
+  }
+
+  // ── Thinking animation while waiting ──────────────────────
+  const THINKING_STEPS = [
+    "Rewriting question into search queries…",
+    "Retrieving relevant passages…",
+    "Grading context quality…",
+    "Generating answer…",
+  ];
+
+  function appendThinking(thread) {
+    const wrap = el(`<div class="msg ai msg-thinking"></div>`);
+    const stepEl = el(`<span class="thinking-label"></span>`);
+    const dots = el(`<span class="typing"><i></i><i></i><i></i></span>`);
+    wrap.append(stepEl, dots);
+    thread.append(wrap);
+
+    let idx = 0;
+    stepEl.textContent = THINKING_STEPS[0];
+    const timer = setInterval(() => {
+      idx = (idx + 1) % THINKING_STEPS.length;
+      stepEl.textContent = THINKING_STEPS[idx];
+    }, 1800);
+
+    return { el: wrap, stop: () => clearInterval(timer) };
+  }
+
+  // ── Resume saved chat ──────────────────────────────────────
+  async function resumeChat(saved) {
+    const thread = document.querySelector("#chatThread");
+    const composer = document.querySelector("#chatComposer");
+    if (!thread || !composer) return;
+
+    clear(thread);
+    thread.append(spinner("Re-opening chat…"));
+    try {
+      const resp = await window.api.post("/chat/resume", { chat_id: saved.id });
+      session = { id: resp.session_id, label: resp.label };
+      clear(thread);
+      const messages = resp.messages || [];
+      if (!messages.length) {
+        thread.append(el(`<div class="empty"><div class="big">✦</div><div>Session ready — ask your first question.</div></div>`));
+      } else {
+        messages.forEach((m) => appendMessage(thread, m.role, m.content));
+      }
+      composer.querySelector(".input").disabled = false;
+      composer.querySelector("#chatSend").disabled = false;
+      composer.querySelector(".input").focus();
+      updateSessionBadge(resp.label);
+      thread.scrollTop = thread.scrollHeight;
+    } catch (e) {
+      clear(thread);
+      thread.append(el(`<div class="empty"><div class="big">✦</div><div>Couldn't re-open that chat.</div></div>`));
+      toast(e.message, "error");
     }
   }
 
-  function refreshChats() {
-    const hp = document.querySelector('.history-panel[data-kind="chats"]');
-    if (hp && hp.refresh) hp.refresh();
+  // ── Update the session label badge ────────────────────────
+  function updateSessionBadge(label) {
+    const slot = document.getElementById("chatSessionBadge");
+    if (!slot) return;
+    clear(slot);
+    if (label) slot.append(el(`<span class="badge badge-accent">${esc(label)}</span>`));
   }
 
-  async function startSession(controls, statusSlot, chatHost, composer) {
-    const startBtn = controls.querySelector("#chatStart");
-    const thread = chatHost.querySelector(".thread");
+  // ── Start session ──────────────────────────────────────────
+  async function startSession() {
+    const thread   = document.querySelector("#chatThread");
+    const composer = document.querySelector("#chatComposer");
+    const startBtn = document.getElementById("chatStart");
+    const srcRow   = document.getElementById("chatSrcRow");
+    if (!thread || !composer || !startBtn) return;
 
-    let payload;
-    let upload = false;
+    let payload, upload = false;
     if (source === "subject") {
-      const subject = controls.querySelector("#chatSubject").value;
+      const subject = srcRow.querySelector("#chatSubject")?.value;
       if (!subject) { toast("Pick a subject first.", "error"); return; }
-      payload = { mode: "subject", subject, model: window.ui.selectedModel(controls) };
+      payload = { mode: "subject", subject, model: window.ui.selectedModel(srcRow) };
     } else if (source === "topic") {
-      const topic = controls.querySelector("#chatTopic").value.trim();
+      const topic = srcRow.querySelector("#chatTopic")?.value.trim();
       if (!topic) { toast("Enter a topic first.", "error"); return; }
-      payload = { mode: "topic", topic, model: window.ui.selectedModel(controls) };
+      payload = { mode: "topic", topic, model: window.ui.selectedModel(srcRow) };
     } else {
       if (!pdfFile) { toast("Choose a PDF first.", "error"); return; }
       upload = true;
@@ -117,7 +302,7 @@
     thread.append(spinner(
       source === "topic"
         ? "Setting up your tutor…"
-        : "Building a knowledge base from your PDFs… the first run also downloads a small embedding model, so give it a few seconds."
+        : "Preparing knowledge base… a new or updated subject is indexed once — this can take a moment."
     ));
 
     try {
@@ -125,62 +310,41 @@
       if (upload) {
         const fd = new FormData();
         fd.append("file", pdfFile);
-        const __m = window.ui.selectedModel(controls); if (__m) fd.append("model", __m);
+        const m = window.ui.selectedModel(srcRow); if (m) fd.append("model", m);
         resp = await window.api.postForm("/chat/upload", fd);
       } else {
         resp = await window.api.post("/chat/start", payload);
       }
       session = { id: resp.session_id, label: resp.label };
-      clear(statusSlot);
-      statusSlot.append(el(`<span class="badge badge-accent">${esc(resp.label)}</span>`));
-      setReady(thread, "Session ready — ask your first question.");
+      clear(thread);
+      thread.append(el(`<div class="empty"><div class="big">✦</div><div>Session ready — ask your first question.</div></div>`));
       composer.querySelector(".input").disabled = false;
       composer.querySelector("#chatSend").disabled = false;
       composer.querySelector(".input").focus();
+      updateSessionBadge(resp.label);
       toast("Session started.", "ok");
-      refreshChats();   // the new chat now appears in the sidebar
+      // refresh history list if popover is open
+      const hp = document.querySelector('.history-panel[data-kind="chats"]');
+      if (hp?.refresh) hp.refresh();
     } catch (e) {
-      setReady(thread, "Couldn’t start the session. Check your Groq key and try again.");
-      toast(e.message, "error");
+      clear(thread);
+      const msg = e && e.message ? e.message : "Couldn't start the session.";
+      thread.append(el(`<div class="empty"><div class="big">✦</div><div>${esc(msg)}</div></div>`));
+      toast(msg, "error");
     } finally {
       startBtn.disabled = false;
       startBtn.textContent = "Start session";
     }
   }
 
-  // Re-open a saved chat from the sidebar and replay its messages.
-  async function resumeChat(saved) {
-    const main = document.getElementById("chatMain");
-    if (!main) return;
-    const statusSlot = main.querySelector("#chatStatus");
-    const thread = main.querySelector(".thread");
-    const composer = main.querySelector(".composer");
-    clear(thread);
-    thread.append(spinner("Re-opening your chat…"));
-    try {
-      const resp = await window.api.post("/chat/resume", { chat_id: saved.id });
-      session = { id: resp.session_id, label: resp.label };
-      clear(statusSlot);
-      statusSlot.append(el(`<span class="badge badge-accent">${esc(resp.label)}</span>`));
-      clear(thread);
-      const messages = resp.messages || [];
-      if (!messages.length) setReady(thread, "Session ready — ask your first question.");
-      else messages.forEach((m) => appendMessage(thread, m.role, m.content));
-      composer.querySelector(".input").disabled = false;
-      composer.querySelector("#chatSend").disabled = false;
-      composer.querySelector(".input").focus();
-      thread.scrollTop = thread.scrollHeight;
-    } catch (e) {
-      setReady(thread, "Couldn’t re-open that chat.");
-      toast(e.message, "error");
-    }
-  }
-
-  async function send(composer, thread) {
+  // ── Send a message ─────────────────────────────────────────
+  async function send() {
     if (!session) return;
-    const input = composer.querySelector(".input");
-    const sendBtn = composer.querySelector("#chatSend");
-    const text = input.value.trim();
+    const thread   = document.querySelector("#chatThread");
+    const composer = document.querySelector("#chatComposer");
+    const input    = composer.querySelector(".input");
+    const sendBtn  = composer.querySelector("#chatSend");
+    const text     = input.value.trim();
     if (!text) return;
 
     const placeholder = thread.querySelector(".empty");
@@ -188,25 +352,32 @@
     const firstTurn = !thread.querySelector(".msg");
 
     appendMessage(thread, "user", text);
-
     input.value = "";
     input.disabled = true;
     sendBtn.disabled = true;
 
-    const aiMsg = el(`<div class="msg ai"><span class="typing"><i></i><i></i><i></i></span></div>`);
-    thread.append(aiMsg);
+    const thinking = appendThinking(thread);
     thread.scrollTop = thread.scrollHeight;
 
     try {
       const resp = await window.api.post("/chat/message", { session_id: session.id, message: text });
-      clear(aiMsg);
-      aiMsg.append(md(resp.answer));
-      const cp = el(`<button class="msg-copy" type="button">Copy</button>`);
-      cp.addEventListener("click", () => copy(resp.answer, cp));
-      aiMsg.append(cp);
-      if (firstTurn) { refreshChats(); setTimeout(refreshChats, 3500); }   // refresh again once the LLM auto-title lands
+      thinking.stop();
+      thinking.el.remove();
+      appendMessage(thread, "assistant", resp.answer, {
+        steps: resp.steps || [],
+        sources: resp.sources || [],
+      });
+      if (firstTurn) {
+        const hp = document.querySelector('.history-panel[data-kind="chats"]');
+        if (hp?.refresh) hp.refresh();
+        setTimeout(() => { if (hp?.refresh) hp.refresh(); }, 3500);
+      }
     } catch (e) {
-      aiMsg.textContent = "⚠ " + e.message;
+      thinking.stop();
+      thinking.el.remove();
+      const errMsg = el(`<div class="msg ai"></div>`);
+      errMsg.textContent = "⚠ " + e.message;
+      thread.append(errMsg);
       toast(e.message, "error");
       if (/expired/i.test(e.message)) session = null;
     } finally {
@@ -219,96 +390,112 @@
     }
   }
 
-  // Build (or rebuild, for "New chat") the main column: source controls + chat panel.
-  function buildMain(main) {
-    clear(main);
-    session = null;
-    source = "subject";
-    pdfFile = null;
-    // NOTE: wrapped in a single .stack so el() (which returns one root element)
-    // keeps BOTH panels; #chatMain is itself a stack, so the nesting is harmless.
-    main.append(el(`
-      <div class="stack">
-        <div class="panel stack">
-          <div class="seg" role="tablist" aria-label="Chat source">
-            <button type="button" data-src="subject" aria-pressed="true">Subject</button>
-            <button type="button" data-src="topic" aria-pressed="false">Topic</button>
-            <button type="button" data-src="upload" aria-pressed="false">Upload PDF</button>
-          </div>
-          <div id="chatSourceCtl"></div>
-          <div id="chatModelCtl"></div>
-          <div class="row row-wrap between">
-            <button id="chatStart" class="btn-accent" type="button">Start session</button>
-            <span id="chatStatus"></span>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="chat">
-            <div class="thread">
-              <div class="empty"><div class="big">✦</div><div>Start a new session or open a saved chat.</div></div>
-            </div>
-            <div class="composer">
-              <input class="input" type="text" placeholder="Ask a question…" aria-label="Message" disabled />
-              <button id="chatSend" class="btn-accent" type="button" disabled>Send</button>
-            </div>
-          </div>
-        </div>
-      </div>`));
+  // ── Reset to new chat state ────────────────────────────────
+  function resetChat() {
+    session = null; source = "subject"; pdfFile = null;
+    updateSessionBadge("");
 
-    const seg = main.querySelector(".seg");
-    const sourceCtl = main.querySelector("#chatSourceCtl");
-    const statusSlot = main.querySelector("#chatStatus");
-    const chatHost = main.querySelector(".chat");
-    const thread = main.querySelector(".thread");
-    const composer = main.querySelector(".composer");
+    const srcBar = document.getElementById("chatSrcBar");
+    if (srcBar) srcBar.hidden = false;
 
-    buildSourceControl(sourceCtl);
-    main.querySelector("#chatModelCtl").append(window.ui.modelSelect());
-
-    seg.addEventListener("click", (e) => {
-      const btn = e.target.closest("button[data-src]");
-      if (!btn) return;
-      source = btn.dataset.src;
-      pdfFile = null;
-      seg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", b === btn ? "true" : "false"));
-      buildSourceControl(sourceCtl);
-    });
-
-    main.querySelector("#chatStart").addEventListener("click", () => {
-      startSession(main, statusSlot, chatHost, composer);
-    });
-    composer.querySelector("#chatSend").addEventListener("click", () => send(composer, thread));
-    composer.querySelector(".input").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); send(composer, thread); }
-    });
+    const thread = document.querySelector("#chatThread");
+    if (thread) {
+      clear(thread);
+      thread.append(el(`<div class="empty"><div class="big">✦</div><div>Start a new session or open a saved chat.</div></div>`));
+    }
+    const composer = document.querySelector("#chatComposer");
+    if (composer) {
+      composer.querySelector(".input").disabled = true;
+      composer.querySelector("#chatSend").disabled = true;
+    }
+    // rebuild source row for subject mode
+    const srcRow = document.getElementById("chatSrcRow");
+    if (srcRow) buildSourceRow(srcRow);
   }
 
+  // ── Mount ──────────────────────────────────────────────────
   window.Views = window.Views || {};
   window.Views.chat = {
     accent: "chat",
     title: "Chat Assistant",
+
     async mount(root) {
-      const layout = el(`
-        <div class="layout-aside">
-          <aside class="panel stack" id="chatAside">
-            <button id="chatNew" class="btn-accent btn-block" type="button">+ New chat</button>
-          </aside>
-          <section class="stack" id="chatMain"></section>
-        </div>`);
-      root.append(layout);
+      root.append(el(`
+        <div class="chat-shell stack">
 
-      const aside = layout.querySelector("#chatAside");
-      const main = layout.querySelector("#chatMain");
+          <!-- Top bar -->
+          <div class="chat-topbar panel">
+            <div class="row between">
+              <div class="row" style="gap:.6rem">
+                <button id="chatHistBtn" class="btn" type="button" title="Chat history" style="padding:.45rem .8rem;font-size:.85rem">≡ History</button>
+                <span id="chatSessionBadge"></span>
+              </div>
+              <button id="chatNewBtn" class="btn-accent" type="button" style="padding:.5rem 1rem;font-size:.88rem">+ New chat</button>
+            </div>
+          </div>
 
-      buildMain(main);
-      aside.append(window.ui.historyPanel("chats", { title: "Your chats", onOpen: resumeChat }));
+          <!-- Source selection bar -->
+          <div id="chatSrcBar" class="chat-src-bar panel">
+            <div class="row" style="gap:.75rem;flex-wrap:wrap;align-items:center">
+              <div class="seg" role="tablist" id="chatSrcSeg">
+                <button type="button" data-src="subject" aria-pressed="true">Subject</button>
+                <button type="button" data-src="topic"   aria-pressed="false">Topic</button>
+                <button type="button" data-src="upload"  aria-pressed="false">Upload PDF</button>
+              </div>
+              <div id="chatSrcRow" class="row" style="flex:1;gap:.6rem"></div>
+              <div id="chatModelCtl"></div>
+              <button id="chatStart" class="btn-accent" type="button">Start session</button>
+            </div>
+          </div>
 
-      layout.querySelector("#chatNew").addEventListener("click", () => buildMain(main));
+          <!-- Chat area -->
+          <div class="panel" style="flex:1;display:flex;flex-direction:column;padding:0;overflow:hidden">
+            <div class="thread" id="chatThread">
+              <div class="empty"><div class="big">✦</div><div>Start a new session or open a saved chat.</div></div>
+            </div>
+            <div class="composer" id="chatComposer">
+              <input class="input" type="text" placeholder="Ask a question…" aria-label="Message" disabled />
+              <button id="chatSend" class="btn-accent" type="button" disabled>Send</button>
+            </div>
+          </div>
+
+        </div>`));
+
+      // Wire model selector
+      document.getElementById("chatModelCtl").append(window.ui.modelSelect());
+
+      // Wire source segmented control
+      const seg = document.getElementById("chatSrcSeg");
+      const srcRow = document.getElementById("chatSrcRow");
+      buildSourceRow(srcRow);
+      seg.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-src]");
+        if (!btn) return;
+        source = btn.dataset.src;
+        pdfFile = null;
+        seg.querySelectorAll("button").forEach((b) =>
+          b.setAttribute("aria-pressed", b === btn ? "true" : "false"));
+        buildSourceRow(srcRow);
+      });
+
+      // Wire buttons
+      document.getElementById("chatStart").addEventListener("click", startSession);
+      document.getElementById("chatNewBtn").addEventListener("click", resetChat);
+      document.getElementById("chatHistBtn").addEventListener("click", (e) =>
+        openHistoryDrawer(e.currentTarget));
+
+      // Wire composer
+      const composer = document.getElementById("chatComposer");
+      composer.querySelector("#chatSend").addEventListener("click", send);
+      composer.querySelector(".input").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); send(); }
+      });
     },
+
     unmount() {
-      session = null;
-      source = "subject";
-      pdfFile = null;
+      session = null; source = "subject"; pdfFile = null;
+      document.getElementById("histPopover")?.remove();
+      document.getElementById("histPopoverBg")?.remove();
     },
   };
 })();
