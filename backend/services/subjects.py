@@ -69,12 +69,27 @@ def restore_uploaded_pdfs() -> int:
     (``documents/user__{owner}__{subject}/``) so uploads remain scoped per user.
     """
     restored = 0
+    skipped_ownerless = 0
     for owner, subject, filename, data in db.iter_uploaded_pdfs():
+        # Privacy guard: an upload is, by definition, owned by the user who added it.
+        # Bundled subjects (Mathematics, Operating System) come ONLY from the Docker image
+        # seed — never from this bucket. So a record with no owner is a legacy upload from
+        # before owner-scoping existed; restoring it to the flat documents/<subject>/ path
+        # would make one user's private PDFs a "bundled" subject visible to EVERYONE. Skip it.
+        if not owner:
+            skipped_ownerless += 1
+            continue
         try:
             if restore_uploaded_pdf(subject, filename, data, owner):
                 restored += 1
         except OSError as exc:
             log.warning("Could not restore uploaded PDF %s/%s: %s", subject, filename, exc)
+    if skipped_ownerless:
+        log.warning(
+            "Skipped %d owner-less uploaded PDF(s) from MongoDB — legacy records that would "
+            "otherwise leak as bundled subjects. Run the cleanup to remove them.",
+            skipped_ownerless,
+        )
     if restored:
         log.info("Restored %d uploaded PDF(s) from MongoDB into documents/.", restored)
     return restored
