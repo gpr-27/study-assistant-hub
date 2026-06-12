@@ -28,7 +28,7 @@ load_dotenv(ROOT / ".env")
 
 from backend.config import validate_config
 from backend.documents import list_subjects
-from backend.vector_store import build_subject_index
+from backend.vector_store import build_subject_fallback_index, build_subject_index
 
 
 def main() -> None:
@@ -36,7 +36,7 @@ def main() -> None:
     subjects = list_subjects()
 
     print("=" * 60)
-    print(" Pre-baking FAISS indexes")
+    print(" Pre-baking FAISS indexes (primary + fallback model)")
     print(f" Subjects: {', '.join(subjects)}")
     print("=" * 60)
     print()
@@ -46,10 +46,22 @@ def main() -> None:
         try:
             chunks = build_subject_index(subject)
             ok += 1
-            print(f"  ✓  {subject}  →  {chunks} chunks indexed")
+            print(f"  ✓  {subject}  →  {chunks} chunks indexed (primary)")
         except Exception as exc:
             err += 1
             print(f"  ✗  {subject}  →  {exc}")
+
+    # Fallback-model indexes (quota resilience: per-model quota buckets — when
+    # the primary embedding model's quota is spent, retrieval switches to these).
+    print()
+    for subject in subjects:
+        try:
+            chunks = build_subject_fallback_index(subject)
+            ok += 1
+            print(f"  ✓  {subject}  →  {chunks} chunks indexed (fallback model)")
+        except Exception as exc:
+            err += 1
+            print(f"  ✗  {subject} (fallback)  →  {exc}")
 
     print()
     print("=" * 60)

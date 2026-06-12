@@ -1,0 +1,19 @@
+{
+  "chunk_overlap": 150,
+  "chunk_size": 1500,
+  "dim": null,
+  "files": [
+    {
+      "name": "Lec-1.pdf",
+      "sha256": "4c33fa1d7081ef11efd77655416abf6b89259966c34a6935c0adcd947657799a",
+      "size": 1517723
+    },
+    {
+      "name": "Lec-2.pdf",
+      "sha256": "eef9739c623a7f1e4b7718e08822d1306d4a48363b5b5fba81f38dd36e9c28ce",
+      "size": 1940811
+    }
+  ],
+  "model": "gemini-embedding-001",
+  "provider": "gemini"
+}

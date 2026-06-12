@@ -321,9 +321,138 @@ def load_or_build_subject_index(subject: str, owner: str | None = None) -> FAISS
         return db
 
 
+# ---- fallback-model index (embedding-quota resilience) -----------------------
+# Gemini free-tier quota is tracked PER MODEL (per project). When the primary
+# embedding model's quota is spent, retrieval can switch to a SECOND index built
+# with a different Gemini embedding model — query vector and index always move
+# together, so results stay correct (a cross-model query would silently return
+# garbage). Fallback indexes are pre-baked for bundled subjects at
+# faiss_index/<subject>/fallback-001/ (committed; shipped in the Docker image);
+# they are NEVER built at runtime — a missing fallback re-raises the quota error.
+_FALLBACK_MODEL = "gemini-embedding-001"
+_FALLBACK_DIRNAME = "fallback-001"
+_fallback_embeddings_instance: Embeddings | None = None
+_fallback_stores: dict[str, FAISS] = {}
+
+
+def _fallback_embeddings() -> Embeddings:
+    global _fallback_embeddings_instance
+    if _fallback_embeddings_instance is None:
+        from backend.gemini_embeddings import GeminiEmbeddings
+
+        _fallback_embeddings_instance = GeminiEmbeddings(
+            model=_FALLBACK_MODEL,
+            api_key=config.GEMINI_API_KEY,
+            output_dimensionality=EMBEDDING_DIM,
+            fallback_api_key=config.GEMINI_API_KEY_FALLBACK,
+        )
+    return _fallback_embeddings_instance
+
+
+def _fallback_index_dir(subject: str) -> Path:
+    return _subject_index_dir(subject) / _FALLBACK_DIRNAME
+
+
+def _fallback_fingerprint(subject: str) -> dict:
+    fp = _fingerprint(subject)
+    fp["model"] = _FALLBACK_MODEL
+    return fp
+
+
+def _fallback_is_fresh(subject: str) -> bool:
+    index_dir = _fallback_index_dir(subject)
+    if not (index_dir / "index.faiss").is_file():
+        return False
+    try:
+        manifest = json.loads((index_dir / _MANIFEST_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return manifest == _fallback_fingerprint(subject)
+
+
+def build_subject_fallback_index(subject: str) -> int:
+    """Pre-bake a subject's fallback-model index (used by scripts/prebake_all.py).
+
+    Skips the (LLM-free but API-costly) build when the existing fallback index
+    is already fresh. Returns the chunk count.
+    """
+    if _fallback_is_fresh(subject):
+        store = FAISS.load_local(str(_fallback_index_dir(subject)), _fallback_embeddings(),
+                                 allow_dangerous_deserialization=True)
+        return store.index.ntotal
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=_CHUNK_SIZE, chunk_overlap=_CHUNK_OVERLAP,
+        length_function=len, is_separator_regex=False,
+    )
+    chunks = []
+    for path in list_pdf_paths(subject):
+        docs = PyPDFLoader(str(path)).load()
+        for doc in docs:
+            doc.metadata["source"] = str(path)
+            doc.metadata["document_type"] = "content"
+        chunks.extend(splitter.split_documents(docs))
+    if not chunks:
+        raise VectorStoreError("No readable text was found in the subject's PDF(s).")
+    store = FAISS.from_documents(chunks, _fallback_embeddings())
+    index_dir = _fallback_index_dir(subject)
+    index_dir.mkdir(parents=True, exist_ok=True)
+    store.save_local(str(index_dir))
+    (index_dir / _MANIFEST_NAME).write_text(
+        json.dumps(_fallback_fingerprint(subject), indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return store.index.ntotal
+
+
+def _load_fallback_store(subject_key: str) -> FAISS | None:
+    """Return the subject's fallback-model store if a FRESH one exists on disk."""
+    cached = _fallback_stores.get(subject_key)
+    if cached is not None:
+        return cached
+    if EMBEDDING_PROVIDER != "gemini" or not _fallback_is_fresh(subject_key):
+        return None
+    try:
+        store = FAISS.load_local(str(_fallback_index_dir(subject_key)), _fallback_embeddings(),
+                                 allow_dangerous_deserialization=True)
+    except Exception:  # noqa: BLE001 — a broken fallback must not mask the real error
+        log.warning("Could not load the fallback index for '%s'.", subject_key, exc_info=True)
+        return None
+    _fallback_stores[subject_key] = store
+    return store
+
+
+class _QuotaFallbackRetriever:
+    """Retriever that switches to the fallback-model index on embedding quota.
+
+    The primary search embeds the query with the primary model (fast-fail on
+    quota). On GeminiQuotaError, if this subject has a pre-baked fallback index,
+    the SAME query is embedded with the fallback model and searched against the
+    fallback index — model and index always switch together.
+    """
+
+    def __init__(self, subject_key: str, store: FAISS, k: int) -> None:
+        self._key = subject_key
+        self._store = store
+        self._k = k
+
+    def invoke(self, query: str):
+        from backend.gemini_embeddings import GeminiQuotaError
+
+        try:
+            return self._store.similarity_search(query, k=self._k)
+        except GeminiQuotaError:
+            fallback = _load_fallback_store(self._key)
+            if fallback is None:
+                raise
+            log.warning("Embedding quota hit — searching '%s' via the %s fallback index.",
+                        self._key, _FALLBACK_MODEL)
+            return fallback.similarity_search(query, k=self._k)
+
+
 def get_subject_retriever(subject: str, k: int, owner: str | None = None):
-    """Return a retriever over a subject's persistent index."""
-    return load_or_build_subject_index(subject, owner).as_retriever(search_kwargs={"k": k})
+    """Return a retriever over a subject's persistent index (quota-resilient)."""
+    key = subject_internal_key(subject, owner)
+    store = load_or_build_subject_index(subject, owner)
+    return _QuotaFallbackRetriever(key, store, k)
 
 
 def warm_all_subjects() -> None:
