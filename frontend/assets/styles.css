@@ -230,7 +230,22 @@ a { color: inherit; }
 
 /* ---------- hub tool grid ---------- */
 .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: clamp(1rem, 2.4vw, 1.6rem); perspective: 1400px; }
-@media (max-width: 680px) { .grid { grid-template-columns: 1fr; } }
+/* Phones: instead of 10 tall cards stacked one-by-one (an endless scroll), show a
+   compact 2-up app-launcher grid — icon + name + tag, descriptions hidden. Fits all
+   ten tools in five tidy rows. Applies to both skins (glass + editorial inherit). */
+@media (max-width: 560px) {
+  .grid { grid-template-columns: 1fr 1fr; gap: .6rem; }
+  .card { min-height: 0; padding: .95rem .8rem 1.05rem; }
+  .card p { display: none; }                     /* hide the long description */
+  .card .status { display: none; }               /* drop the "ready" pill to declutter */
+  .card .chip { width: 40px; height: 40px; border-radius: 11px; }
+  .card .chip svg { width: 19px; height: 19px; }
+  .card h2 { font-size: 1.02rem; margin: .55rem 0 0; letter-spacing: -.02em; }
+  .card .card-foot { margin-top: .65rem; }
+  .card-foot .open { font-size: 0; gap: 0; }      /* hide the "Open …" label */
+  .card-foot .open .arrow { font-size: .85rem; width: 26px; height: 26px; }  /* keep the arrow */
+  .card-foot .port { font-size: .66rem; }
+}
 .card { --accent: var(--c-chat); display: block; text-decoration: none; color: inherit; padding: clamp(1.5rem, 3vw, 2.1rem); min-height: 240px; transform-style: preserve-3d; transition: transform .5s var(--ease-spring), box-shadow .5s var(--ease-spring); will-change: transform; overflow: hidden; animation: card-in 1s var(--ease-spring) both; }
 .card.c1 { --accent: var(--c-chat); animation-delay: .26s; }
 .card.c2 { --accent: var(--c-quiz); animation-delay: .34s; }
@@ -856,14 +871,30 @@ body.hist-scroll-lock { overflow: hidden; }
   .nav { padding: .5rem .55rem .5rem .85rem; gap: .5rem; }
   .brand { font-size: .94rem; gap: .55rem; }
   .nav-actions { gap: .4rem; }
+  /* The Glass|Editorial switch is the widest nav item on phones — compact it. */
+  .skin-switch { padding: 3px; gap: 2px; }
+  .skin-switch button { padding: .34rem .55rem; font-size: .72rem; }
   .view-head { gap: .6rem; }
   .msg { max-width: 88%; }
   .msg.ai { max-width: 94%; }
 }
 
+/* On phones the wordmark + Add/Analytics/skin-switch/theme/exit can't all fit — collapse
+   the brand to just its mark (still links home) so the action cluster never overflows. */
+@media (max-width: 480px) {
+  .brand { font-size: 0; gap: 0; }
+  .brand .mark { font-size: 0; }
+  .nav { padding: .5rem .5rem; }
+  .nav-actions { gap: .28rem; }
+  .toggle { width: 31px; height: 31px; }
+  .nav-add, .nav-analytics { padding: .4rem .5rem; }
+  .skin-switch { padding: 2px; }
+  .skin-switch button { padding: .3rem .46rem; font-size: .68rem; }
+}
+
 /* ---- Small phones (~360px and below): keep the nav and cards from overflowing ---- */
 @media (max-width: 380px) {
-  .brand { font-size: .86rem; }
+  /* wordmark stays hidden here (the ≤480 rule sets font-size:0) — only shrink the mark */
   .brand .mark { width: 26px; height: 26px; }
   .stats { gap: .45rem; }
   .stat { padding: .5rem .8rem; font-size: .8rem; }
