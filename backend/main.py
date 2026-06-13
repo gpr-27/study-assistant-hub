@@ -196,12 +196,27 @@ app.include_router(history.router)
 app.include_router(guest.router)
 
 # Static SPA. /api/* is registered above, so it always wins over these.
-app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIR / "assets")), name="assets")
+#
+# The SPA ships with FIXED asset filenames (app.js, views/*.js, styles.css) — no
+# content-hashed bundles — so a browser that caches them heuristically (the
+# default when no Cache-Control is sent) keeps serving a stale index.html/JS for
+# hours after a deploy, and the new version never appears without a hard refresh.
+# Serve the shell + assets with "no-cache" (store but ALWAYS revalidate): the
+# browser sends a conditional request and gets a cheap 304 when unchanged, or the
+# fresh file right after a deploy. Correctness over a few extra conditional GETs.
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/assets", NoCacheStaticFiles(directory=str(FRONTEND_DIR / "assets")), name="assets")
 
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(str(FRONTEND_DIR / "index.html"))
+    return FileResponse(str(FRONTEND_DIR / "index.html"), headers={"Cache-Control": "no-cache"})
 
 
 # Re-export ConfigError so importers can reference it from main if desired.
