@@ -8,13 +8,13 @@ errors bubble to the global 429/502/503 handlers; ExamError maps to 502 here.
 """
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from backend import config, db
 from backend.auth import current_owner
 from backend.config import MAX_CONTENT_TOKENS, require_groq_key
-from backend.documents import clip_to_tokens, read_pdf
+from backend.documents import clip_to_tokens, extract_pdf_text, read_pdf
 from backend.services import exam as exam_service
 from backend.services.exam import (
     DEFAULT_MCQ,
@@ -40,10 +40,17 @@ class ExamGenerateRequest(BaseModel):
     model: str | None = None
 
 
+class ExamTopicRequest(BaseModel):
+    topic: str
+    num_mcq: int = Field(default=DEFAULT_MCQ, ge=0, le=MAX_MCQ)
+    num_short: int = Field(default=DEFAULT_SHORT, ge=0, le=MAX_SHORT)
+    model: str | None = None
+
+
 class ExamGenerateResponse(BaseModel):
     questions: list[dict]
     title: str
-    subject: str
+    subject: str                               # the source label (subject / topic / filename)
 
 
 class ExamGradeRequest(BaseModel):
@@ -68,11 +75,23 @@ class ExamGradeResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints.
 # ---------------------------------------------------------------------------
+def _finalize_generate(data: dict, *, title: str, source: str) -> ExamGenerateResponse:
+    """Validate the generated paper has usable questions and shape the response.
+
+    ``source`` is echoed back as ``subject`` (the grader keys history/breakdown by
+    it and the UI displays it) regardless of which source produced the exam.
+    """
+    questions = data.get("questions") or []
+    if not questions:
+        raise HTTPException(status_code=502, detail="The model returned no usable questions; try again.")
+    return ExamGenerateResponse(questions=questions, title=title, subject=source)
+
+
 @router.post("/generate", response_model=ExamGenerateResponse)
 def generate_exam(request: ExamGenerateRequest, owner: str = Depends(current_owner)) -> ExamGenerateResponse:
     """Build the exam from the chosen subject PDFs' extracted text (one Groq call)."""
     if request.mode != "subject":
-        raise HTTPException(status_code=400, detail="Only subject mode is supported for exams (v1).")
+        raise HTTPException(status_code=400, detail="Only subject mode is supported on this endpoint.")
     if not request.pdfs:
         raise HTTPException(status_code=400, detail="Select at least one PDF to build the exam from.")
     if request.num_mcq + request.num_short == 0:
@@ -92,14 +111,60 @@ def generate_exam(request: ExamGenerateRequest, owner: str = Depends(current_own
         )
     except ExamError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    questions = data.get("questions") or []
-    if not questions:
-        raise HTTPException(status_code=502, detail="The model returned no usable questions; try again.")
-    return ExamGenerateResponse(
-        questions=questions,
-        title=f"Exam · {request.subject}",
-        subject=request.subject,
-    )
+    return _finalize_generate(data, title=f"Exam · {request.subject}", source=request.subject)
+
+
+@router.post("/topic", response_model=ExamGenerateResponse)
+def generate_exam_topic(request: ExamTopicRequest, owner: str = Depends(current_owner)) -> ExamGenerateResponse:
+    """Build an exam about a free topic (no document) in one Groq call."""
+    topic = (request.topic or "").strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="A topic is required.")
+    if request.num_mcq + request.num_short == 0:
+        raise HTTPException(status_code=400, detail="An exam needs at least one question.")
+    require_groq_key()
+    try:
+        data = exam_service.generate_exam_from_topic(
+            topic=topic,
+            num_mcq=request.num_mcq,
+            num_short=request.num_short,
+            model=request.model,
+        )
+    except ExamError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _finalize_generate(data, title=f"Exam · {topic}", source=topic)
+
+
+@router.post("/upload", response_model=ExamGenerateResponse)
+async def generate_exam_upload(
+    file: UploadFile = File(...),
+    num_mcq: int = Form(DEFAULT_MCQ),
+    num_short: int = Form(DEFAULT_SHORT),
+    model: str | None = Form(None),
+    owner: str = Depends(current_owner),
+) -> ExamGenerateResponse:
+    """Build an exam from a single uploaded PDF's extracted text (one Groq call)."""
+    if num_mcq + num_short == 0:
+        raise HTTPException(status_code=400, detail="An exam needs at least one question.")
+    data_bytes = await file.read()
+    if not data_bytes:
+        raise HTTPException(status_code=400, detail="The uploaded PDF was empty.")
+    text = extract_pdf_text(data_bytes)
+    if not text:
+        raise HTTPException(status_code=422, detail="No extractable text found in that PDF.")
+    fname = file.filename or "uploaded.pdf"
+    content = clip_to_tokens(text, MAX_CONTENT_TOKENS)
+    require_groq_key()
+    try:
+        data = exam_service.generate_exam(
+            content=content,
+            num_mcq=num_mcq,
+            num_short=num_short,
+            model=model,
+        )
+    except ExamError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _finalize_generate(data, title=f"Exam · {fname}", source=fname)
 
 
 def _coerce_choice(value: Any) -> int | None:

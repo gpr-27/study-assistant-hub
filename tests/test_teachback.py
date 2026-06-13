@@ -193,6 +193,55 @@ class TeachbackApiTests(unittest.TestCase):
         self.assertEqual(res.status_code, 400)
 
 
+class StartUploadTests(unittest.TestCase):
+    """The /start-upload route extracts the PDF's text and feeds it as subject-mode
+    content to start_session (no service change) — mirroring subject mode."""
+
+    def setUp(self):
+        tb._sessions.clear()
+        self.client = _make_client()
+        patcher = mock.patch.object(teachback_router, "require_groq_key", lambda: None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        save_patcher = mock.patch.object(tb.db, "save", return_value=None)
+        save_patcher.start()
+        self.addCleanup(save_patcher.stop)
+
+    def test_upload_starts_session_from_extracted_text(self):
+        with mock.patch.object(teachback_router, "extract_pdf_text", return_value="Lecture text " * 50) as extract, \
+             mock.patch.object(tb, "require_groq_key", lambda: None), \
+             mock.patch.object(tb, "Groq", _groq_returning(_START_PAYLOAD)):
+            res = self.client.post(
+                "/api/teachback/start-upload",
+                files={"file": ("notes.pdf", b"%PDF-1.4 fake", "application/pdf")},
+            )
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertTrue(body["session_id"])
+        self.assertEqual(body["concept"], "Binary Search")
+        extract.assert_called_once()
+        sid = body["session_id"]
+        self.assertIn(sid, tb._sessions)
+        # uploaded text is grounding context, like subject mode; label is the filename
+        self.assertIn("Lecture text", tb._sessions[sid]["persona"])
+        self.assertEqual(tb._sessions[sid]["label"], "notes.pdf")
+
+    def test_upload_rejects_empty_file(self):
+        res = self.client.post(
+            "/api/teachback/start-upload",
+            files={"file": ("empty.pdf", b"", "application/pdf")},
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_upload_rejects_pdf_without_text(self):
+        with mock.patch.object(teachback_router, "extract_pdf_text", return_value=""):
+            res = self.client.post(
+                "/api/teachback/start-upload",
+                files={"file": ("scan.pdf", b"%PDF-1.4 fake", "application/pdf")},
+            )
+        self.assertEqual(res.status_code, 422)
+
+
 class EvaluationNormalisationTests(unittest.TestCase):
     def test_score_is_clamped_and_lists_cleaned(self):
         ev = tb._normalise_evaluation({

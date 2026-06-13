@@ -128,6 +128,61 @@ class GenerateExamTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Service: topic-based generation (mirrors generate_exam's shape/validation).
+# ---------------------------------------------------------------------------
+class GenerateExamFromTopicTests(unittest.TestCase):
+    def test_returns_validated_questions(self):
+        groq_patch, key_patch, payload = _patched_groq({"questions": [_MCQ, _SHORT, "garbage"]})
+        with key_patch, groq_patch as mock_groq:
+            mock_groq.return_value.chat.completions.create.return_value = _mock_response(payload)
+            data = exam_service.generate_exam_from_topic("Operating Systems", num_mcq=2, num_short=2)
+        self.assertEqual([q["type"] for q in data["questions"]], ["mcq", "short"])
+        # questions are validated -> each carries a unique id
+        self.assertEqual(len({q["id"] for q in data["questions"]}), 2)
+
+    def test_caps_question_counts_per_type(self):
+        many = {"questions": [dict(_MCQ) for _ in range(8)] + [dict(_SHORT) for _ in range(8)]}
+        groq_patch, key_patch, payload = _patched_groq(many)
+        with key_patch, groq_patch as mock_groq:
+            mock_groq.return_value.chat.completions.create.return_value = _mock_response(payload)
+            data = exam_service.generate_exam_from_topic("OS", num_mcq=3, num_short=1)
+        self.assertEqual(sum(q["type"] == "mcq" for q in data["questions"]), 3)
+        self.assertEqual(sum(q["type"] == "short" for q in data["questions"]), 1)
+
+    def test_empty_topic_raises(self):
+        with self.assertRaises(exam_service.ExamError):
+            exam_service.generate_exam_from_topic("   ")
+
+    def test_invalid_json_raises_exam_error(self):
+        groq_patch, key_patch, payload = _patched_groq("not json")
+        with key_patch, groq_patch as mock_groq:
+            mock_groq.return_value.chat.completions.create.return_value = _mock_response(payload)
+            with self.assertRaises(exam_service.ExamError):
+                exam_service.generate_exam_from_topic("OS")
+
+    def test_retries_once_when_first_payload_unusable(self):
+        # First call yields no valid questions; the retry returns a usable paper.
+        groq_patch, key_patch, _ = _patched_groq(None)
+        with key_patch, groq_patch as mock_groq:
+            create = mock_groq.return_value.chat.completions.create
+            create.side_effect = [
+                _mock_response({"questions": []}),
+                _mock_response({"questions": [_MCQ]}),
+            ]
+            data = exam_service.generate_exam_from_topic("OS", num_mcq=1, num_short=0)
+        self.assertEqual(len(data["questions"]), 1)
+        self.assertEqual(create.call_count, 2)
+
+    def test_passes_conservative_max_tokens(self):
+        groq_patch, key_patch, payload = _patched_groq({"questions": [_MCQ]})
+        with key_patch, groq_patch as mock_groq:
+            create = mock_groq.return_value.chat.completions.create
+            create.return_value = _mock_response(payload)
+            exam_service.generate_exam_from_topic("OS", num_mcq=10, num_short=4)
+        self.assertLessEqual(create.call_args.kwargs["max_tokens"], 2048)
+
+
+# ---------------------------------------------------------------------------
 # Service: short-answer grading.
 # ---------------------------------------------------------------------------
 class GradeShortAnswersTests(unittest.TestCase):
@@ -230,6 +285,89 @@ class GenerateEndpointTests(unittest.TestCase):
             res = self.client.post("/api/exam/generate", json={"subject": "OS", "pdfs": ["a.pdf"]})
         self.assertEqual(res.status_code, 502)
         self.assertIn("model exploded", res.json()["detail"])
+
+
+class TopicEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.client = _client()
+
+    def test_topic_happy_path(self):
+        questions = exam_service.validate_questions([dict(_MCQ), dict(_SHORT)])
+        with mock.patch.object(exam_router, "require_groq_key", lambda: None), \
+             mock.patch.object(exam_router.exam_service, "generate_exam_from_topic",
+                               return_value={"questions": questions}) as gen:
+            res = self.client.post("/api/exam/topic", json={
+                "topic": "Operating Systems", "num_mcq": 1, "num_short": 1,
+            })
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["title"], "Exam · Operating Systems")
+        self.assertEqual(body["subject"], "Operating Systems")
+        self.assertEqual(len(body["questions"]), 2)
+        self.assertEqual(gen.call_args.kwargs["topic"], "Operating Systems")
+        self.assertEqual(gen.call_args.kwargs["num_mcq"], 1)
+
+    def test_topic_required(self):
+        res = self.client.post("/api/exam/topic", json={"topic": "   "})
+        self.assertEqual(res.status_code, 400)
+
+    def test_topic_rejects_counts_over_caps(self):
+        res = self.client.post("/api/exam/topic", json={"topic": "OS", "num_mcq": 11})
+        self.assertEqual(res.status_code, 422)  # pydantic Field(le=10)
+
+    def test_topic_502_when_no_valid_questions(self):
+        with mock.patch.object(exam_router, "require_groq_key", lambda: None), \
+             mock.patch.object(exam_router.exam_service, "generate_exam_from_topic",
+                               return_value={"questions": []}):
+            res = self.client.post("/api/exam/topic", json={"topic": "OS"})
+        self.assertEqual(res.status_code, 502)
+
+    def test_topic_502_on_exam_error(self):
+        with mock.patch.object(exam_router, "require_groq_key", lambda: None), \
+             mock.patch.object(exam_router.exam_service, "generate_exam_from_topic",
+                               side_effect=exam_service.ExamError("model exploded")):
+            res = self.client.post("/api/exam/topic", json={"topic": "OS"})
+        self.assertEqual(res.status_code, 502)
+        self.assertIn("model exploded", res.json()["detail"])
+
+
+class UploadEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self.client = _client()
+
+    def test_upload_happy_path(self):
+        questions = exam_service.validate_questions([dict(_MCQ), dict(_SHORT)])
+        with mock.patch.object(exam_router, "require_groq_key", lambda: None), \
+             mock.patch.object(exam_router, "extract_pdf_text", return_value="Extracted text.") as extract, \
+             mock.patch.object(exam_router.exam_service, "generate_exam",
+                               return_value={"questions": questions}) as gen:
+            res = self.client.post(
+                "/api/exam/upload",
+                data={"num_mcq": "1", "num_short": "1"},
+                files={"file": ("notes.pdf", b"%PDF-1.4 fake", "application/pdf")},
+            )
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["title"], "Exam · notes.pdf")
+        self.assertEqual(body["subject"], "notes.pdf")
+        self.assertEqual(len(body["questions"]), 2)
+        extract.assert_called_once()
+        self.assertEqual(gen.call_args.kwargs["num_mcq"], 1)
+
+    def test_upload_rejects_empty_file(self):
+        res = self.client.post(
+            "/api/exam/upload",
+            files={"file": ("empty.pdf", b"", "application/pdf")},
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_upload_rejects_pdf_without_text(self):
+        with mock.patch.object(exam_router, "extract_pdf_text", return_value=""):
+            res = self.client.post(
+                "/api/exam/upload",
+                files={"file": ("scan.pdf", b"%PDF-1.4 fake", "application/pdf")},
+            )
+        self.assertEqual(res.status_code, 422)
 
 
 class GradeEndpointTests(unittest.TestCase):

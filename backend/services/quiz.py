@@ -6,6 +6,7 @@ the QuizQuestion contract. Bounding the input keeps each request under the
 model's per-minute token limit instead of fanning out into many chunk calls.
 """
 import json
+import logging
 
 from groq import APIError, Groq
 
@@ -27,6 +28,17 @@ _MAX_OUTPUT_TOKENS: int = 2048
 def _output_tokens(num_questions: int) -> int:
     """Completion-token cap sized to the requested number of questions."""
     return max(_MIN_OUTPUT_TOKENS, min(_MAX_OUTPUT_TOKENS, num_questions * _TOKENS_PER_QUESTION + 256))
+
+
+log = logging.getLogger(__name__)
+
+_JSON_RETRIES = 3
+
+
+def _is_json_validate_failed(exc: Exception) -> bool:
+    """Groq's JSON mode 400s with code 'json_validate_failed' when the model emits
+    malformed JSON. Small models do this intermittently; a fresh sample usually fixes it."""
+    return "json_validate_failed" in str(exc).lower()
 
 
 class QuizError(Exception):
@@ -140,33 +152,54 @@ def _build_topic_prompt(topic: str, num_questions: int, difficulty: str) -> str:
 
 
 def _generate_from_prompt(prompt: str, model, max_tokens: int) -> list[QuizQuestion]:
-    """Call Groq once with a prepared prompt and return validated questions."""
+    """Call Groq with JSON mode and return validated questions.
+
+    Retries when the model emits malformed JSON: Groq's JSON mode rejects invalid
+    output with a 400 ``json_validate_failed`` (and a stray bad token from a small
+    model can also fail json.loads). A fresh sample almost always validates, so we
+    retry a few times before surfacing a friendly error — never the raw 400.
+    """
     require_groq_key()
     client = Groq()
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a helpful teacher creating quiz questions."},
-                {"role": "user", "content": prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.5,
-            max_tokens=max_tokens,
-        )
-        payload = response.choices[0].message.content
-        data = json.loads(payload or "{}")
-    except json.JSONDecodeError as exc:
-        raise QuizError(f"The model returned invalid JSON: {exc}") from exc
-    except APIError:
-        raise  # Groq errors (rate limit, auth, …) are formatted by the global handlers
-    except Exception as exc:  # noqa: BLE001 — wrap any other transport/SDK failure
-        raise QuizError(f"Quiz generation failed: {exc}") from exc
+    last_err: Exception | None = None
+    for attempt in range(_JSON_RETRIES):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system",
+                     "content": "You are a helpful teacher creating quiz questions. Reply with strictly valid JSON only."},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.5,
+                max_tokens=max_tokens,
+            )
+            payload = response.choices[0].message.content
+            data = json.loads(payload or "{}")
+        except json.JSONDecodeError as exc:
+            last_err = exc
+            log.warning("Quiz JSON parse failed (attempt %d/%d); retrying.", attempt + 1, _JSON_RETRIES)
+            continue
+        except APIError as exc:
+            # Retry the model's malformed-JSON 400; real Groq errors (rate limit, auth)
+            # still propagate to the global handlers.
+            if _is_json_validate_failed(exc):
+                last_err = exc
+                log.warning("Groq json_validate_failed (attempt %d/%d); retrying.", attempt + 1, _JSON_RETRIES)
+                continue
+            raise
+        except Exception as exc:  # noqa: BLE001 — wrap any other transport/SDK failure
+            raise QuizError(f"Quiz generation failed: {exc}") from exc
 
-    items = data.get("questions") if isinstance(data, dict) else None
-    if not isinstance(items, list):
-        return []
-    return [q for item in items if (q := _normalise_question(item)) is not None]
+        items = data.get("questions") if isinstance(data, dict) else None
+        questions = ([q for item in items if (q := _normalise_question(item)) is not None]
+                     if isinstance(items, list) else [])
+        if questions:
+            return questions
+        last_err = QuizError("the model returned no usable questions")
+
+    raise QuizError("Couldn't generate a valid quiz after a few tries — please try again.")
 
 
 def make_quiz(content: str, num_questions: int, difficulty: str, model: str | None = None) -> dict:

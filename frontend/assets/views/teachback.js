@@ -10,7 +10,8 @@
   const { el, esc, clear, toast, md, spinner } = window.ui;
 
   let session = null;        // { id, concept }
-  let source = "topic";      // "topic" | "subject"
+  let source = "topic";      // "topic" | "subject" | "upload"
+  let pdfFile = null;        // upload mode: the chosen PDF File
   let teardownLayout = null; // removes resize listeners on unmount
 
   // ── Responsive height (same approach as chat.js: document-relative offset,
@@ -39,10 +40,27 @@
   // ── Source row: Topic input OR Subject + PDF selects ──────
   function buildSourceRow(host) {
     clear(host);
+    pdfFile = null;
     if (source === "topic") {
       host.append(el(`
         <input id="tbTopic" class="input" type="text"
           placeholder="e.g. TCP congestion control" autocomplete="off" style="max-width:280px" />`));
+      return;
+    }
+    if (source === "upload") {
+      const wrap = el(`
+        <div class="row" style="gap:.5rem;align-items:center;flex-wrap:wrap">
+          <label class="btn" for="tbFile" style="cursor:pointer">Choose PDF…</label>
+          <span class="muted" id="tbFileName">No file selected</span>
+          <input id="tbFile" type="file" accept="application/pdf" hidden />
+        </div>`);
+      host.append(wrap);
+      const input = wrap.querySelector("#tbFile");
+      const nameSlot = wrap.querySelector("#tbFileName");
+      input.addEventListener("change", () => {
+        pdfFile = input.files && input.files[0] ? input.files[0] : null;
+        nameSlot.textContent = pdfFile ? pdfFile.name : "No file selected";
+      });
       return;
     }
     host.append(el(`<select id="tbSubject" class="select" style="max-width:200px"><option value="">Loading…</option></select>`));
@@ -177,7 +195,7 @@
     const thread = document.getElementById("tbThread");
     if (thread) {
       clear(thread);
-      thread.append(el(`<div class="empty"><div class="big">🗣</div><div>Pick a topic or a subject PDF, then teach the concept back in your own words.</div></div>`));
+      thread.append(el(`<div class="empty"><div class="big">🗣</div><div>Pick a topic, a subject PDF, or upload a PDF, then teach the concept back in your own words.</div></div>`));
     }
   }
 
@@ -189,16 +207,23 @@
     const setup = document.getElementById("tbSetup");
     if (!thread || !startBtn || !srcRow) return;
 
-    let payload;
+    const model = window.ui.selectedModel(setup);
+    let request;
     if (source === "topic") {
       const topic = srcRow.querySelector("#tbTopic")?.value.trim();
       if (!topic) { toast("Enter a topic first.", "error"); return; }
-      payload = { mode: "topic", topic, model: window.ui.selectedModel(setup) };
-    } else {
+      request = () => window.api.post("/teachback/start", { mode: "topic", topic, model });
+    } else if (source === "subject") {
       const subject = srcRow.querySelector("#tbSubject")?.value;
       const pdf = srcRow.querySelector("#tbPdf")?.value;
       if (!subject || !pdf) { toast("Pick a subject and a document first.", "error"); return; }
-      payload = { mode: "subject", subject, pdf, model: window.ui.selectedModel(setup) };
+      request = () => window.api.post("/teachback/start", { mode: "subject", subject, pdf, model });
+    } else {
+      if (!pdfFile) { toast("Choose a PDF first.", "error"); return; }
+      const fd = new FormData();
+      fd.append("file", pdfFile);
+      if (model) fd.append("model", model);
+      request = () => window.api.postForm("/teachback/start-upload", fd);
     }
 
     startBtn.disabled = true;
@@ -206,7 +231,7 @@
     clear(thread);
     thread.append(spinner("Choosing a concept for you to teach back…"));
     try {
-      const resp = await window.api.post("/teachback/start", payload);
+      const resp = await request();
       session = { id: resp.session_id, concept: resp.concept };
       clear(thread);
       appendMessage(thread, "assistant", resp.opening);
@@ -303,6 +328,7 @@
               <div class="seg" role="tablist" id="tbSrcSeg" aria-label="Teach-back source">
                 <button type="button" data-src="topic" aria-pressed="true">Topic</button>
                 <button type="button" data-src="subject" aria-pressed="false">Subject</button>
+                <button type="button" data-src="upload" aria-pressed="false">Upload PDF</button>
               </div>
               <div id="tbSrcRow" class="row" style="flex:1;gap:.6rem;flex-wrap:wrap"></div>
               <div id="tbModelCtl"></div>
@@ -313,7 +339,7 @@
 
           <div class="panel" style="flex:1;display:flex;flex-direction:column;padding:0;overflow:hidden">
             <div class="thread" id="tbThread">
-              <div class="empty"><div class="big">🗣</div><div>Pick a topic or a subject PDF, then teach the concept back in your own words.</div></div>
+              <div class="empty"><div class="big">🗣</div><div>Pick a topic, a subject PDF, or upload a PDF, then teach the concept back in your own words.</div></div>
             </div>
             <div class="composer" id="tbComposer">
               <input class="input" type="text" placeholder="Explain it in your own words…" aria-label="Your explanation" disabled />
@@ -359,7 +385,7 @@
     },
 
     unmount() {
-      session = null; source = "topic";
+      session = null; source = "topic"; pdfFile = null;
       if (teardownLayout) teardownLayout();
       document.getElementById("histPopover")?.remove();
       document.getElementById("histPopoverBg")?.remove();

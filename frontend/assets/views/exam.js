@@ -38,31 +38,29 @@
     stopTimer();
     clear(root);
 
+    let source = "subject";   // "subject" | "topic" | "upload"
+    let pdfFile = null;
+
     const panel = el(`
       <div class="panel stack" style="max-width:640px;margin:0 auto">
         <div class="between" style="align-items:flex-start">
           <div class="stack-sm" style="flex:1">
             <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em">Mock exam</h3>
-            <p class="muted">Pick a subject and its PDFs — Groq sets a timed paper of MCQs and short answers, then grades it.</p>
+            <p class="muted">Pick a source — Groq sets a timed paper of MCQs and short answers, then grades it.</p>
           </div>
           <span id="ex-hist-slot"></span>
         </div>
 
-        <div class="field" style="margin:0">
-          <label class="label" for="ex-subject">Subject</label>
-          <select class="select" id="ex-subject" aria-label="Select subject"><option value="">Loading subjects…</option></select>
+        <div class="field">
+          <span class="label">Source</span>
+          <div class="seg" id="ex-src" role="tablist" aria-label="Exam source">
+            <button type="button" data-src="subject" aria-pressed="true">Subject</button>
+            <button type="button" data-src="topic" aria-pressed="false">Topic</button>
+            <button type="button" data-src="upload" aria-pressed="false">Upload PDF</button>
+          </div>
         </div>
 
-        <div class="field" style="margin:0">
-          <div class="between">
-            <label class="label" for="ex-pdflist">Lecture PDFs</label>
-            <span class="badge badge-accent" id="ex-count">0 selected</span>
-          </div>
-          <div class="panel-soft stack-sm" id="ex-pdflist" role="group" aria-label="Choose PDFs">
-            <div class="muted">Pick a subject to list its PDFs.</div>
-          </div>
-          <p class="hint">Tick the documents the exam should cover.</p>
-        </div>
+        <div id="ex-srcctl"></div>
 
         <div class="grid-2">
           <div class="field" style="margin:0">
@@ -89,9 +87,8 @@
     root.append(panel);
     panel.querySelector("#ex-hist-slot").append(histButton(panel));
 
-    const subjectSel = panel.querySelector("#ex-subject");
-    const pdfList = panel.querySelector("#ex-pdflist");
-    const countBadge = panel.querySelector("#ex-count");
+    const srcSeg = panel.querySelector("#ex-src");
+    const srcCtl = panel.querySelector("#ex-srcctl");
     const mcqSel = panel.querySelector("#ex-mcq");
     const shortSel = panel.querySelector("#ex-short");
     const timerSel = panel.querySelector("#ex-timer");
@@ -106,11 +103,11 @@
 
     panel.querySelector("#ex-modelctl").append(window.ui.modelSelect());
 
-    const selectedPdfs = () =>
-      [...pdfList.querySelectorAll("input[type=checkbox]:checked")].map((c) => c.value);
-    const refreshCount = () => { countBadge.textContent = `${selectedPdfs().length} selected`; };
-
-    const loadPdfs = async (subject) => {
+    // ---- subject mode: load a subject's PDFs into a tickable checklist ----
+    const loadPdfs = async (subject, pdfList, countBadge) => {
+      const selected = () =>
+        [...pdfList.querySelectorAll("input[type=checkbox]:checked")].map((c) => c.value);
+      const refreshCount = () => { countBadge.textContent = `${selected().length} selected`; };
       pdfList.replaceChildren(spinner("Loading PDFs…"));
       refreshCount();
       try {
@@ -140,47 +137,141 @@
       }
     };
 
-    try {
-      const data = await window.api.get("/subjects");
-      const subjects = data.subjects || [];
-      clear(subjectSel);
-      if (!subjects.length) {
-        subjectSel.append(el(`<option value="">No subjects available</option>`));
-        pdfList.replaceChildren(el(`<div class="muted">Add a subject first to sit a mock exam.</div>`));
-      } else {
-        subjectSel.append(el(`<option value="" disabled selected>Select a subject…</option>`));
-        subjects.forEach((s) => subjectSel.append(el(`<option value="${esc(s)}">${esc(s)}</option>`)));
-        subjectSel.addEventListener("change", () => loadPdfs(subjectSel.value));
+    async function buildSubjectMode() {
+      const wrap = el(`
+        <div class="stack-sm">
+          <div class="field" style="margin:0">
+            <label class="label" for="ex-subject">Subject</label>
+            <select class="select" id="ex-subject" aria-label="Select subject"><option value="">Loading subjects…</option></select>
+          </div>
+          <div class="field" style="margin:0">
+            <div class="between">
+              <label class="label" for="ex-pdflist">Lecture PDFs</label>
+              <span class="badge badge-accent" id="ex-count">0 selected</span>
+            </div>
+            <div class="panel-soft stack-sm" id="ex-pdflist" role="group" aria-label="Choose PDFs">
+              <div class="muted">Pick a subject to list its PDFs.</div>
+            </div>
+            <p class="hint">Tick the documents the exam should cover.</p>
+          </div>
+        </div>`);
+      srcCtl.append(wrap);
+      const subjectSel = wrap.querySelector("#ex-subject");
+      const pdfList = wrap.querySelector("#ex-pdflist");
+      const countBadge = wrap.querySelector("#ex-count");
+      try {
+        const data = await window.api.get("/subjects");
+        const subjects = data.subjects || [];
+        clear(subjectSel);
+        if (!subjects.length) {
+          subjectSel.append(el(`<option value="">No subjects available</option>`));
+          pdfList.replaceChildren(el(`<div class="muted">Add a subject, or try Topic / Upload PDF.</div>`));
+        } else {
+          subjectSel.append(el(`<option value="" disabled selected>Select a subject…</option>`));
+          subjects.forEach((s) => subjectSel.append(el(`<option value="${esc(s)}">${esc(s)}</option>`)));
+          subjectSel.addEventListener("change", () => loadPdfs(subjectSel.value, pdfList, countBadge));
+        }
+      } catch (e) {
+        clear(subjectSel);
+        subjectSel.append(el(`<option value="">Couldn’t load subjects</option>`));
+        toast("Couldn’t load subjects: " + e.message, "error");
       }
-    } catch (e) {
-      clear(subjectSel);
-      subjectSel.append(el(`<option value="">Couldn’t load subjects</option>`));
-      toast("Couldn’t load subjects: " + e.message, "error");
     }
 
+    function buildTopicMode() {
+      srcCtl.append(el(`
+        <div class="field" style="margin:0">
+          <label class="label" for="ex-topic">Topic</label>
+          <input id="ex-topic" class="input" type="text" placeholder="e.g. Binary search trees" autocomplete="off" />
+          <div class="hint">The paper is written from the topic — no document needed.</div>
+        </div>`));
+    }
+
+    function buildUploadMode() {
+      const wrap = el(`
+        <div class="field" style="margin:0">
+          <label class="label">PDF</label>
+          <div class="row row-wrap">
+            <label class="btn" for="ex-file" style="cursor:pointer">Choose PDF…</label>
+            <span class="muted" id="ex-file-name">No file selected</span>
+          </div>
+          <input id="ex-file" type="file" accept="application/pdf" hidden />
+          <div class="hint">Upload a PDF and sit an exam on its contents.</div>
+        </div>`);
+      srcCtl.append(wrap);
+      const input = wrap.querySelector("#ex-file");
+      const nameSlot = wrap.querySelector("#ex-file-name");
+      input.addEventListener("change", () => {
+        pdfFile = input.files && input.files[0] ? input.files[0] : null;
+        nameSlot.textContent = pdfFile ? pdfFile.name : "No file selected";
+      });
+    }
+
+    function buildSource() {
+      clear(srcCtl);
+      pdfFile = null;
+      if (source === "subject") buildSubjectMode();
+      else if (source === "topic") buildTopicMode();
+      else buildUploadMode();
+    }
+
+    srcSeg.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-src]");
+      if (!btn) return;
+      source = btn.dataset.src;
+      srcSeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+      buildSource();
+    });
+
+    buildSource();
+
     goBtn.addEventListener("click", async () => {
-      const subject = subjectSel.value;
-      const pdfs = selectedPdfs();
       const numMcq = Number(mcqSel.value);
       const numShort = Number(shortSel.value);
-      if (!subject) { toast("Choose a subject first.", "error"); return; }
-      if (!pdfs.length) { toast("Select at least one PDF.", "error"); return; }
       if (numMcq + numShort === 0) { toast("Pick at least one question.", "error"); return; }
       const model = window.ui.selectedModel(panel);
       const minutes = Number(timerSel.value);
 
+      let label, request;
+      if (source === "subject") {
+        const subjectSel = srcCtl.querySelector("#ex-subject");
+        const subject = subjectSel ? subjectSel.value : "";
+        const pdfs = [...srcCtl.querySelectorAll("#ex-pdflist input[type=checkbox]:checked")].map((c) => c.value);
+        if (!subject) { toast("Choose a subject first.", "error"); return; }
+        if (!pdfs.length) { toast("Select at least one PDF.", "error"); return; }
+        label = subject;
+        request = () => window.api.post("/exam/generate", {
+          subject, pdfs, num_mcq: numMcq, num_short: numShort, model,
+        });
+      } else if (source === "topic") {
+        const topicEl = srcCtl.querySelector("#ex-topic");
+        const topic = topicEl ? topicEl.value.trim() : "";
+        if (!topic) { toast("Enter a topic first.", "error"); return; }
+        label = topic;
+        request = () => window.api.post("/exam/topic", {
+          topic, num_mcq: numMcq, num_short: numShort, model,
+        });
+      } else {
+        if (!pdfFile) { toast("Choose a PDF first.", "error"); return; }
+        label = pdfFile.name;
+        const fd = new FormData();
+        fd.append("file", pdfFile);
+        fd.append("num_mcq", String(numMcq));
+        fd.append("num_short", String(numShort));
+        if (model) fd.append("model", model);
+        request = () => window.api.postForm("/exam/upload", fd);
+      }
+
       goBtn.disabled = true;
       const original = goBtn.textContent;
       goBtn.textContent = "Setting the paper…";
-      const load = spinner("Reading your PDFs and writing the exam…");
+      const load = spinner(source === "topic" ? "Writing the exam…" : "Reading and writing the exam…");
       panel.append(load);
       try {
-        const res = await window.api.post("/exam/generate", {
-          subject, pdfs, num_mcq: numMcq, num_short: numShort, model,
-        });
+        const res = await request();
         const questions = (res && res.questions) || [];
         if (!questions.length) throw new Error("No questions came back; try again.");
-        renderExam(subject, questions, minutes, model);
+        renderExam(label, questions, minutes, model);
       } catch (e) {
         toast(e.message, "error");
         goBtn.disabled = false;

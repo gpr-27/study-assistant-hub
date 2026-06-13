@@ -11,7 +11,11 @@ from backend import config, db
 from backend.auth import current_owner
 from backend.config import MAX_CONTENT_TOKENS, require_groq_key
 from backend.documents import clip_to_tokens, extract_pdf_text, read_pdf
-from backend.services.cheatsheet import CheatsheetError, make_cheatsheet
+from backend.services.cheatsheet import (
+    CheatsheetError,
+    make_cheatsheet,
+    make_cheatsheet_from_topic,
+)
 
 router = APIRouter(prefix="/api/cheatsheet", tags=["cheatsheet"])
 
@@ -24,19 +28,19 @@ class CheatsheetRequest(BaseModel):
     model: str | None = None
 
 
+class CheatsheetTopicRequest(BaseModel):
+    topic: str
+    model: str | None = None
+
+
 class CheatsheetResponse(BaseModel):
     markdown: str
     title: str
     id: str | None = None
 
 
-def _build(owner: str, *, title: str, source: str, content: str, model: str | None) -> CheatsheetResponse:
-    """Run the single Groq call, save to history (tolerating no persistence), respond."""
-    require_groq_key()
-    try:
-        markdown = make_cheatsheet(content, model=model)
-    except CheatsheetError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+def _finalize(owner: str, markdown: str, *, title: str, source: str, model: str | None) -> CheatsheetResponse:
+    """Save the generated sheet to history (tolerating no persistence) and respond."""
     saved_id = db.save("cheatsheets", owner, {
         "title": title,
         "source": source,
@@ -44,6 +48,16 @@ def _build(owner: str, *, title: str, source: str, content: str, model: str | No
         "markdown": markdown,
     })
     return CheatsheetResponse(markdown=markdown, title=title, id=saved_id)
+
+
+def _build(owner: str, *, title: str, source: str, content: str, model: str | None) -> CheatsheetResponse:
+    """Run the single Groq call from document text, save to history, respond."""
+    require_groq_key()
+    try:
+        markdown = make_cheatsheet(content, model=model)
+    except CheatsheetError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _finalize(owner, markdown, title=title, source=source, model=model)
 
 
 @router.post("/generate", response_model=CheatsheetResponse)
@@ -61,6 +75,20 @@ def generate(request: CheatsheetRequest, owner: str = Depends(current_owner)) ->
         content=content,
         model=request.model,
     )
+
+
+@router.post("/topic", response_model=CheatsheetResponse)
+def topic(request: CheatsheetTopicRequest, owner: str = Depends(current_owner)) -> CheatsheetResponse:
+    """Build a cheat sheet about a free topic (no document)."""
+    label = (request.topic or "").strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="A topic is required.")
+    require_groq_key()
+    try:
+        markdown = make_cheatsheet_from_topic(label, model=request.model)
+    except CheatsheetError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _finalize(owner, markdown, title=f"Cheat sheet · {label}", source=label, model=request.model)
 
 
 @router.post("/upload", response_model=CheatsheetResponse)

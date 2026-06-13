@@ -41,7 +41,7 @@ from backend.services import quiz as quiz_service
 log = logging.getLogger(__name__)
 
 # ---- stage 1: regex gate (no LLM cost) ----
-_VERBS = r"(?:create|make|generate|build|prepare|design|predict|give\s+me|set\s+up|setup|can\s+you\s+(?:create|make|generate|build|predict))"
+_VERBS = r"(?:create|make|generate|build|prepare|design|predict|start|begin|take|attempt|give\s+me|set\s+up|setup|let'?s\s+(?:start|do|take|make|create|build|begin|generate)|can\s+you\s+(?:create|make|generate|build|predict|start|do|take|begin))"
 _TOOLS = r"(?:quiz(?:zes)?|test|flash\s?cards?|summar(?:y|ies|ize|ise)|study\s?plan|plan(?:ner)?|mind\s?map|cheat\s?sheet|predict(?:ion|or)?s?|likely\s+(?:exam\s+)?questions)"
 _GATE = re.compile(rf"\b{_VERBS}\b.{{0,60}}\b{_TOOLS}\b", re.IGNORECASE | re.DOTALL)
 

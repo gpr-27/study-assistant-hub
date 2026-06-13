@@ -188,9 +188,40 @@ def _build_exam_prompt(content: str, num_mcq: int, num_short: int) -> str:
     )
 
 
+def _build_exam_topic_prompt(topic: str, num_mcq: int, num_short: int) -> str:
+    """Build an exam prompt for a free topic (no document — uses the model's own
+    knowledge); the word JSON keeps Groq JSON mode happy."""
+    return (
+        f'Create a mock exam about the topic: "{topic}" — exactly {num_mcq} multiple '
+        f"choice questions and exactly {num_short} short-answer questions.\n\n"
+        "Rules:\n"
+        "- Questions must test understanding of the topic, not rote memorisation.\n"
+        "- Tag every question with a short topic label (a sub-area of the topic).\n"
+        "- Each MCQ has exactly 4 options and one correct option (answer_index 0-3).\n"
+        "- Each short-answer question lists 2-4 expected_points a good answer covers.\n\n"
+        "Return ONLY a JSON object with this exact structure:\n"
+        "{\n"
+        '  "questions": [\n'
+        '    {"type": "mcq", "question": "...", "options": ["...", "...", "...", "..."],'
+        ' "answer_index": 0, "topic": "..."},\n'
+        '    {"type": "short", "question": "...", "expected_points": ["...", "..."],'
+        ' "topic": "..."}\n'
+        "  ]\n"
+        "}"
+    )
+
+
 def _gen_output_tokens(num_mcq: int, num_short: int) -> int:
     budget = num_mcq * _GEN_TOKENS_PER_MCQ + num_short * _GEN_TOKENS_PER_SHORT + 256
     return max(_GEN_MIN_OUTPUT, min(_GEN_MAX_OUTPUT, budget))
+
+
+def _shape_exam_output(data: dict, mcq: int, short: int) -> dict:
+    """Validate a raw model payload and cap each question type to what was asked."""
+    questions = validate_questions(data.get("questions"))
+    mcqs = [q for q in questions if q["type"] == "mcq"][:mcq]
+    shorts = [q for q in questions if q["type"] == "short"][:short]
+    return {"questions": mcqs + shorts}
 
 
 def generate_exam(content: str, num_mcq: int = DEFAULT_MCQ, num_short: int = DEFAULT_SHORT,
@@ -214,11 +245,46 @@ def generate_exam(content: str, num_mcq: int = DEFAULT_MCQ, num_short: int = DEF
         model=model_for("exam", model),
         max_tokens=_gen_output_tokens(mcq, short),
     )
-    questions = validate_questions(data.get("questions"))
     # Never hand back more than was asked for, per type.
-    mcqs = [q for q in questions if q["type"] == "mcq"][:mcq]
-    shorts = [q for q in questions if q["type"] == "short"][:short]
-    return {"questions": mcqs + shorts}
+    return _shape_exam_output(data, mcq, short)
+
+
+def generate_exam_from_topic(topic: str, num_mcq: int = DEFAULT_MCQ, num_short: int = DEFAULT_SHORT,
+                             model: str | None = None) -> dict:
+    """Build an exam paper about a free topic, using the model's own knowledge.
+
+    Same return shape and validation as ``generate_exam`` ({"questions": [...]}
+    with server-validated, uniquely-id'd items). One bounded Groq call is enough
+    since there is no document to chunk; malformed items are dropped, never raised
+    on, and an entirely unusable payload yields an empty list (the router's 502).
+    """
+    if not topic or not topic.strip():
+        raise ExamError("No topic was supplied to build an exam from.")
+    mcq = max(0, min(MAX_MCQ, int(num_mcq)))
+    short = max(0, min(MAX_SHORT, int(num_short)))
+    if mcq + short == 0:
+        raise ExamError("An exam needs at least one question.")
+    prompt = _build_exam_topic_prompt(topic.strip(), mcq, short)
+    resolved = model_for("exam", model)
+    budget = _gen_output_tokens(mcq, short)
+    # Single Groq call here, so one malformed roll = total failure. Retry once
+    # before giving up (the global handler still surfaces a clear 502 if both fail).
+    data = _chat_json(
+        prompt,
+        system="You are an examiner writing a fair mock exam from your own subject knowledge.",
+        model=resolved,
+        max_tokens=budget,
+    )
+    shaped = _shape_exam_output(data, mcq, short)
+    if not shaped["questions"]:
+        data = _chat_json(
+            prompt,
+            system="You are an examiner writing a fair mock exam from your own subject knowledge.",
+            model=resolved,
+            max_tokens=budget,
+        )
+        shaped = _shape_exam_output(data, mcq, short)
+    return shaped
 
 
 # ---------------------------------------------------------------------------

@@ -8,12 +8,12 @@ defined locally (schemas.py is untouched).
 """
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from backend.auth import current_owner
 from backend.config import MAX_CONTENT_TOKENS, require_groq_key
-from backend.documents import clip_to_tokens, read_pdf
+from backend.documents import clip_to_tokens, extract_pdf_text, read_pdf
 from backend.services.teachback import (
     TeachbackError,
     TeachbackSessionError,
@@ -90,6 +90,32 @@ def start_teachback(request: TeachbackStartRequest, owner: str = Depends(current
         except TeachbackError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    return TeachbackStartResponse(session_id=session_id, concept=concept, opening=opening)
+
+
+@router.post("/start-upload", response_model=TeachbackStartResponse)
+async def start_teachback_upload(
+    file: UploadFile = File(...),
+    model: str | None = Form(None),
+    owner: str = Depends(current_owner),
+) -> TeachbackStartResponse:
+    """Open a session from a single uploaded PDF: extract its text and feed it as
+    subject-mode content to the session opener (no service change needed)."""
+    require_groq_key()
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The uploaded PDF was empty.")
+    text = extract_pdf_text(data)
+    if not text:
+        raise HTTPException(status_code=422, detail="No extractable text found in that PDF.")
+    fname = file.filename or "uploaded.pdf"
+    content = clip_to_tokens(text, MAX_CONTENT_TOKENS)
+    try:
+        session_id, concept, opening = start_session(
+            "subject", content=content, label=fname, model=model, owner=owner,
+        )
+    except TeachbackError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     return TeachbackStartResponse(session_id=session_id, concept=concept, opening=opening)
 
 

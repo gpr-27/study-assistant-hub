@@ -9,11 +9,20 @@
   "use strict";
   const { el, clear, esc, spinner, toast, md } = window.ui;
 
-  let source = "subject";   // "subject" | "upload"
+  let source = "subject";   // "subject" | "topic" | "upload"
   let pdfFile = null;       // File for upload mode
 
   function buildSourceControl(host) {
     clear(host);
+    if (source === "topic") {
+      host.append(el(`
+        <div class="field" style="margin:0">
+          <label class="label" for="csTopic">Topic</label>
+          <input id="csTopic" class="input" type="text" placeholder="e.g. Binary search trees" autocomplete="off" />
+          <div class="hint">The cheat sheet is written from the topic — no document needed.</div>
+        </div>`));
+      return;
+    }
     if (source === "subject") {
       const field = el(`
         <div class="stack-sm">
@@ -122,6 +131,11 @@
       if (!subject) { toast("Pick a subject.", "error"); return; }
       if (!pdf) { toast("Pick a document.", "error"); return; }
       call = () => window.api.post("/cheatsheet/generate", { mode: "subject", subject, pdf, model });
+    } else if (source === "topic") {
+      const topicEl = layout.querySelector("#csTopic");
+      const topic = topicEl ? topicEl.value.trim() : "";
+      if (!topic) { toast("Enter a topic first.", "error"); return; }
+      call = () => window.api.post("/cheatsheet/topic", { topic, model });
     } else {
       if (!pdfFile) { toast("Choose a PDF.", "error"); return; }
       call = () => { const fd = new FormData(); fd.append("file", pdfFile); if (model) fd.append("model", model); return window.api.postForm("/cheatsheet/upload", fd); };
@@ -165,6 +179,7 @@
             </div>
             <div class="seg" role="tablist" aria-label="Cheat sheet source">
               <button type="button" data-src="subject" aria-pressed="true">Subject PDF</button>
+              <button type="button" data-src="topic" aria-pressed="false">Topic</button>
               <button type="button" data-src="upload" aria-pressed="false">Upload PDF</button>
             </div>
             <div id="csSourceCtl"></div>
