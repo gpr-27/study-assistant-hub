@@ -135,6 +135,15 @@
     s.textContent = "Open in " + (art.tool || "the tool") + " →";
     meta.append(t, s);
     card.append(meta);
+    // Deep-link: when the artifact was persisted (has an id), hand it off so the
+    // target tool opens the ACTUAL saved item instead of its blank Setup page.
+    // Without an id (persistence off) keep the plain href navigation to the tool.
+    if (art.id) {
+      card.addEventListener("click", (e) => {
+        e.preventDefault();
+        window.ui.openArtifact(art.kind, art.id, art.route || "#home");
+      });
+    }
     thread.append(card);
   }
 
@@ -320,8 +329,37 @@
       card.append(qs);
     }
 
+    // The merged chat both answers AND builds — surface that here with a small
+    // labelled row of tappable "build" prompts, each of which sends through the
+    // same path a typed message uses.
+    card.append(buildPromptChips());
+
     thread.append(card);
     thread.scrollTop = thread.scrollHeight;
+  }
+
+  // ── "Build" example prompts (discoverability) ─────────────
+  //    Reuses the shared .agent-prompt-chips / .agent-prompt-chip styling.
+  const BUILD_PROMPTS = [
+    "Make a quiz",
+    "Create a cheat sheet",
+    "Generate flashcards",
+    "Build a mind map",
+    "Make a 2-week study plan",
+  ];
+
+  function buildPromptChips() {
+    const wrap = el(`<div class="chat-overview-build"></div>`);
+    wrap.append(el(`<div class="chat-overview-build-label muted">Or ask me to build something:</div>`));
+    const chips = el(`<div class="agent-prompt-chips"></div>`);
+    BUILD_PROMPTS.forEach((p) => {
+      const chip = el(`<button class="agent-prompt-chip" type="button"></button>`);
+      chip.textContent = p;
+      chip.addEventListener("click", () => askQuestion(p));
+      chips.append(chip);
+    });
+    wrap.append(chips);
+    return wrap;
   }
 
   // Send a starter question through the EXISTING send path (same code a typed

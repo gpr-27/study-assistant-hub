@@ -141,12 +141,24 @@
 
       const showResults = (node) => { clear(results); results.append(node); };
 
+      const openSavedPrediction = (saved) =>
+        showResults(renderResults(saved || {}, (saved && saved.title) || "Saved predictions"));
+
       root.querySelector("#pr-hist").addEventListener("click", (e) =>
         window.ui.openHistoryDrawer("predictions", {
           title: "Saved predictions",
           anchor: e.currentTarget,
-          onOpen: (saved) => showResults(renderResults(saved || {}, (saved && saved.title) || "Saved predictions")),
+          onOpen: openSavedPrediction,
         }));
+
+      // Deep-link handoff: a chat artifact card may have asked us to open a
+      // specific saved prediction — load it via the same saved-open path.
+      const _art = window.ui.takeArtifact(["predictions"]);
+      if (_art) {
+        window.api.get(`/history/${_art.kind}/${encodeURIComponent(_art.id)}`)
+          .then(openSavedPrediction)
+          .catch(() => {});
+      }
 
       filesInput.addEventListener("change", () => {
         pdfFiles = filesInput.files ? [...filesInput.files] : [];

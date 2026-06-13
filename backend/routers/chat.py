@@ -30,13 +30,13 @@ def start_session(request: ChatStartRequest, owner: str = Depends(current_owner)
         if not request.subject:
             raise HTTPException(status_code=400, detail="A subject is required for subject mode.")
         session_id, label, chat_id = chat_service.start_subject_session(
-            request.subject, model=request.model, owner=owner, autonomous=request.autonomous
+            request.subject, model=request.model, owner=owner
         )
     elif mode == "topic":
         if not request.topic:
             raise HTTPException(status_code=400, detail="A topic is required for topic mode.")
         session_id, label, chat_id = chat_service.start_topic_session(
-            request.topic, model=request.model, owner=owner, autonomous=request.autonomous
+            request.topic, model=request.model, owner=owner
         )
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported chat mode: {mode}")

@@ -526,15 +526,33 @@ ${contentHtml}
     setTimeout(() => { try { w.focus(); w.print(); } catch (_) {} }, 350);
   }
 
+  /* ---------------- artifact deep-link handoff ---------------- */
+  // A chat artifact card stashes {kind, id} here, navigates to the tool's route,
+  // and the destination view claims it on mount to open the real saved item.
+  let _pendingArtifact = null;
+  function openArtifact(kind, id, route) {
+    _pendingArtifact = { kind, id };
+    location.hash = route;
+  }
+  function takeArtifact(kinds) {
+    if (_pendingArtifact && kinds.includes(_pendingArtifact.kind)) {
+      const art = _pendingArtifact;
+      _pendingArtifact = null;
+      return art;
+    }
+    return null;
+  }
+
   window.ui = {
     el, clear, esc, spinner, empty, toast, md: renderMarkdown, copy: copyToClipboard,
     modelSelect, selectedModel, historyPanel, openHistoryDrawer, printDoc,
+    openArtifact, takeArtifact,
   };
 
   /* ---------------- view registry ---------------- */
   window.Views = window.Views || {};
   const TITLES = {
-    chat: "Chat Assistant", agent: "Autonomous Agent", quiz: "Quiz Generator", flashcards: "Flashcards",
+    chat: "Chat Assistant", quiz: "Quiz Generator", flashcards: "Flashcards",
     planner: "Study Planner", mindmap: "Mind Map", subjects: "Add a Subject",
     exam: "Mock Exam", teachback: "Teach-back Tutor", predictor: "Question Predictor",
     progress: "Progress", cheatsheet: "Cheat Sheet", scannotes: "Scan Notes",

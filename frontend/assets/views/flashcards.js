@@ -113,6 +113,10 @@
     aside.querySelector("#fc-hist").addEventListener("click", (e) =>
       window.ui.openHistoryDrawer("flashcards", { title: "Saved decks", anchor: e.currentTarget, onOpen: openSavedDeck }));
 
+    // Deep-link handoff: if a chat artifact card sent us here, open that saved deck (best-effort).
+    const _art = window.ui.takeArtifact(["flashcards"]);
+    if (_art) window.api.get(`/history/${_art.kind}/${encodeURIComponent(_art.id)}`).then(openSavedDeck).catch(() => {});
+
     // --- source builders (closures: need srcCtl / genBtn / main) ---
     async function buildSubjectMode() {
       const subjectSel = el(`<select class="select" id="fc-subject" aria-label="Subject"></select>`);

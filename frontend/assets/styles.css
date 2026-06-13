@@ -16,7 +16,6 @@
   --c-plan:  158 78% 55%;
   --c-add:   330 85% 66%;   /* "Add a Subject" nav action — distinct from the tools */
   --c-mind:  222 90% 66%;   /* Mind Map tool accent */
-  --c-agent: 295 88% 66%;   /* Autonomous Agent tool accent */
 
   --ease-spring: cubic-bezier(.16, 1, .3, 1);
   --ease-out: cubic-bezier(.22, .61, .36, 1);
@@ -259,7 +258,6 @@ a { color: inherit; }
 #view[hidden], #home[hidden] { display: none; }
 .view { animation: rise .6s var(--ease-spring) both; }
 [data-accent="chat"]  { --accent: var(--c-chat); }
-[data-accent="agent"] { --accent: var(--c-agent); }
 [data-accent="quiz"]  { --accent: var(--c-quiz); }
 [data-accent="cards"], [data-accent="flashcards"] { --accent: var(--c-cards); }
 [data-accent="plan"], [data-accent="planner"] { --accent: var(--c-plan); }
@@ -386,10 +384,8 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border: 0; bo
    tighter gaps push more of the screen into the conversation area. The shell
    height is measured live (installShellSizing), so a shorter header above it
    grows the thread automatically. */
-.view[data-accent="chat"] .view-head,
-.view[data-accent="agent"] .view-head { margin: .55rem 0 .65rem; }
-.view[data-accent="chat"] .view-head h2,
-.view[data-accent="agent"] .view-head h2 { font-size: clamp(1.35rem, 4.5vw, 1.95rem); }
+.view[data-accent="chat"] .view-head { margin: .55rem 0 .65rem; }
+.view[data-accent="chat"] .view-head h2 { font-size: clamp(1.35rem, 4.5vw, 1.95rem); }
 .chat-minibar { display: flex; align-items: center; gap: .5rem; padding: .45rem .6rem; border-radius: var(--r-md); }
 #chatOptionsBtn.is-open { border-color: hsl(var(--accent) / .6); color: hsl(var(--ink)); }
 .chat-src-bar { padding: .75rem 1rem; border-radius: var(--r-md); }
@@ -1083,10 +1079,9 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
    document window — the old in-page @media print visibility hack produced
    broken PDFs over the glassy shell. */
 
-/* ============ Autonomous Agent ============ */
-/* ---- Autonomous Agent (agent.js): clones the chat shell, so it reuses the
-   .chat-* thread/artifact classes. Only the empty-state example-prompt chips
-   are unique to this view. ---- */
+/* ============ Chat empty-state example-prompt chips ============ */
+/* ---- Tappable starter/build prompts shown in the Chat Assistant empty state
+   (alongside the session-start overview card). ---- */
 .agent-prompt-chips { display: flex; flex-wrap: wrap; gap: .5rem; justify-content: center; margin-top: 1.1rem; }
 .agent-prompt-chip {
   border: 1px solid hsl(var(--accent) / .45); background: hsl(var(--accent) / .1);

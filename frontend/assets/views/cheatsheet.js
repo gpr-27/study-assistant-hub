@@ -184,6 +184,10 @@
       layout.querySelector("#cs-hist").addEventListener("click", (e) =>
         window.ui.openHistoryDrawer("cheatsheets", { title: "Saved cheat sheets", anchor: e.currentTarget, onOpen: openSavedSheet }));
 
+      // Deep-link handoff: if a chat artifact card sent us here, open that saved sheet.
+      const _art = window.ui.takeArtifact(["cheatsheets"]);
+      if (_art) window.api.get(`/history/${_art.kind}/${encodeURIComponent(_art.id)}`).then(openSavedSheet).catch(() => {});
+
       const seg = layout.querySelector(".seg");
       const sourceCtl = layout.querySelector("#csSourceCtl");
       buildSourceControl(sourceCtl);

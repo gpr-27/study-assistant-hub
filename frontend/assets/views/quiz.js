@@ -13,6 +13,12 @@
   let root = null;
   let lastMeta = null; // {subject, topic} of the most recent quiz — for progress recording
 
+  // Open a saved quiz doc (history drawer item or chat-artifact deep-link).
+  function openSavedQuiz(saved) {
+    lastMeta = { topic: (saved && saved.title) || null };
+    renderRunner((saved && saved.questions) || []);
+  }
+
   /* ---------------- setup screen ---------------- */
   async function renderSetup() {
     clear(root);
@@ -63,7 +69,7 @@
       window.ui.openHistoryDrawer("quizzes", {
         title: "Saved quizzes",
         anchor: e.currentTarget,
-        onOpen: (saved) => { lastMeta = { topic: (saved && saved.title) || null }; renderRunner((saved && saved.questions) || []); },
+        onOpen: openSavedQuiz,
       }));
 
     const srcSeg = panel.querySelector("#q-src");
@@ -396,6 +402,9 @@
     async mount(node) {
       root = node;
       await renderSetup();
+      // Chat-artifact deep-link: open the saved quiz instead of leaving Setup showing.
+      const _art = window.ui.takeArtifact(["quizzes"]);
+      if (_art) window.api.get(`/history/${_art.kind}/${encodeURIComponent(_art.id)}`).then(openSavedQuiz).catch(() => {});
     },
     unmount() {
       if (root) clear(root);

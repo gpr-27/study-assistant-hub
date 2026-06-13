@@ -418,6 +418,10 @@
       layout.querySelector("#mm-hist").addEventListener("click", (e) =>
         window.ui.openHistoryDrawer("mindmaps", { title: "Saved mind maps", anchor: e.currentTarget, onOpen: openSavedMindmap }));
 
+      // Deep-link handoff: a chat artifact card may have asked us to open a saved mind map.
+      const _art = window.ui.takeArtifact(["mindmaps"]);
+      if (_art) window.api.get(`/history/${_art.kind}/${encodeURIComponent(_art.id)}`).then(openSavedMindmap).catch(() => {});
+
       const seg = layout.querySelector(".seg");
       const sourceCtl = layout.querySelector("#mmSourceCtl");
       buildSourceControl(sourceCtl);

@@ -125,6 +125,14 @@
       root.querySelector("#pl-hist-summaries").addEventListener("click", (e) =>
         window.ui.openHistoryDrawer("summaries", { title: "Saved summaries", anchor: e.currentTarget, onOpen: openSavedSummary }));
 
+      // Deep-link handoff from a chat artifact card -> open the saved item directly.
+      const _art = window.ui.takeArtifact(["plans", "summaries"]);
+      if (_art) {
+        window.api.get(`/history/${_art.kind}/${encodeURIComponent(_art.id)}`)
+          .then((doc) => { _art.kind === "summaries" ? openSavedSummary(doc) : openSavedPlan(doc); })
+          .catch(() => {});
+      }
+
       root.querySelector("#pl-modelctl").append(window.ui.modelSelect());
 
       dateInput.value = todayPlus(7);
