@@ -38,6 +38,7 @@ class ChatStartRequest(BaseModel):
     subject: str | None = None
     topic: str | None = None
     model: ModelOverride = None     # UI model selector (validated against AVAILABLE_MODELS)
+    autonomous: bool = False        # Autonomous Agent view: orchestrate tools (regular chat = False)
 
 
 class ChatSessionResponse(BaseModel):

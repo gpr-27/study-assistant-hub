@@ -534,7 +534,7 @@ ${contentHtml}
   /* ---------------- view registry ---------------- */
   window.Views = window.Views || {};
   const TITLES = {
-    chat: "Chat Assistant", quiz: "Quiz Generator", flashcards: "Flashcards",
+    chat: "Chat Assistant", agent: "Autonomous Agent", quiz: "Quiz Generator", flashcards: "Flashcards",
     planner: "Study Planner", mindmap: "Mind Map", subjects: "Add a Subject",
     exam: "Mock Exam", teachback: "Teach-back Tutor", predictor: "Question Predictor",
     progress: "Progress", cheatsheet: "Cheat Sheet", scannotes: "Scan Notes",

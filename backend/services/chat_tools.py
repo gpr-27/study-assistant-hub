@@ -31,23 +31,26 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from backend import config, db
 from backend.config import MAX_CONTENT_TOKENS
 from backend.documents import clip_to_tokens, list_pdf_names, read_pdf
+from backend.services import cheatsheet as cheatsheet_service
 from backend.services import flashcards as flashcards_service
 from backend.services import mindmap as mindmap_service
 from backend.services import planner as planner_service
+from backend.services import predictor as predictor_service
 from backend.services import quiz as quiz_service
 
 log = logging.getLogger(__name__)
 
 # ---- stage 1: regex gate (no LLM cost) ----
-_VERBS = r"(?:create|make|generate|build|prepare|design|give\s+me|set\s+up|setup|can\s+you\s+(?:create|make|generate|build))"
-_TOOLS = r"(?:quiz(?:zes)?|test|flash\s?cards?|summar(?:y|ies|ize|ise)|study\s?plan|plan(?:ner)?|mind\s?map)"
+_VERBS = r"(?:create|make|generate|build|prepare|design|predict|give\s+me|set\s+up|setup|can\s+you\s+(?:create|make|generate|build|predict))"
+_TOOLS = r"(?:quiz(?:zes)?|test|flash\s?cards?|summar(?:y|ies|ize|ise)|study\s?plan|plan(?:ner)?|mind\s?map|cheat\s?sheet|predict(?:ion|or)?s?|likely\s+(?:exam\s+)?questions)"
 _GATE = re.compile(rf"\b{_VERBS}\b.{{0,60}}\b{_TOOLS}\b", re.IGNORECASE | re.DOTALL)
 
 _INTENT_SYSTEM = (
     "You classify whether a student's chat message is a request to CREATE a study "
-    "artifact (quiz, flashcards, summary, study plan, or mind map), and extract "
-    "parameters. Questions ABOUT these things (e.g. 'what is a mind map?') are NOT "
-    "creation requests. Always reply with valid JSON only."
+    "artifact (quiz, flashcards, summary, study plan, mind map, cheat sheet, or "
+    "exam-question predictions), and extract parameters. Questions ABOUT these "
+    "things (e.g. 'what is a mind map?') are NOT creation requests. Always reply "
+    "with valid JSON only."
 )
 
 _TOOL_ROUTES = {
@@ -56,6 +59,8 @@ _TOOL_ROUTES = {
     "summary": ("summaries", "#planner", "Study Planner"),
     "plan": ("plans", "#planner", "Study Planner"),
     "mindmap": ("mindmaps", "#mindmap", "Mind Map"),
+    "cheatsheet": ("cheatsheets", "#cheatsheet", "Cheat Sheet"),
+    "predictor": ("predictions", "#predictor", "Question Predictor"),
 }
 
 
@@ -66,7 +71,7 @@ def detect_intent(llm, message: str) -> dict | None:
     instruction = (
         f"Message: {message}\n\n"
         'Return ONLY JSON: {"is_request": true|false, '
-        '"tool": "quiz"|"flashcards"|"summary"|"plan"|"mindmap"|null, '
+        '"tool": "quiz"|"flashcards"|"summary"|"plan"|"mindmap"|"cheatsheet"|"predictor"|null, '
         '"topic": "<specific topic mentioned, or null>", '
         '"count": <number of questions/cards if mentioned, else null>, '
         '"days": <days until target date if mentioned, else null>}'
@@ -109,6 +114,32 @@ def _subject_content(subject: str, owner: str | None) -> tuple[str, list[str]]:
     if not parts:
         raise _ToolFailure(f"Couldn't read any PDFs in “{subject}”.")
     return clip_to_tokens("\n\n".join(parts), MAX_CONTENT_TOKENS), pdfs[:3]
+
+
+def _subject_papers_corpus(subject: str, owner: str | None) -> tuple[str, list[str]]:
+    """Build a paper-labelled corpus for the predictor, matching its router.
+
+    The Question Predictor's prompt tells the model the papers are separated by
+    ``=== PAPER: <filename> ===`` markers (see routers/predictor.py). Reusing
+    ``_subject_content`` would feed ``## <name>`` headers instead, so the model
+    is told to key on a separator that isn't there — degrading cross-paper
+    pattern detection. This emits the exact markers the router does. Returns
+    ``(corpus, used_pdfs)`` where ``used_pdfs`` is only the papers actually read.
+    """
+    pdfs = list_pdf_names(subject, owner)
+    if not pdfs:
+        raise _ToolFailure(f"“{subject}” has no past papers to analyze.")
+    parts: list[str] = []
+    used: list[str] = []
+    for pdf in pdfs[:3]:  # a few papers stay within the token budget
+        try:
+            parts.append(f"=== PAPER: {pdf} ===\n{read_pdf(subject, pdf, owner)}")
+            used.append(pdf)
+        except Exception:  # noqa: BLE001 — skip unreadable PDFs, keep the rest
+            continue
+    if not parts:
+        raise _ToolFailure(f"Couldn't read any papers in “{subject}”.")
+    return clip_to_tokens("\n\n".join(parts), MAX_CONTENT_TOKENS), used
 
 
 class _ToolFailure(Exception):
@@ -219,7 +250,7 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
             })
             detail = f"through {target}"
 
-        else:  # mindmap
+        elif tool == "mindmap":
             if subject:
                 content, _ = _subject_content(subject, owner)
                 root = mindmap_service.generate_mindmap(content=content)
@@ -237,6 +268,39 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
                 "model": config.model_for("mindmap", None), "root": root,
             })
             detail = None
+
+        elif tool == "cheatsheet":
+            if not subject:
+                raise _ToolFailure(
+                    "cheat sheets are built from documents — start a Subject chat so I have "
+                    "PDFs to condense."
+                )
+            content, _ = _subject_content(subject, owner)
+            markdown = cheatsheet_service.make_cheatsheet(content)
+            title = f"Cheat Sheet · {subject}"
+            saved_id = db.save("cheatsheets", owner, {
+                "title": title, "source": subject,
+                "model": config.model_for("cheatsheet", None), "markdown": markdown,
+            })
+            detail = None
+
+        else:  # predictor
+            if not subject:
+                raise _ToolFailure(
+                    "predictions are built from past papers — start a Subject chat so I have "
+                    "papers to analyze."
+                )
+            corpus, pdfs = _subject_papers_corpus(subject, owner)
+            data = predictor_service.predict_questions(corpus, subject_hint=subject)
+            predicted = data.get("predicted_questions") or []
+            patterns = data.get("patterns") or []
+            title = f"Predictions · {subject}"
+            saved_id = db.save("predictions", owner, {
+                "title": title, "source": subject, "subject": subject,
+                "model": config.model_for("predictor", None), "num_papers": len(pdfs),
+                "patterns": patterns, "predicted_questions": predicted,
+            })
+            detail = f"{len(predicted)} likely questions"
 
     except _ToolFailure as exc:
         steps.append(_trace("Couldn't create it", str(exc)))

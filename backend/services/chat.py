@@ -89,11 +89,13 @@ def _register(session: dict) -> str:
     return session_id
 
 
-def start_subject_session(subject: str, model: str | None = None, owner: str = LOCAL_OWNER) -> tuple[str, str, str | None]:
+def start_subject_session(subject: str, model: str | None = None, owner: str = LOCAL_OWNER, autonomous: bool = False) -> tuple[str, str, str | None]:
     """Start a session backed by a subject's persistent FAISS index.
 
     The index is built once and reloaded from disk on later runs (see
-    backend.vector_store), so reopening a subject is fast.
+    backend.vector_store), so reopening a subject is fast. When ``autonomous`` is
+    True the session is the Autonomous Agent view, which orchestrates tools; the
+    regular Chat Assistant leaves it False for pure RAG.
     """
     retriever = vector_store.get_subject_retriever(subject, _RETRIEVE_K, owner)
     label = f"Subject · {subject}"
@@ -110,12 +112,17 @@ def start_subject_session(subject: str, model: str | None = None, owner: str = L
         "owner": owner,
         "chat_id": chat_id,
         "persona": _subject_persona(subject, owner),
+        "autonomous": autonomous,
     })
     return session_id, label, chat_id
 
 
-def start_topic_session(topic: str, model: str | None = None, owner: str = LOCAL_OWNER) -> tuple[str, str, str | None]:
-    """Start a document-free session that teaches a specific topic."""
+def start_topic_session(topic: str, model: str | None = None, owner: str = LOCAL_OWNER, autonomous: bool = False) -> tuple[str, str, str | None]:
+    """Start a document-free session that teaches a specific topic.
+
+    When ``autonomous`` is True the session is the Autonomous Agent view, which
+    orchestrates tools; the regular Chat Assistant leaves it False for pure RAG.
+    """
     label = f"Topic · {topic}"
     chat_id = db.create_chat(owner, {"mode": "topic", "topic": topic, "label": label,
                                      "model": model_for("chat", model)})
@@ -129,6 +136,7 @@ def start_topic_session(topic: str, model: str | None = None, owner: str = LOCAL
         "subject": None,
         "owner": owner,
         "chat_id": chat_id,
+        "autonomous": autonomous,
     })
     return session_id, label, chat_id
 
@@ -158,6 +166,7 @@ def start_pdf_session(file_bytes: bytes, filename: str, model: str | None = None
         "subject": None,
         "owner": owner,
         "chat_id": chat_id,
+        "autonomous": False,
     })
     return session_id, label, chat_id
 
@@ -223,12 +232,18 @@ def ask(session_id: str, message: str) -> dict:
 
     persona = session.get("persona") or _SUBJECT_PERSONA_BASE
 
-    # Tool orchestration: "create a quiz/flashcards/summary/plan/mind map" requests
-    # are detected (cheap gate + one small LLM call) and fulfilled by the matching
-    # tool, saved to its history. Anything else falls through to the normal answer.
-    from backend.services import chat_tools
-    intent = chat_tools.detect_intent(session["llm"], message)
-    tool_result = chat_tools.run_tool(session, intent, message) if intent else None
+    # Tool orchestration is exclusive to the Autonomous Agent view. Only when the
+    # session was started with autonomous=True do we detect "create a cheat sheet /
+    # quiz / flashcards / summary / plan / mind map / prediction" requests (cheap
+    # gate + one small LLM call) and fulfil them via the matching tool, saving to
+    # its history. The regular Chat Assistant (autonomous=False) is pure RAG and
+    # never touches chat_tools — anything that isn't a fulfilled tool result falls
+    # through to the normal RAG/agentic answer below.
+    tool_result = None
+    if session.get("autonomous"):
+        from backend.services import chat_tools
+        intent = chat_tools.detect_intent(session["llm"], message)
+        tool_result = chat_tools.run_tool(session, intent, message) if intent else None
     if tool_result is not None:
         answer = tool_result["answer"]
         steps = tool_result["steps"]
@@ -335,6 +350,7 @@ def resume_session(owner: str, chat_id: str) -> tuple[str, str, str, str, list[d
         "owner": owner,
         "chat_id": chat_id,
         "persona": _subject_persona(subject, owner) if mode == "subject" and subject else None,
+        "autonomous": False,
     })
     messages = [{"role": m.get("role"), "content": m.get("content", "")} for m in stored]
     return session_id, label, mode, chat_id, messages

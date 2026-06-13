@@ -47,6 +47,42 @@ class GateTests(unittest.TestCase):
         llm = FakeLLM(["not json at all"])
         self.assertIsNone(chat_tools.detect_intent(llm, "make me a mind map of recursion"))
 
+    def test_cheatsheet_request_detected(self):
+        llm = FakeLLM(['{"is_request": true, "tool": "cheatsheet", "topic": null, "count": null, "days": null}'])
+        intent = chat_tools.detect_intent(llm, "create a cheat sheet for this subject")
+        self.assertEqual(intent["tool"], "cheatsheet")
+        self.assertEqual(len(llm.calls), 1)  # gate passed, LLM confirmed
+
+    def test_predictor_request_detected(self):
+        llm = FakeLLM(['{"is_request": true, "tool": "predictor", "topic": null, "count": null, "days": null}'])
+        intent = chat_tools.detect_intent(llm, "predict likely exam questions")
+        self.assertEqual(intent["tool"], "predictor")
+        self.assertEqual(len(llm.calls), 1)
+
+    def test_new_phrasings_pass_the_regex_gate(self):
+        """The gate must let the new cheatsheet/predictor phrasings reach the LLM."""
+        for phrase in (
+            "create a cheat sheet for this subject",
+            "make a cheatsheet",
+            "predict likely exam questions",
+            "generate exam predictions",
+            "generate the likely exam questions for me",
+        ):
+            llm = FakeLLM(['{"is_request": true, "tool": "cheatsheet", "topic": null, "count": null, "days": null}'])
+            chat_tools.detect_intent(llm, phrase)
+            self.assertEqual(len(llm.calls), 1, f"gate should pass for: {phrase!r}")
+
+    def test_plain_questions_about_new_tools_skip_the_llm(self):
+        """Plain questions (no creation verb) must not trip the gate or cost an LLM call."""
+        llm = FakeLLM([])
+        for phrase in (
+            "what is a cheat sheet?",
+            "how do exam predictors work?",
+            "why are likely questions useful for revision?",
+        ):
+            self.assertIsNone(chat_tools.detect_intent(llm, phrase))
+        self.assertEqual(llm.calls, [])
+
 
 def _subject_session(**over):
     base = {"mode": "subject", "subject": "DBMS", "topic": None, "owner": "u1", "llm": FakeLLM([])}
@@ -106,24 +142,123 @@ class RunToolTests(unittest.TestCase):
         self.assertIsNone(out["artifact"])
         self.assertIn("something went wrong", out["answer"])
 
+    def test_cheatsheet_from_subject_saves_router_shape(self):
+        with mock.patch.object(chat_tools, "_subject_content", return_value=("CONTENT", ["a.pdf", "b.pdf"])), \
+             mock.patch.object(chat_tools.cheatsheet_service, "make_cheatsheet", return_value="# Cheat") as mk, \
+             mock.patch.object(chat_tools.db, "save", return_value="cs1") as save:
+            out = chat_tools.run_tool(_subject_session(), {"tool": "cheatsheet", "topic": None, "count": None, "days": None}, "m")
+        mk.assert_called_once_with("CONTENT")
+        kind, owner, doc = save.call_args.args
+        self.assertEqual((kind, owner), ("cheatsheets", "u1"))
+        self.assertEqual(doc["title"], "Cheat Sheet · DBMS")
+        self.assertEqual(doc["source"], "DBMS")
+        self.assertEqual(doc["markdown"], "# Cheat")
+        self.assertEqual(out["artifact"]["kind"], "cheatsheets")
+        self.assertEqual(out["artifact"]["route"], "#cheatsheet")
+        self.assertEqual(out["artifact"]["id"], "cs1")
+
+    def test_cheatsheet_in_topic_session_gives_readable_failure(self):
+        out = chat_tools.run_tool(_topic_session(), {"tool": "cheatsheet", "topic": None, "count": None, "days": None}, "m")
+        self.assertIsNone(out["artifact"])
+        self.assertIn("documents", out["answer"])
+
+    def test_predictor_from_subject_saves_router_shape(self):
+        predicted = [{"question": "Explain X", "why": "common"}]
+        patterns = ["pattern A"]
+        with mock.patch.object(chat_tools, "_subject_papers_corpus", return_value=("CORPUS", ["p1.pdf", "p2.pdf"])), \
+             mock.patch.object(chat_tools.predictor_service, "predict_questions",
+                               return_value={"predicted_questions": predicted, "patterns": patterns}) as mk, \
+             mock.patch.object(chat_tools.db, "save", return_value="pr1") as save:
+            out = chat_tools.run_tool(_subject_session(), {"tool": "predictor", "topic": None, "count": None, "days": None}, "m")
+        mk.assert_called_once_with("CORPUS", subject_hint="DBMS")
+        kind, owner, doc = save.call_args.args
+        self.assertEqual((kind, owner), ("predictions", "u1"))
+        self.assertEqual(doc["title"], "Predictions · DBMS")
+        self.assertEqual(doc["subject"], "DBMS")
+        self.assertEqual(doc["num_papers"], 2)
+        self.assertEqual(doc["patterns"], patterns)
+        self.assertEqual(doc["predicted_questions"], predicted)
+        self.assertEqual(out["artifact"]["kind"], "predictions")
+        self.assertEqual(out["artifact"]["route"], "#predictor")
+        self.assertEqual(out["artifact"]["id"], "pr1")
+
+    def test_predictor_in_topic_session_gives_readable_failure(self):
+        out = chat_tools.run_tool(_topic_session(), {"tool": "predictor", "topic": None, "count": None, "days": None}, "m")
+        self.assertIsNone(out["artifact"])
+        self.assertIn("papers", out["answer"])
+
+    def test_cheatsheet_tolerates_persistence_off(self):
+        """db.save returns None when persistence is off — the artifact id is None, no crash."""
+        with mock.patch.object(chat_tools, "_subject_content", return_value=("CONTENT", ["a.pdf"])), \
+             mock.patch.object(chat_tools.cheatsheet_service, "make_cheatsheet", return_value="# Cheat"), \
+             mock.patch.object(chat_tools.db, "save", return_value=None):
+            out = chat_tools.run_tool(_subject_session(), {"tool": "cheatsheet", "topic": None, "count": None, "days": None}, "m")
+        self.assertIsNone(out["artifact"]["id"])
+        self.assertEqual(out["artifact"]["kind"], "cheatsheets")
+
+
+def _agent_session(**over):
+    """A registered chat session for the AUTONOMOUS Agent view (orchestrates tools)."""
+    from backend.services import chat
+    base = {
+        "mode": "subject", "retriever": object(), "llm": FakeLLM([]), "history": [],
+        "label": "L", "topic": None, "subject": "DBMS", "owner": "u1", "chat_id": None,
+        "autonomous": True,
+    }
+    base.update(over)
+    return chat._register(base)
+
 
 class AskWiringTests(unittest.TestCase):
-    """chat.ask() returns the artifact when orchestration fires, and skips RAG."""
+    """chat.ask() orchestrates tools ONLY for autonomous sessions; regular chat is pure RAG."""
 
-    def test_ask_returns_artifact(self):
+    def test_autonomous_ask_returns_artifact(self):
         from backend.services import chat
-        sid = chat._register({
-            "mode": "subject", "retriever": object(), "llm": FakeLLM([]), "history": [],
-            "label": "L", "topic": None, "subject": "DBMS", "owner": "u1", "chat_id": None,
-        })
+        sid = _agent_session()
         art = {"kind": "quizzes", "id": "x", "title": "Quiz · DBMS", "route": "#quiz", "tool": "Quiz Generator"}
         with mock.patch.object(chat, "require_groq_key", lambda: None), \
-             mock.patch.object(chat_tools, "detect_intent", return_value={"tool": "quiz"}), \
+             mock.patch.object(chat_tools, "detect_intent", return_value={"tool": "quiz"}) as detect, \
              mock.patch.object(chat_tools, "run_tool",
-                               return_value={"answer": "Done", "steps": [], "artifact": art}):
+                               return_value={"answer": "Done", "steps": [], "artifact": art}) as run:
             out = chat.ask(sid, "create a quiz")
+        detect.assert_called_once()
+        run.assert_called_once()
         self.assertEqual(out["artifact"], art)
         self.assertEqual(out["answer"], "Done")
+
+    def test_regular_chat_never_invokes_tools(self):
+        """A non-autonomous (regular) session must NOT call chat_tools — pure RAG only."""
+        from backend import agentic_rag
+        from backend.services import chat
+        sid = _agent_session(autonomous=False)
+        with mock.patch.object(chat, "require_groq_key", lambda: None), \
+             mock.patch.object(chat.config, "AGENTIC_RAG", True), \
+             mock.patch.object(chat_tools, "detect_intent") as detect, \
+             mock.patch.object(chat_tools, "run_tool") as run, \
+             mock.patch.object(agentic_rag, "answer",
+                               return_value=("a normal RAG answer", [], ["a.pdf"])):
+            out = chat.ask(sid, "create a quiz")
+        detect.assert_not_called()
+        run.assert_not_called()
+        self.assertIsNone(out["artifact"])
+        self.assertEqual(out["answer"], "a normal RAG answer")
+
+    def test_regular_chat_default_when_autonomous_omitted(self):
+        """Sessions that never set the autonomous flag default to pure RAG (no tools)."""
+        from backend import agentic_rag
+        from backend.services import chat
+        # Omit the key entirely (session.get("autonomous") is None / falsy).
+        sid = _agent_session(autonomous=None)
+        del chat._sessions[sid]["autonomous"]
+        with mock.patch.object(chat, "require_groq_key", lambda: None), \
+             mock.patch.object(chat.config, "AGENTIC_RAG", True), \
+             mock.patch.object(chat_tools, "detect_intent") as detect, \
+             mock.patch.object(chat_tools, "run_tool") as run, \
+             mock.patch.object(agentic_rag, "answer", return_value=("ans", [], [])):
+            out = chat.ask(sid, "make a 10-question quiz")
+        detect.assert_not_called()
+        run.assert_not_called()
+        self.assertIsNone(out["artifact"])
 
 
 if __name__ == "__main__":
