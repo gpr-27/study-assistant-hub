@@ -21,6 +21,11 @@
 
   const LANG = navigator.language || "en-US";
 
+  // Ephemeral feedback (e.g. "mic blocked") via the app's toast, if present.
+  function notify(message, kind) {
+    try { window.ui && window.ui.toast && window.ui.toast(message, kind || "info"); } catch (_) {}
+  }
+
   let recognition = null;  // active SpeechRecognition instance (null = idle)
   let observer = null;     // MutationObserver watching #chatThread
   let ttsOn = false;       // speaker toggle state
@@ -109,8 +114,8 @@
     btn.id = "voiceMicBtn";
     btn.type = "button";
     btn.className = "btn";
-    btn.title = "Speak your question";
-    btn.setAttribute("aria-label", "Speak your question");
+    btn.title = "Speak your question (tap again to stop)";
+    btn.setAttribute("aria-label", "Speak your question (tap again to stop)");
     btn.setAttribute("aria-pressed", "false");
     btn.textContent = "🎤";
 
@@ -123,7 +128,12 @@
       try { rec = new SR(); } catch (_) { return; }
       rec.lang = LANG;
       rec.interimResults = true;
-      rec.continuous = false;
+      // continuous=true keeps the session open across natural pauses. With
+      // false, desktop Chrome ends recognition the instant it senses an
+      // initial silence — the mic appears to "turn on then immediately off".
+      // Phones capture the phrase fast enough to mask it; laptops don't. The
+      // button is a toggle, so the user taps again to stop.
+      rec.continuous = true;
       rec.maxAlternatives = 1;
 
       // Stream into the input on top of whatever was already typed.
@@ -137,7 +147,22 @@
         // Final text is LEFT in the input — the user reviews and hits Send.
         input.value = (base + finals + interim).replace(/^\s+/, "");
       };
-      rec.onerror = () => stopRecognition();
+      // Surface WHY it stopped — a silent failure is what made the laptop mic
+      // feel broken. The most common laptop cause is a blocked OS/browser
+      // permission, which the user can only fix if we tell them.
+      rec.onerror = (ev) => {
+        const err = (ev && ev.error) || "";
+        if (err === "not-allowed" || err === "service-not-allowed") {
+          notify("Microphone is blocked — allow mic access in your browser/system settings.", "error");
+        } else if (err === "audio-capture") {
+          notify("No microphone found.", "error");
+        } else if (err === "network") {
+          notify("Speech service unreachable — check your connection.", "error");
+        } else if (err === "no-speech") {
+          notify("Didn't catch anything — tap the mic and speak again.");
+        }
+        stopRecognition();
+      };
       rec.onend = () => {
         recognition = null;
         btn.classList.remove("is-rec");
