@@ -196,10 +196,13 @@ class GeminiEmbeddings(Embeddings):
 
     def embed_query(self, text: str) -> list[float]:
         """Embed a single search query (taskType=RETRIEVAL_QUERY)."""
-        # Interactive path (chat retrieval): fail FAST on quota so the user gets a
-        # clean 429 toast in seconds — not a connection killed mid-wait.
+        # Interactive path (chat retrieval): fail FAST on quota. A live chat must
+        # not wait out a per-minute window — a fully-throttled message that waited
+        # ~16s/model still retrieved 0 docs in production, so a long wait buys
+        # nothing. Two short attempts (≤2s each) ride a brief RPM burst, then raise
+        # so the retriever can switch to the fallback index (or skip retrieval).
         data = self._post("embedContent", self._content(text, "RETRIEVAL_QUERY"),
-                          max_retries=2, max_quota_wait=8)
+                          max_retries=2, max_quota_wait=2)
         values = data.get("embedding", {}).get("values")
         if not values:
             raise GeminiEmbeddingError(f"Gemini query embedding returned no vector: {str(data)[:200]}")

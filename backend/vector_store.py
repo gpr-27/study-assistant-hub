@@ -425,7 +425,15 @@ def _load_fallback_store(subject_key: str) -> FAISS | None:
 # without a cooldown each call separately re-probes the dead primary (2 retries
 # × 8s), stacking to a minute+ — the phone kills the connection at ~60s anyway.
 _PRIMARY_QUOTA_COOLDOWN_S = 120.0
+# When the FALLBACK model is also throttled, both embedding buckets are spent.
+# Retrieval is then impossible until a quota window resets — production logs show
+# a fully-throttled message waits ~90s and still retrieves 0 docs. So once both
+# are known-dead we skip embedding entirely for this window and answer without
+# retrieval (fast) instead of stalling. Shorter than the primary cooldown because
+# the fallback's per-minute window recovers continuously.
+_FALLBACK_QUOTA_COOLDOWN_S = 60.0
 _primary_quota_until: float = 0.0
+_fallback_quota_until: float = 0.0
 
 
 class _QuotaFallbackRetriever:
@@ -434,9 +442,12 @@ class _QuotaFallbackRetriever:
     The primary search embeds the query with the primary model (fast-fail on
     quota). On GeminiQuotaError, if this subject has a pre-baked fallback index,
     the SAME query is embedded with the fallback model and searched against the
-    fallback index — model and index always switch together. A process-wide
-    cooldown then routes subsequent searches straight to the fallback, so a
-    dead primary is probed once per cooldown window, not once per query.
+    fallback index — model and index always switch together. Process-wide
+    cooldowns then route subsequent searches straight to the fallback (dead
+    primary) or skip embedding altogether (both dead), so a throttled model is
+    probed once per cooldown window, not once per query. When retrieval is
+    impossible the search returns ``[]`` rather than raising — the chat then
+    answers without context (fast) instead of erroring or stalling.
     """
 
     def __init__(self, subject_key: str, store: FAISS, k: int) -> None:
@@ -444,28 +455,47 @@ class _QuotaFallbackRetriever:
         self._store = store
         self._k = k
 
+    def _search_fallback(self, query: str):
+        """Search the fallback index; on quota, start the fallback cooldown and give up."""
+        import time as _time
+
+        from backend.gemini_embeddings import GeminiQuotaError
+
+        global _fallback_quota_until
+        fallback = _load_fallback_store(self._key)
+        if fallback is None:
+            return []
+        try:
+            return fallback.similarity_search(query, k=self._k)
+        except GeminiQuotaError:
+            _fallback_quota_until = _time.monotonic() + _FALLBACK_QUOTA_COOLDOWN_S
+            log.warning("Fallback embedding quota also hit for '%s' — skipping retrieval "
+                        "for the next %.0fs (answering without notes).",
+                        self._key, _FALLBACK_QUOTA_COOLDOWN_S)
+            return []
+
     def invoke(self, query: str):
         import time as _time
 
         from backend.gemini_embeddings import GeminiQuotaError
 
         global _primary_quota_until
-        if _time.monotonic() < _primary_quota_until:
-            fallback = _load_fallback_store(self._key)
-            if fallback is not None:
-                return fallback.similarity_search(query, k=self._k)
-            # No fallback for this subject — fall through and try the primary anyway.
+        now = _time.monotonic()
+
+        # Both buckets known-spent → don't embed at all; degrade to no-context.
+        if now < _primary_quota_until and now < _fallback_quota_until:
+            return []
+        # Primary in cooldown → go straight to the fallback index.
+        if now < _primary_quota_until:
+            return self._search_fallback(query)
         try:
             return self._store.similarity_search(query, k=self._k)
         except GeminiQuotaError:
             _primary_quota_until = _time.monotonic() + _PRIMARY_QUOTA_COOLDOWN_S
-            fallback = _load_fallback_store(self._key)
-            if fallback is None:
-                raise
             log.warning("Embedding quota hit — searching '%s' via the %s fallback index "
                         "(primary skipped for the next %.0fs).",
                         self._key, _FALLBACK_MODEL, _PRIMARY_QUOTA_COOLDOWN_S)
-            return fallback.similarity_search(query, k=self._k)
+            return self._search_fallback(query)
 
 
 def get_subject_retriever(subject: str, k: int, owner: str | None = None):
