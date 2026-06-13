@@ -111,6 +111,8 @@ class RunToolTests(unittest.TestCase):
         self.assertEqual(out["artifact"]["route"], "#quiz")
         self.assertEqual(out["artifact"]["id"], "id1")
         self.assertIn("Quiz · DBMS", out["answer"])
+        # inline-widget payload: data.questions matches the quiz kind
+        self.assertEqual(out["artifact"]["data"], {"questions": qs})
 
     def test_flashcards_from_topic(self):
         cards = [{"front": "f", "back": "b"}]
@@ -121,6 +123,7 @@ class RunToolTests(unittest.TestCase):
         mk.assert_called_once_with("Recursion", 10, "medium")
         self.assertEqual(save.call_args.args[0], "flashcards")
         self.assertEqual(out["artifact"]["kind"], "flashcards")
+        self.assertEqual(out["artifact"]["data"], {"cards": cards})
 
     def test_plan_uses_days_and_saves_target_date(self):
         with mock.patch.object(chat_tools.planner_service, "generate_plan_from_topic", return_value="# plan") as mk, \
@@ -130,6 +133,7 @@ class RunToolTests(unittest.TestCase):
         self.assertRegex(target, r"^\d{4}-\d{2}-\d{2}$")
         self.assertEqual(save.call_args.args[2]["plan"], "# plan")
         self.assertEqual(out["artifact"]["route"], "#planner")
+        self.assertEqual(out["artifact"]["data"], {"plan": "# plan"})
 
     def test_summary_in_topic_session_gives_readable_failure(self):
         out = chat_tools.run_tool(_topic_session(), {"tool": "summary", "topic": None, "count": None, "days": None}, "m")
@@ -156,6 +160,7 @@ class RunToolTests(unittest.TestCase):
         self.assertEqual(out["artifact"]["kind"], "cheatsheets")
         self.assertEqual(out["artifact"]["route"], "#cheatsheet")
         self.assertEqual(out["artifact"]["id"], "cs1")
+        self.assertEqual(out["artifact"]["data"], {"markdown": "# Cheat"})
 
     def test_cheatsheet_in_topic_session_gives_readable_failure(self):
         out = chat_tools.run_tool(_topic_session(), {"tool": "cheatsheet", "topic": None, "count": None, "days": None}, "m")
@@ -181,6 +186,10 @@ class RunToolTests(unittest.TestCase):
         self.assertEqual(out["artifact"]["kind"], "predictions")
         self.assertEqual(out["artifact"]["route"], "#predictor")
         self.assertEqual(out["artifact"]["id"], "pr1")
+        self.assertEqual(
+            out["artifact"]["data"],
+            {"patterns": patterns, "predicted_questions": predicted},
+        )
 
     def test_predictor_in_topic_session_gives_readable_failure(self):
         out = chat_tools.run_tool(_topic_session(), {"tool": "predictor", "topic": None, "count": None, "days": None}, "m")
@@ -195,6 +204,86 @@ class RunToolTests(unittest.TestCase):
             out = chat_tools.run_tool(_subject_session(), {"tool": "cheatsheet", "topic": None, "count": None, "days": None}, "m")
         self.assertIsNone(out["artifact"]["id"])
         self.assertEqual(out["artifact"]["kind"], "cheatsheets")
+
+
+class InlineDataTests(unittest.TestCase):
+    """Every artifact carries an inline `data` payload matching its kind so the
+    chat thread can render a live interactive widget (not just a link card)."""
+
+    def test_summary_artifact_carries_data_summaries(self):
+        summaries = {"a.pdf": "summary text"}
+        with mock.patch.object(chat_tools, "list_pdf_names", return_value=["a.pdf"]), \
+             mock.patch.object(chat_tools.planner_service, "summarize_pdfs", return_value=summaries), \
+             mock.patch.object(chat_tools.db, "save", return_value="sm1"):
+            out = chat_tools.run_tool(_subject_session(), {"tool": "summary", "topic": None, "count": None, "days": None}, "m")
+        self.assertEqual(out["artifact"]["kind"], "summaries")
+        self.assertEqual(out["artifact"]["data"], {"summaries": summaries})
+
+    def test_mindmap_artifact_carries_data_root(self):
+        root = {"label": "Recursion", "children": [{"label": "Base case", "children": []}]}
+        with mock.patch.object(chat_tools.mindmap_service, "generate_mindmap", return_value=root), \
+             mock.patch.object(chat_tools.db, "save", return_value="mm1"):
+            out = chat_tools.run_tool(_topic_session(), {"tool": "mindmap", "topic": None, "count": None, "days": None}, "m")
+        self.assertEqual(out["artifact"]["kind"], "mindmaps")
+        self.assertEqual(out["artifact"]["data"], {"root": root})
+
+    def test_quiz_data_is_the_same_object_saved_to_history(self):
+        """The inline payload IS the renderable content produced when saving — not a re-fetch."""
+        qs = [{"question": "Q1", "options": ["a", "b", "c", "d"], "answer_index": 0, "explanation": "e"}]
+        with mock.patch.object(chat_tools, "_subject_content", return_value=("CONTENT", ["a.pdf"])), \
+             mock.patch.object(chat_tools.quiz_service, "make_quiz", return_value={"questions": qs}), \
+             mock.patch.object(chat_tools.db, "save", return_value="id1") as save:
+            out = chat_tools.run_tool(_subject_session(), {"tool": "quiz", "topic": None, "count": 5, "days": None}, "m")
+        saved_doc = save.call_args.args[2]
+        self.assertEqual(out["artifact"]["data"]["questions"], saved_doc["questions"])
+
+
+class SubjectLockTests(unittest.TestCase):
+    """HARD RULE 1: artifacts are generated from the CURRENT SESSION SUBJECT ONLY.
+    A Mathematics session must never feed another subject into a tool service."""
+
+    def test_quiz_generates_from_session_subject_only(self):
+        """make_quiz is fed the session-subject's own content; no other subject is touched."""
+        with mock.patch.object(chat_tools, "_subject_content", return_value=("MATH-CONTENT", ["m.pdf"])) as content, \
+             mock.patch.object(chat_tools.quiz_service, "make_quiz",
+                               return_value={"questions": [{"question": "q", "options": [], "answer_index": 0, "explanation": ""}]}), \
+             mock.patch.object(chat_tools.quiz_service, "make_quiz_from_topic") as from_topic, \
+             mock.patch.object(chat_tools.db, "save", return_value="q1"):
+            out = chat_tools.run_tool(
+                _subject_session(subject="Mathematics"),
+                {"tool": "quiz", "topic": None, "count": 5, "days": None}, "m",
+            )
+        # the content blob was sourced from THIS subject, with THIS owner
+        content.assert_called_once_with("Mathematics", "u1")
+        # subject sessions never route through the topic generator (no cross-subject path)
+        from_topic.assert_not_called()
+        self.assertEqual(out["artifact"]["title"], "Quiz · Mathematics")
+
+    def test_cheatsheet_never_uses_a_topic_override_in_a_subject_session(self):
+        """Even if the intent carries a stray topic, a subject session condenses the SUBJECT's PDFs."""
+        with mock.patch.object(chat_tools, "_subject_content", return_value=("MATH-CONTENT", ["m.pdf"])) as content, \
+             mock.patch.object(chat_tools.cheatsheet_service, "make_cheatsheet", return_value="# Cheat") as mk, \
+             mock.patch.object(chat_tools.db, "save", return_value="cs1"):
+            out = chat_tools.run_tool(
+                _subject_session(subject="Mathematics"),
+                {"tool": "cheatsheet", "topic": "Operating Systems", "count": None, "days": None}, "m",
+            )
+        content.assert_called_once_with("Mathematics", "u1")  # the session subject, not the topic
+        mk.assert_called_once_with("MATH-CONTENT")
+        self.assertEqual(out["artifact"]["title"], "Cheat Sheet · Mathematics")
+
+    def test_predictor_passes_session_subject_as_hint(self):
+        """predict_questions is hinted with the session subject only."""
+        with mock.patch.object(chat_tools, "_subject_papers_corpus", return_value=("CORPUS", ["p1.pdf"])) as corpus, \
+             mock.patch.object(chat_tools.predictor_service, "predict_questions",
+                               return_value={"predicted_questions": [{"question": "q"}], "patterns": ["p"]}) as mk, \
+             mock.patch.object(chat_tools.db, "save", return_value="pr1"):
+            chat_tools.run_tool(
+                _subject_session(subject="Mathematics"),
+                {"tool": "predictor", "topic": None, "count": None, "days": None}, "m",
+            )
+        corpus.assert_called_once_with("Mathematics", "u1")
+        mk.assert_called_once_with("CORPUS", subject_hint="Mathematics")
 
 
 def _agent_session(**over):

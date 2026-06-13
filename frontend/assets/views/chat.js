@@ -125,7 +125,35 @@
   }
 
   // ── Artifact card: the chat created something in another tool ──
+  //    When the backend ships a renderable `data` payload AND the inline renderer
+  //    succeeds, show the artifact as a LIVE interactive widget in the thread plus
+  //    a muted "Saved in <tool>" footer with an Open button. Otherwise fall back to
+  //    the plain link card below.
   function appendArtifactCard(thread, art) {
+    if (art && art.data && typeof window.renderArtifactInline === "function") {
+      const block = el(`<div class="chat-live"></div>`);
+      let ok = false;
+      try {
+        ok = window.renderArtifactInline(block, art) === true;
+      } catch {
+        ok = false;
+      }
+      if (ok) {
+        const foot = el(`<div class="cl-foot"></div>`);
+        const label = el(`<span class="cl-foot-label"></span>`);
+        label.textContent = "Saved in " + (art.tool || "the tool");
+        foot.append(label);
+        const open = el(`<button class="cl-foot-open" type="button">Open →</button>`);
+        open.addEventListener("click", () => {
+          window.ui.openArtifact(art.kind, art.id, art.route || "#home");
+        });
+        foot.append(open);
+        block.append(foot);
+        thread.append(block);
+        return;
+      }
+    }
+
     const card = el(`<a class="chat-artifact" href="${esc(art.route || "#home")}"></a>`);
     card.append(el(`<span class="chat-artifact-icon" aria-hidden="true">✦</span>`));
     const meta = el(`<span class="chat-artifact-meta"></span>`);

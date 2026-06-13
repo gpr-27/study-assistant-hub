@@ -1180,3 +1180,148 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
   .chat-overview-q { transition: border-color .18s, background .18s; }
   .chat-overview-q:hover { transform: none; }
 }
+
+/* ============================================================
+   INLINE LIVE ARTIFACTS — interactive widgets rendered straight
+   into the chat thread (quiz runner, flashcard deck, doc, mind
+   map, predictions). DOM is built by /assets/artifact-inline.js;
+   this owns all visuals. Glass skin here; editorial overrides in
+   editorial-tools.css scoped under [data-skin="editorial"].
+   ============================================================ */
+.chat-live {
+  align-self: flex-start; max-width: 78%; width: min(560px, 78%);
+  border: 1px solid hsl(var(--accent) / .4); background: var(--field-bg);
+  border-radius: 18px; padding: 1rem 1.1rem; overflow: hidden;
+  animation: rise .4s var(--ease-spring) both;
+}
+
+/* — quiz runner — */
+.cl-quiz { display: flex; flex-direction: column; gap: .85rem; }
+.cl-qhead {
+  font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: hsl(var(--accent));
+}
+.cl-prompt { font-size: 1rem; font-weight: 600; line-height: 1.45; color: hsl(var(--ink)); }
+.cl-opts { display: flex; flex-direction: column; gap: .5rem; }
+.cl-opt {
+  display: flex; align-items: center; gap: .6rem; width: 100%; min-height: 44px;
+  text-align: left; font: inherit; font-size: .94rem; color: hsl(var(--ink));
+  padding: .6rem .85rem; border-radius: 12px; cursor: pointer;
+  border: 1px solid var(--glass-border); background: hsl(var(--ink) / .04);
+  transition: border-color .15s, background .15s, transform .12s var(--ease-out);
+}
+.cl-opt:hover:not(:disabled) { border-color: hsl(var(--accent) / .65); background: hsl(var(--accent) / .1); }
+.cl-opt:active:not(:disabled) { transform: scale(.985); }
+.cl-opt:disabled { cursor: default; }
+.cl-opt.is-correct {
+  border-color: hsl(var(--c-plan) / .7); background: hsl(var(--c-plan) / .18); color: hsl(var(--ink));
+}
+.cl-opt.is-wrong {
+  border-color: hsl(0 72% 58% / .7); background: hsl(0 72% 58% / .16); color: hsl(var(--ink));
+}
+.cl-expl {
+  font-size: .88rem; line-height: 1.5; color: hsl(var(--ink-soft));
+  padding: .65rem .8rem; border-radius: 10px;
+  background: hsl(var(--accent) / .08); border-left: 3px solid hsl(var(--accent) / .6);
+  animation: rise .25s var(--ease-spring) both;
+}
+.cl-next {
+  align-self: flex-end; min-height: 40px; padding: .5rem 1.2rem; border: 0; cursor: pointer;
+  font: inherit; font-weight: 600; font-size: .9rem; color: #fff; border-radius: var(--r-pill);
+  background: linear-gradient(150deg, hsl(var(--accent) / .98), hsl(var(--accent) / .62));
+  box-shadow: 0 6px 16px hsl(var(--accent) / .35); transition: transform .15s var(--ease-out), box-shadow .15s;
+}
+.cl-next:hover { transform: translateY(-1px); box-shadow: 0 10px 22px hsl(var(--accent) / .45); }
+.cl-next:active { transform: scale(.97); }
+.cl-score {
+  text-align: center; font-family: var(--font-display); font-weight: 700; letter-spacing: -.01em;
+  font-size: 1.15rem; color: hsl(var(--ink)); padding: .4rem 0;
+}
+
+/* — flashcard deck — */
+.cl-deck { display: flex; flex-direction: column; gap: .85rem; }
+.cl-card {
+  position: relative; min-height: 150px; border-radius: 14px; cursor: pointer;
+  perspective: 1200px; -webkit-tap-highlight-color: transparent;
+}
+.cl-face {
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  min-height: 150px; padding: 1.2rem 1.1rem; border-radius: 14px; line-height: 1.5;
+  font-size: 1rem; color: hsl(var(--ink)); border: 1px solid var(--glass-border);
+  background: hsl(var(--accent) / .07); transition: background .2s, border-color .2s;
+}
+.cl-card.cl-flip .cl-face { background: hsl(var(--accent) / .14); border-color: hsl(var(--accent) / .5); }
+.cl-card .cl-face::before {
+  content: "Front"; position: absolute; top: .55rem; left: .8rem; font-size: .66rem;
+  font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: hsl(var(--ink-faint));
+}
+.cl-card.cl-flip .cl-face::before { content: "Back"; color: hsl(var(--accent)); }
+.cl-nav { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
+.cl-navbtn {
+  min-height: 40px; min-width: 44px; padding: .45rem 1rem; cursor: pointer; font: inherit;
+  font-weight: 600; font-size: .88rem; color: hsl(var(--ink)); border-radius: var(--r-pill);
+  border: 1px solid var(--glass-border); background: hsl(var(--ink) / .05);
+  transition: border-color .15s, background .15s, transform .12s var(--ease-out);
+}
+.cl-navbtn:hover:not(:disabled) { border-color: hsl(var(--accent) / .65); background: hsl(var(--accent) / .1); }
+.cl-navbtn:active:not(:disabled) { transform: scale(.96); }
+.cl-navbtn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* — document (cheatsheet / plan / summaries) — */
+.cl-doc { font-size: .94rem; line-height: 1.6; color: hsl(var(--ink-soft)); }
+.cl-doc > *:first-child { margin-top: 0; }
+.cl-doc > *:last-child { margin-bottom: 0; }
+.cl-doc-h {
+  font-family: var(--font-display); font-weight: 700; letter-spacing: -.01em;
+  font-size: 1.02rem; color: hsl(var(--accent)); margin: 1rem 0 .35rem;
+}
+.cl-doc-h:first-child { margin-top: 0; }
+
+/* — mind map (collapsible tree) — */
+.cl-mm { font-size: .92rem; }
+.cl-mm-row { display: flex; align-items: flex-start; gap: .4rem; padding: .12rem 0; }
+.cl-mm-toggle {
+  flex: none; width: 20px; height: 20px; margin-top: .05rem; display: grid; place-items: center;
+  cursor: pointer; font: inherit; font-size: .7rem; color: hsl(var(--accent));
+  border: 1px solid hsl(var(--accent) / .4); border-radius: 6px; background: hsl(var(--accent) / .1);
+  transition: background .15s, transform .15s var(--ease-spring);
+}
+.cl-mm-toggle:hover { background: hsl(var(--accent) / .2); }
+.cl-mm-toggle.is-leaf { visibility: hidden; }
+.cl-mm-label { line-height: 1.45; color: hsl(var(--ink)); padding-top: .05rem; }
+.cl-mm .cl-mm { margin-left: 1.05rem; border-left: 1px solid hsl(var(--accent) / .22); padding-left: .55rem; }
+
+/* — predictions — */
+.cl-pred { display: flex; flex-direction: column; gap: .7rem; }
+.cl-pred-item {
+  padding: .75rem .85rem; border-radius: 12px;
+  border: 1px solid var(--glass-border); background: hsl(var(--ink) / .04);
+}
+.cl-pred-q { font-weight: 600; line-height: 1.45; color: hsl(var(--ink)); }
+.cl-pred-why { margin-top: .35rem; font-size: .85rem; line-height: 1.45; color: hsl(var(--ink-soft)); }
+.cl-pred-patterns {
+  font-size: .85rem; line-height: 1.5; color: hsl(var(--ink-soft));
+  padding: .6rem .8rem; border-radius: 10px;
+  background: hsl(var(--accent) / .08); border-left: 3px solid hsl(var(--accent) / .6);
+}
+
+/* — footer (Saved in <tool> · Open) — */
+.cl-foot {
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  margin-top: .9rem; padding-top: .7rem; border-top: 1px solid var(--glass-border);
+  font-size: .8rem; color: hsl(var(--ink-faint));
+}
+.cl-foot button, .cl-foot a {
+  margin-left: auto; font: inherit; font-size: .82rem; font-weight: 600; cursor: pointer;
+  color: hsl(var(--accent)); background: transparent; border: 0; padding: .2rem .1rem;
+  text-decoration: none; transition: opacity .15s;
+}
+.cl-foot button:hover, .cl-foot a:hover { opacity: .75; text-decoration: underline; }
+
+@media (max-width: 560px) {
+  .chat-live { max-width: 100%; width: 100%; padding: .9rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-live, .cl-expl { animation: none; }
+  .cl-next:hover, .cl-navbtn:active, .cl-opt:active, .cl-mm-toggle { transform: none; }
+}

@@ -631,3 +631,103 @@
    keep them as quiet cream paper too */
 [data-skin="editorial"] .panel-soft.stack-sm .md p,
 [data-skin="editorial"] .panel-soft.stack-sm .md li { color: hsl(var(--ink-soft)); }
+
+/* ============================================================
+   INLINE LIVE ARTIFACTS (chat widgets) — editorial skin
+   Recolour the glass widget to warm cream paper + coral accent.
+   Layout/structure stays exactly as the shared rules define it.
+   ============================================================ */
+[data-skin="editorial"] .chat-live {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-card);
+  box-shadow: var(--ed-shadow-soft);
+}
+
+/* — quiz — */
+[data-skin="editorial"] .cl-qhead { color: hsl(var(--ed-coral-h)); }
+[data-skin="editorial"] .cl-prompt { color: hsl(var(--ink)); }
+[data-skin="editorial"] .cl-opt {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-soft);
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .cl-opt:hover:not(:disabled) {
+  border-color: hsl(var(--ed-coral-h) / .6);
+  background: hsl(var(--ed-coral-h) / .08);
+}
+[data-skin="editorial"] .cl-opt.is-correct {
+  border-color: hsl(var(--ed-success-h) / .7);
+  background: hsl(var(--ed-success-h) / .16);
+}
+[data-skin="editorial"] .cl-opt.is-wrong {
+  border-color: hsl(var(--ed-error-h) / .7);
+  background: hsl(var(--ed-error-h) / .14);
+}
+[data-skin="editorial"] .cl-expl {
+  color: hsl(var(--ink-soft));
+  background: var(--ed-surface-soft);
+  border-left: 3px solid hsl(var(--ed-coral-h) / .6);
+}
+[data-skin="editorial"] .cl-next {
+  background: var(--ed-coral);
+  box-shadow: var(--ed-shadow);
+}
+[data-skin="editorial"] .cl-next:hover { background: var(--ed-coral-active); box-shadow: var(--ed-shadow); }
+[data-skin="editorial"] .cl-score { color: hsl(var(--ink)); }
+
+/* — flashcards — */
+[data-skin="editorial"] .cl-face {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-soft);
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .cl-card.cl-flip .cl-face {
+  background: var(--ed-cream-strong);
+  border-color: hsl(var(--ed-coral-h) / .45);
+}
+[data-skin="editorial"] .cl-card .cl-face::before { color: hsl(var(--ink-faint)); }
+[data-skin="editorial"] .cl-card.cl-flip .cl-face::before { color: hsl(var(--ed-coral-h)); }
+[data-skin="editorial"] .cl-navbtn {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-soft);
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .cl-navbtn:hover:not(:disabled) {
+  border-color: hsl(var(--ed-coral-h) / .6);
+  background: hsl(var(--ed-coral-h) / .08);
+}
+
+/* — document — */
+[data-skin="editorial"] .cl-doc { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .cl-doc-h { color: hsl(var(--ed-coral-a-h)); }
+
+/* — mind map — */
+[data-skin="editorial"] .cl-mm-toggle {
+  color: hsl(var(--ed-coral-h));
+  border: 1px solid hsl(var(--ed-coral-h) / .4);
+  background: hsl(var(--ed-coral-h) / .1);
+}
+[data-skin="editorial"] .cl-mm-toggle:hover { background: hsl(var(--ed-coral-h) / .2); }
+[data-skin="editorial"] .cl-mm-label { color: hsl(var(--ink)); }
+[data-skin="editorial"] .cl-mm .cl-mm { border-left: 1px solid hsl(var(--ed-coral-h) / .25); }
+
+/* — predictions — */
+[data-skin="editorial"] .cl-pred-item {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-soft);
+}
+[data-skin="editorial"] .cl-pred-q { color: hsl(var(--ink)); }
+[data-skin="editorial"] .cl-pred-why { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .cl-pred-patterns {
+  color: hsl(var(--ink-soft));
+  background: var(--ed-surface-soft);
+  border-left: 3px solid hsl(var(--ed-coral-h) / .6);
+}
+
+/* — footer — */
+[data-skin="editorial"] .cl-foot {
+  color: hsl(var(--ink-faint));
+  border-top: 1px solid var(--ed-hairline);
+}
+[data-skin="editorial"] .cl-foot button,
+[data-skin="editorial"] .cl-foot a { color: hsl(var(--ed-coral-h)); }

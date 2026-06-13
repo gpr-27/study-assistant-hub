@@ -188,6 +188,7 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
                 "num_questions": len(questions), "questions": questions,
             })
             detail = f"{len(questions)} questions"
+            art_data = {"questions": questions}
 
         elif tool == "flashcards":
             n = min(intent.get("count") or 10, 25)
@@ -211,6 +212,7 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
                 "num_cards": len(cards), "cards": cards,
             })
             detail = f"{len(cards)} cards"
+            art_data = {"cards": cards}
 
         elif tool == "summary":
             if not subject:
@@ -228,6 +230,7 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
                 "model": config.model_for("planner", None), "summaries": summaries,
             })
             detail = f"{len(summaries)} document(s)"
+            art_data = {"summaries": summaries}
 
         elif tool == "plan":
             days = min(intent.get("days") or 7, 90)
@@ -249,6 +252,7 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
                 "model": config.model_for("planner", None), "plan": plan,
             })
             detail = f"through {target}"
+            art_data = {"plan": plan}
 
         elif tool == "mindmap":
             if subject:
@@ -268,6 +272,7 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
                 "model": config.model_for("mindmap", None), "root": root,
             })
             detail = None
+            art_data = {"root": root}
 
         elif tool == "cheatsheet":
             if not subject:
@@ -283,6 +288,7 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
                 "model": config.model_for("cheatsheet", None), "markdown": markdown,
             })
             detail = None
+            art_data = {"markdown": markdown}
 
         else:  # predictor
             if not subject:
@@ -301,6 +307,7 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
                 "patterns": patterns, "predicted_questions": predicted,
             })
             detail = f"{len(predicted)} likely questions"
+            art_data = {"patterns": patterns, "predicted_questions": predicted}
 
     except _ToolFailure as exc:
         steps.append(_trace("Couldn't create it", str(exc)))
@@ -326,5 +333,8 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
     return {
         "answer": f"Done — I created **{title}**" + (f" ({detail})" if detail else "") + f". {saved_note}",
         "steps": steps,
-        "artifact": {"kind": kind, "id": saved_id, "title": title, "route": route, "tool": tool_name},
+        "artifact": {
+            "kind": kind, "id": saved_id, "title": title, "route": route,
+            "tool": tool_name, "data": art_data,
+        },
     }
