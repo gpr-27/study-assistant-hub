@@ -82,6 +82,10 @@
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
+/* The `hidden` attribute must always win — several components (.foot in tool views,
+   collapsible setup, trace panels) set display via classes, which otherwise override
+   the UA [hidden]{display:none} and leave hidden elements visible. */
+[hidden] { display: none !important; }
 html { scroll-behavior: smooth; }
 body {
   font-family: var(--font-body);
@@ -397,6 +401,14 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border: 0; bo
 .view[data-accent="chat"] .view-head { margin: .55rem 0 .65rem; }
 .view[data-accent="chat"] .view-head h2 { font-size: clamp(1.35rem, 4.5vw, 1.95rem); }
 .chat-minibar { display: flex; align-items: center; gap: .5rem; padding: .45rem .6rem; border-radius: var(--r-md); }
+/* The session badge must stay on ONE line and truncate — otherwise on phones it
+   wraps ("Subject ·" / "Mathematics") and the minibar looks broken/cramped. */
+#chatSessionBadge { min-width: 0; flex-shrink: 1; overflow: hidden; }
+#chatSessionBadge .badge { display: inline-block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+@media (max-width: 560px) {
+  .chat-minibar { gap: .4rem; padding: .4rem .5rem; }
+  #chatSessionBadge .badge { max-width: 42vw; }
+}
 #chatOptionsBtn.is-open { border-color: hsl(var(--accent) / .6); color: hsl(var(--ink)); }
 .chat-src-bar { padding: .75rem 1rem; border-radius: var(--r-md); }
 .chat { display: flex; flex-direction: column; height: clamp(420px, 68vh, 720px); }
