@@ -13,6 +13,7 @@ Ported from the old Streamlit `chat/` app, but rebuilt to run entirely on Groq:
 Every LLM object is created lazily inside a function so that importing this
 module never requires a Groq key and stays fast.
 """
+import re
 import tempfile
 import threading
 from pathlib import Path as _Path
@@ -62,6 +63,34 @@ _GENERIC_PERSONA: str = (
     "You are a skilled, thoughtful teaching assistant. Help the student learn through "
     "clear explanations and examples. Keep responses clear, concise, and focused."
 )
+
+_SMALLTALK_PERSONA: str = (
+    "You are a warm, concise study assistant. The student sent a greeting or a quick "
+    "acknowledgement — reply in ONE short, friendly sentence and invite them to ask "
+    "about their study material. Do not say you don't know; this is just small talk."
+)
+
+# Greetings / acknowledgements that need NO retrieval. A message counts as small
+# talk only when it is short AND every word is a social token — so "define heap"
+# or "ok now explain X" still retrieve, but "hi", "hi hlo", "thank you", "ok cool"
+# short-circuit to a single fast reply. This matters on the free embedding tier:
+# routing a greeting through embed→rewrite→retrieve→grade→generate burns several
+# rate-limited Gemini/Groq calls (and can take a minute when quota is throttled)
+# to answer "hi".
+_SMALLTALK_WORD = re.compile(
+    r"^(?:h+i+|h+e+l+o+|h+l+o+|h+e+y+|hiya|yo+|sup|wassup|howdy|hola|greetings|"
+    r"good|morning|afternoon|evening|night|"
+    r"thanks?|thankyou|thx|ty|tysm|"
+    r"ok|okay|kk|k|cool|nice|great|awesome|amazing|perfect|fine|alright|"
+    r"bye+|goodbye|cya|gn|gm|"
+    r"please|pls|you|u|there|a|lot|much|so|mate|bro|buddy|man)$"
+)
+
+
+def _is_smalltalk(message: str) -> bool:
+    """True for short greeting/acknowledgement messages that need no retrieval."""
+    words = re.findall(r"[a-z']+", (message or "").lower())
+    return bool(words) and len(words) <= 5 and all(_SMALLTALK_WORD.match(w) for w in words)
 
 
 class ChatSessionError(Exception):
@@ -248,6 +277,12 @@ def ask(session_id: str, message: str) -> dict:
         answer = tool_result["answer"]
         steps = tool_result["steps"]
         artifact = tool_result.get("artifact")
+    elif _is_smalltalk(message):
+        # Greeting / acknowledgement → one fast LLM call, no embedding or retrieval.
+        steps = [{"kind": "generate", "title": "Replied directly — no document lookup needed"}]
+        msgs = [SystemMessage(content=_SMALLTALK_PERSONA), *_history_messages(history),
+                HumanMessage(content=message)]
+        answer = str(session["llm"].invoke(msgs).content)
     elif retriever is not None and config.AGENTIC_RAG:
         # Agentic RAG: an LLM-driven rewrite→retrieve→grade→correct loop.
         answer, steps, sources = agentic_rag.answer(

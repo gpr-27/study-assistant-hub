@@ -284,6 +284,21 @@ def answer(
         })
 
         context = _format_context(docs)
+        # On the final round there is no corrective round left to act on the
+        # verdict, so grading would be a wasted LLM call (we answer with what we
+        # have either way). Skip it — saving one rate-limited Groq call per
+        # message, which with the default single-round loop is EVERY message.
+        if attempt == rounds - 1:
+            log.info(
+                "Agentic RAG round %d/%d: %d queries, %d docs, final (grade skipped).",
+                attempt + 1, rounds, len(queries), len(docs),
+            )
+            steps.append({
+                "kind": "grade", "verdict": "final",
+                "title": "Answering with the retrieved context",
+                "missing": "", "prompt": "",
+            })
+            break
         sufficient, missing, grade_prompt = _grade(llm, question, context)
         log.info(
             "Agentic RAG round %d/%d: %d queries, %d docs, sufficient=%s.",
@@ -294,13 +309,6 @@ def answer(
                 "kind": "grade", "verdict": "sufficient",
                 "title": "Context verified — enough to answer",
                 "missing": "", "prompt": grade_prompt,
-            })
-            break
-        if attempt == rounds - 1:
-            steps.append({
-                "kind": "grade", "verdict": "limit",
-                "title": "Reached the retrieval limit — answering with best context",
-                "missing": missing, "prompt": grade_prompt,
             })
             break
         steps.append({

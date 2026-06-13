@@ -144,8 +144,7 @@ class AnswerLoopTests(unittest.TestCase):
             '{"queries": ["q1"]}',                       # rewrite #1
             '{"sufficient": false, "missing": "more"}',   # grade #1 -> correct
             '{"queries": ["q2"]}',                       # rewrite #2 (corrective)
-            '{"sufficient": true}',                       # grade #2 -> stop
-            "ANSWER WITH BOTH",                          # generate
+            "ANSWER WITH BOTH",                          # generate (grade #2 skipped: last round)
         ])
         text, steps, sources = agentic_rag.answer(retriever, llm, "question?", [], "persona", max_iters=2)
         self.assertEqual(text, "ANSWER WITH BOTH")
@@ -154,22 +153,24 @@ class AnswerLoopTests(unittest.TestCase):
         gen_msgs = llm.calls[-1]
         self.assertIn("weak", gen_msgs[-1].content)
         self.assertIn("strong extra", gen_msgs[-1].content)
-        # the corrective round is visible in the trace
+        # the corrective round is visible in the trace; the last round skips
+        # grading (no corrective round can follow) → "final" not "sufficient".
         verdicts = [s["verdict"] for s in steps if s["kind"] == "grade"]
-        self.assertEqual(verdicts, ["insufficient", "sufficient"])
+        self.assertEqual(verdicts, ["insufficient", "final"])
 
     def test_round_cap_respected(self):
         retriever = FakeRetriever({"q": [_Doc("ctx")]})
-        # Always insufficient; with max_iters=1 it must retrieve once then generate.
+        # With max_iters=1 the only round is also the last, so grading is skipped
+        # (it would be a wasted LLM call): retrieve once, then generate.
         llm = FakeLLM([
             '{"queries": ["q"]}',
-            '{"sufficient": false, "missing": "x"}',
             "ANSWER ANYWAY",
         ])
         text, steps, sources = agentic_rag.answer(retriever, llm, "q?", [], "persona", max_iters=1)
         self.assertEqual(text, "ANSWER ANYWAY")
         self.assertEqual(retriever.queries, ["q"])  # no second round
-        self.assertEqual([s["verdict"] for s in steps if s["kind"] == "grade"], ["limit"])
+        self.assertEqual([s["verdict"] for s in steps if s["kind"] == "grade"], ["final"])
+        self.assertEqual(len(llm.calls), 2)  # rewrite + generate only — no grade call
 
 
 class ChatServiceWiringTests(unittest.TestCase):
@@ -190,22 +191,36 @@ class ChatServiceWiringTests(unittest.TestCase):
         with mock.patch.object(chat_mod.config, "AGENTIC_RAG", True), \
              mock.patch.object(chat_mod, "require_groq_key", lambda: None), \
              mock.patch.object(chat_mod.agentic_rag, "answer", return_value=("AGENTIC", [], [])) as ag:
-            out = chat_mod.ask(sid, "hello")
+            out = chat_mod.ask(sid, "What is mitosis?")
         self.assertEqual(out["answer"], "AGENTIC")
         ag.assert_called_once()
 
     def test_uses_classic_when_disabled(self):
         from backend.services import chat
-        retriever = FakeRetriever({"hello": [_Doc("ctx")]})
+        retriever = FakeRetriever({"What is mitosis?": [_Doc("ctx")]})
         chat_mod, sid = self._session(retriever)
         # Replace the session llm with a fake so the single-shot path returns text.
         chat_mod._sessions[sid]["llm"] = FakeLLM(["CLASSIC"])
         with mock.patch.object(chat_mod.config, "AGENTIC_RAG", False), \
              mock.patch.object(chat_mod, "require_groq_key", lambda: None), \
              mock.patch.object(chat_mod.agentic_rag, "answer", side_effect=AssertionError("should not be agentic")):
-            out = chat_mod.ask(sid, "hello")
+            out = chat_mod.ask(sid, "What is mitosis?")
         self.assertEqual(out["answer"], "CLASSIC")
-        self.assertEqual(retriever.queries, ["hello"])  # one direct retrieval
+        self.assertEqual(retriever.queries, ["What is mitosis?"])  # one direct retrieval
+
+    def test_smalltalk_skips_retrieval(self):
+        """A greeting answers in one LLM call — no embedding, rewrite, or retrieval."""
+        from backend.services import chat
+        retriever = FakeRetriever({})
+        chat_mod, sid = self._session(retriever)
+        chat_mod._sessions[sid]["llm"] = FakeLLM(["Hi! Ask me about your notes."])
+        with mock.patch.object(chat_mod.config, "AGENTIC_RAG", True), \
+             mock.patch.object(chat_mod, "require_groq_key", lambda: None), \
+             mock.patch.object(chat_mod.agentic_rag, "answer",
+                               side_effect=AssertionError("small talk must not retrieve")):
+            out = chat_mod.ask(sid, "hi hlo")
+        self.assertEqual(out["answer"], "Hi! Ask me about your notes.")
+        self.assertEqual(retriever.queries, [])  # no retrieval for small talk
 
 
 class HttpEndToEndTests(unittest.TestCase):
