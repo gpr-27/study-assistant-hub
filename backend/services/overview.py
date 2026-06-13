@@ -26,9 +26,31 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 
 from backend import config
+from backend.config import FAISS_INDEX_DIR
 from backend.documents import clip_to_tokens, list_pdf_names, pdf_signature, read_pdf
 
 log = logging.getLogger(__name__)
+
+# Pre-baked overview for a BUNDLED subject, written next to its index and shipped in
+# the Docker image (scripts/prebake_overviews.py). Loading it is instant — no PDF
+# read, no Groq call — so the card appears immediately for the bundled subjects.
+_PREBAKE_NAME = "overview.json"
+
+
+def _load_prebaked(subject: str) -> dict | None:
+    """Return ``{overview, questions, sources}`` from a committed overview.json, or None."""
+    try:
+        path = FAISS_INDEX_DIR / subject / _PREBAKE_NAME
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        overview = str(data.get("overview", "") or "").strip()
+        questions = [str(q).strip() for q in (data.get("questions") or []) if str(q).strip()][:_MAX_QUESTIONS]
+        if not overview and not questions:
+            return None
+        return {"overview": overview, "questions": questions, "sources": int(data.get("sources") or 0)}
+    except Exception:  # noqa: BLE001 — a malformed/absent prebake just falls back to live generation
+        return None
 
 # Read a few documents and clip to a single bounded slice — a few PDFs are plenty
 # for an overview within the free-tier token budget (input + reserved output).
@@ -170,6 +192,14 @@ def build_overview(
         cached = _cache_get(key)
         if cached is not None:
             return cached
+        # Bundled subjects ship a pre-baked overview — load it instantly (no Groq).
+        if is_subject:
+            pre = _load_prebaked(subject)
+            if pre is not None:
+                card = {"label": label, "sources": pre["sources"] or len(list_pdf_names(subject, owner)),
+                        "overview": pre["overview"], "questions": pre["questions"]}
+                _cache_put(key, card)
+                return card
 
     sources = 0
     body = ""

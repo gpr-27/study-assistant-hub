@@ -1,0 +1,9 @@
+{
+  "overview": "**Matrices** are ordered rectangular arrays of numbers (or functions) used to solve systems of equations and represent linear transformations. Key concepts include **matrix order**, **types of matrices** (row, column, square, diagonal, scalar, identity, and zero matrices), **matrix operations** (addition, scalar multiplication, and multiplication), and **transpose** and **inverse** matrices.",
+  "questions": [
+    "What is the order of the matrix A = [4 3; 4 3; 3 4]?",
+    "Describe the difference between a diagonal matrix and a scalar matrix.",
+    "Show that a matrix which is both symmetric and skew symmetric is a zero matrix."
+  ],
+  "sources": 2
+}

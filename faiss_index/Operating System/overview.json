@@ -1,0 +1,9 @@
+{
+  "overview": "This material covers the introduction to Operating System Concepts, including the definition of an operating system, computer system structure, interrupts, storage structure, and operating system operations. Key terms include **Operating System**, **Computer System**, **Interrupts**, **Storage Structure**, and **Operating System Operations**.",
+  "questions": [
+    "What is the primary function of an operating system?",
+    "Describe the computer system structure, including hardware, operating system, and application programs.",
+    "What is the role of interrupts in the operating system, and how are they handled?"
+  ],
+  "sources": 2
+}
