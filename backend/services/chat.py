@@ -342,6 +342,27 @@ def ask(session_id: str, message: str) -> dict:
     return {"answer": answer, "steps": steps, "sources": sources, "artifact": artifact}
 
 
+def session_overview(session_id: str, *, refresh: bool = False) -> dict:
+    """Return a NotebookLM-style overview card for an existing session.
+
+    Delegates to ``overview.build_overview`` (imported lazily so importing this
+    module never pulls in the overview path). Best-effort by contract — the
+    overview service never raises, so any LLM/parse failure surfaces as an empty
+    card rather than an error. ``refresh=True`` bypasses the overview cache.
+    """
+    session = _sessions.get(session_id)
+    if session is None:
+        raise ChatSessionError(f"Unknown or expired chat session: {session_id}")
+
+    from backend.services import overview
+    return overview.build_overview(
+        subject=session.get("subject"),
+        topic=session.get("topic"),
+        owner=session.get("owner") or LOCAL_OWNER,
+        refresh=refresh,
+    )
+
+
 def resume_session(owner: str, chat_id: str) -> tuple[str, str, str, str, list[dict]]:
     """Re-open a saved chat as a live session and return its prior messages.
 

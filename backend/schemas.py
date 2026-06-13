@@ -60,6 +60,13 @@ class ChatMessageResponse(BaseModel):
     artifact: dict | None = None   # set when the chat created a tool artifact (kind/id/title/route/tool)
 
 
+class ChatOverviewResponse(BaseModel):
+    label: str                      # subject or topic name
+    sources: int                    # count of source PDFs (0 for topic sessions)
+    overview: str                   # 2-3 sentence markdown summary; "" on failure
+    questions: list[str]            # up to 3 starter questions; [] on failure
+
+
 class ChatMessage(BaseModel):
     role: str                       # "user" | "assistant"
     content: str

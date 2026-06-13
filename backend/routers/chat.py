@@ -11,6 +11,7 @@ from backend.schemas import (
     ChatMessage,
     ChatMessageRequest,
     ChatMessageResponse,
+    ChatOverviewResponse,
     ChatResumeRequest,
     ChatResumeResponse,
     ChatSessionResponse,
@@ -73,6 +74,27 @@ def resume_session(request: ChatResumeRequest, owner: str = Depends(current_owne
     return ChatResumeResponse(
         session_id=session_id, mode=mode, label=label, chat_id=chat_id,
         messages=[ChatMessage(**m) for m in messages],
+    )
+
+
+@router.get("/overview/{session_id}", response_model=ChatOverviewResponse)
+def session_overview(session_id: str, refresh: bool = False) -> ChatOverviewResponse:
+    """Return a NotebookLM-style overview card (summary + starter questions) for a session.
+
+    Best-effort: the service never raises on LLM/parse failure (it returns an empty
+    overview), so the only error here is an unknown session — mapped to the same 404
+    the message endpoint uses. ``?refresh=1`` regenerates the card, bypassing the cache.
+    """
+    try:
+        result = chat_service.session_overview(session_id, refresh=refresh)
+    except chat_service.ChatSessionError as exc:
+        raise HTTPException(status_code=404, detail="Session expired, start a new chat.") from exc
+
+    return ChatOverviewResponse(
+        label=result["label"],
+        sources=result["sources"],
+        overview=result["overview"],
+        questions=result["questions"],
     )
 
 

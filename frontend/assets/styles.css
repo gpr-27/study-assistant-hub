@@ -1096,3 +1096,54 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
 }
 .agent-prompt-chip:hover { border-color: hsl(var(--accent) / .8); background: hsl(var(--accent) / .18); transform: translateY(-2px); box-shadow: 0 6px 16px hsl(var(--accent) / .22); }
 .agent-prompt-chip:active { transform: scale(.97); }
+
+/* ============ Chat overview empty-state (NotebookLM-style) ============ */
+/* ---- Rendered into the chat thread's empty state for subject/topic sessions:
+   a short overview of the materials + tappable starter-question pills. Inherits
+   --accent from the chat view ([data-accent="chat"]). ---- */
+.chat-overview {
+  align-self: stretch; max-width: 640px; margin: auto;
+  display: flex; flex-direction: column; gap: .85rem;
+  padding: clamp(1.1rem, 3vw, 1.6rem);
+  border-radius: var(--r-md); border: 1px solid var(--glass-border);
+  background: var(--field-bg);
+  background-image: radial-gradient(120% 90% at 0% 0%, hsl(var(--accent) / .12), transparent 60%);
+  box-shadow: var(--shadow-float);
+  animation: rise .5s var(--ease-spring) both;
+}
+.chat-overview-title {
+  font-family: var(--font-display); font-weight: 800;
+  font-size: clamp(1.15rem, 3vw, 1.45rem); line-height: 1.2;
+  color: hsl(var(--ink));
+}
+.chat-overview-sources {
+  font-size: .76rem; color: hsl(var(--ink-faint));
+  letter-spacing: .04em; margin-top: -.5rem;
+}
+.chat-overview-body {
+  color: hsl(var(--ink-soft)); line-height: 1.6; font-size: .94rem;
+}
+.chat-overview-body strong, .chat-overview-body b { color: hsl(var(--ink)); font-weight: 700; }
+.chat-overview-body p:first-child { margin-top: 0; }
+.chat-overview-body p:last-child { margin-bottom: 0; }
+.chat-overview-qs {
+  display: flex; flex-direction: column; gap: .5rem; margin-top: .15rem;
+}
+.chat-overview-q {
+  text-align: left; width: 100%;
+  border: 1px solid hsl(var(--accent) / .45); background: hsl(var(--accent) / .1);
+  color: hsl(var(--ink)); font-family: var(--font-body); font-weight: 600; font-size: .9rem;
+  line-height: 1.4; padding: .65rem 1rem; border-radius: var(--r-pill); cursor: pointer;
+  transition: border-color .18s, background .18s, transform .18s var(--ease-out), box-shadow .18s;
+}
+.chat-overview-q:hover { border-color: hsl(var(--accent) / .8); background: hsl(var(--accent) / .18); transform: translateY(-2px); box-shadow: 0 6px 16px hsl(var(--accent) / .22); }
+.chat-overview-q:active { transform: scale(.98); }
+@media (max-width: 560px) {
+  .chat-overview { padding: 1rem; }
+  .chat-overview-q { padding: .6rem .85rem; font-size: .86rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-overview { animation: none; }
+  .chat-overview-q { transition: border-color .18s, background .18s; }
+  .chat-overview-q:hover { transform: none; }
+}

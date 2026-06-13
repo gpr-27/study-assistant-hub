@@ -259,6 +259,82 @@
     return wrap;
   }
 
+  // ── Session-start overview card (NotebookLM-style empty state) ──
+  //    Best-effort: ONE cheap backend call. Renders a short overview + up to 3
+  //    tappable starter-question chips into the thread's empty state. On failure
+  //    (or empty result) we silently keep the plain empty state — never block the
+  //    chat, never toast an error.
+  async function renderOverview(thread, sessionId) {
+    // Only meaningful before any message exists.
+    if (thread.querySelector(".msg")) return;
+    const placeholder = thread.querySelector(".empty");
+
+    // Light loading hint appended under the placeholder while we fetch.
+    const loading = el(`<div class="chat-overview-loading muted" style="text-align:center;font-size:.85rem;margin-top:.6rem">Preparing an overview…</div>`);
+    if (placeholder) placeholder.append(loading); else thread.append(loading);
+
+    let data;
+    try {
+      data = await window.api.get(`/chat/overview/${encodeURIComponent(sessionId)}`);
+    } catch {
+      loading.remove();
+      return; // graceful fallback: keep the plain empty state
+    }
+    loading.remove();
+
+    // Session may have changed/ended while we waited, or a message already sent.
+    if (!session || session.id !== sessionId) return;
+    if (thread.querySelector(".msg")) return;
+
+    const overview = (data && typeof data.overview === "string") ? data.overview : "";
+    const questions = (data && Array.isArray(data.questions)) ? data.questions.filter(Boolean) : [];
+    if (!overview && !questions.length) return; // fall back to plain empty state
+
+    const card = el(`<div class="chat-overview"></div>`);
+
+    const title = el(`<div class="chat-overview-title"></div>`);
+    title.textContent = (data && data.label) || session.label || "Overview";
+    card.append(title);
+
+    const sources = (data && Number(data.sources)) || 0;
+    if (sources > 0) {
+      const src = el(`<div class="chat-overview-sources"></div>`);
+      src.textContent = sources + " source" + (sources === 1 ? "" : "s");
+      card.append(src);
+    }
+
+    if (overview) {
+      const body = el(`<div class="chat-overview-body"></div>`);
+      body.append(md(overview));
+      card.append(body);
+    }
+
+    if (questions.length) {
+      const qs = el(`<div class="chat-overview-qs"></div>`);
+      questions.slice(0, 3).forEach((q) => {
+        const btn = el(`<button class="chat-overview-q" type="button"></button>`);
+        btn.textContent = q;
+        btn.addEventListener("click", () => askQuestion(q));
+        qs.append(btn);
+      });
+      card.append(qs);
+    }
+
+    thread.append(card);
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  // Send a starter question through the EXISTING send path (same code a typed
+  // message uses): drop it into the composer input and trigger send().
+  function askQuestion(text) {
+    const composer = document.querySelector("#chatComposer");
+    if (!composer) return;
+    const input = composer.querySelector(".input");
+    if (!input || input.disabled) return;
+    input.value = text;
+    send();
+  }
+
   // ── Thinking animation while waiting ──────────────────────
   const THINKING_STEPS = [
     "Rewriting question into search queries…",
@@ -373,6 +449,9 @@
       updateSessionBadge(resp.label);
       setChatSetup(false);   // collapse setup → full-page chat
       toast("Session started.", "ok");
+      // NotebookLM-style empty-state overview for subject/topic sessions only.
+      // Best-effort and non-blocking — never gate the chat on it.
+      if (!upload) renderOverview(thread, session.id);
       // refresh history list if popover is open
       const hp = document.querySelector('.history-panel[data-kind="chats"]');
       if (hp?.refresh) hp.refresh();
@@ -399,6 +478,9 @@
 
     const placeholder = thread.querySelector(".empty");
     if (placeholder) placeholder.remove();
+    // Remove the session-start overview card (+ any in-flight loading hint) too.
+    thread.querySelector(".chat-overview")?.remove();
+    thread.querySelector(".chat-overview-loading")?.remove();
     const firstTurn = !thread.querySelector(".msg");
 
     appendMessage(thread, "user", text);
