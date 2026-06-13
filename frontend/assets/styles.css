@@ -188,7 +188,17 @@ a { color: inherit; }
 .nav-add:hover { transform: translateY(-2px); box-shadow: 0 9px 22px hsl(var(--c-add) / .55), inset 0 1px 1px hsl(0 0% 100% / .5); }
 .nav-add:active { transform: scale(.96); }
 .nav-add svg { width: 15px; height: 15px; }
-@media (max-width: 560px) { .nav-add span { display: none; } .nav-add { padding: .45rem .55rem; } }
+/* Secondary nav action (Analytics / Progress) — a quiet glass pill, distinct from
+   the accent-filled .nav-add so the top bar has one primary action, not two. */
+.nav-analytics { display: inline-flex; align-items: center; gap: .4rem; padding: .45rem .85rem; border-radius: var(--r-pill);
+  font-family: var(--font-display); font-weight: 600; font-size: .82rem; letter-spacing: -.01em; text-decoration: none;
+  color: hsl(var(--ink)); background: var(--glass-fill); border: 1px solid var(--glass-border);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  transition: transform .3s var(--ease-spring), border-color .3s; white-space: nowrap; }
+.nav-analytics:hover { transform: translateY(-2px); border-color: hsl(var(--accent) / .6); }
+.nav-analytics:active { transform: scale(.96); }
+.nav-analytics svg { width: 15px; height: 15px; }
+@media (max-width: 560px) { .nav-add span, .nav-analytics span { display: none; } .nav-add, .nav-analytics { padding: .45rem .55rem; } }
 .toggle { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--glass-border); background: var(--glass-fill); color: hsl(var(--ink)); cursor: pointer; display: grid; place-items: center; backdrop-filter: blur(10px); transition: transform .5s var(--ease-spring); }
 .toggle:hover { transform: rotate(25deg) scale(1.08); }
 .toggle:active { transform: scale(.92); }

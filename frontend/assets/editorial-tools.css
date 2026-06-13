@@ -1,0 +1,633 @@
+/* ============================================================
+   STUDY ASSISTANT HUB — "Editorial" skin · TOOL SURFACES
+   ------------------------------------------------------------
+   Anthropic/Claude.com-inspired warm cream + coral + slab-serif.
+   Loads AFTER /assets/styles.css. EVERY rule is scoped under
+   [data-skin="editorial"] so the default "glass" skin is never
+   touched. This file owns the TOOL-SPECIFIC surfaces (chat/agent,
+   quiz, flashcards, exam, mind map, progress, predictor, teach-
+   back, scannotes/planner/cheatsheet documents).
+
+   The shared tokens (cream palette, fonts, radii, neutralised
+   .glass/.panel, ambient background, buttons, .seg, inputs,
+   footer, toasts) are redefined by the sibling editorial skin
+   stylesheet under :root[data-skin="editorial"]. Here we only
+   restyle COLORS / BORDERS / SHADOWS / FONTS of the tool views.
+   We NEVER alter layout transforms (flip 3D, mind-map scale,
+   chat-shell sizing) or DOM / class names.
+
+   Editorial palette reference (from design.md):
+     canvas        #faf9f5   page floor
+     surface-soft  #f5f0e8
+     surface-card  #efe9de   the calm card cream
+     cream-strong  #e8e0d2   user bubble / pressed
+     surface-dark  #181715   the one dark moment (footer)
+     coral         #cc785c   primary / scarce accent
+     coral-active  #a9583e
+     teal          #5db8a6   secondary accent
+     amber         #e8a55a
+     ink           #141413   body strong #252523 · body #3d3d3a
+     muted         #6c6a64   muted-soft #8e8b82
+     hairline      #e6dfd8   hairline-soft #ebe6df
+     success #5db872 · warning #d4a017 · error #c64545
+   ============================================================ */
+
+/* Local editorial helper tokens (scoped — don't leak to glass).
+   These mirror the shared skin tokens so this file is self-sufficient
+   for the few full-value colours it needs beyond the hsl() triples. */
+[data-skin="editorial"] {
+  --ed-canvas:        #faf9f5;
+  --ed-surface-soft:  #f5f0e8;
+  --ed-surface-card:  #efe9de;
+  --ed-cream-strong:  #e8e0d2;
+  --ed-dark:          #181715;
+  --ed-dark-elev:     #252320;
+  --ed-on-dark:       #faf9f5;
+  --ed-on-dark-soft:  #a09d96;
+  --ed-coral:         #cc785c;
+  --ed-coral-active:  #a9583e;
+  --ed-teal:          #5db8a6;
+  --ed-amber:         #e8a55a;
+  --ed-hairline:      #e6dfd8;
+  --ed-hairline-soft: #ebe6df;
+  --ed-shadow:        0 1px 3px rgba(20, 20, 19, .08);
+  --ed-shadow-soft:   0 1px 2px rgba(20, 20, 19, .06);
+
+  /* HSL triples (so they can drop into hsl(var(--x)/a) where needed) */
+  --ed-coral-h:   14 51% 58%;
+  --ed-coral-a-h: 16 47% 45%;
+  --ed-teal-h:    168 36% 54%;
+  --ed-amber-h:   33 75% 63%;
+  --ed-ink-h:     60 3% 8%;
+  --ed-muted-h:   45 4% 41%;
+  --ed-success-h: 134 36% 54%;
+  --ed-warning-h: 43 81% 46%;
+  --ed-error-h:   0 53% 53%;
+}
+
+/* ============================================================
+   CHAT / APEX AGENT
+   ============================================================ */
+
+/* Shell + slim minibar + collapsible setup. The .panel base is
+   already neutralised by the shared skin (flat cream, hairline);
+   here we just keep the minibar/setup reading as quiet cream rails. */
+[data-skin="editorial"] .chat-minibar,
+[data-skin="editorial"] .chat-src-bar {
+  background: var(--ed-surface-soft);
+  border: 1px solid var(--ed-hairline);
+  box-shadow: none;
+}
+[data-skin="editorial"] #chatSetup,
+[data-skin="editorial"] #tbSetup { background: var(--ed-surface-soft); }
+
+[data-skin="editorial"] #chatOptionsBtn.is-open,
+[data-skin="editorial"] #tbOptionsBtn.is-open {
+  border-color: hsl(var(--ed-coral-h) / .55);
+  color: hsl(var(--ed-coral-h));
+  background: hsl(var(--ed-coral-h) / .08);
+}
+
+/* The conversation area panel — flat canvas so the thread reads as paper */
+[data-skin="editorial"] .chat-shell > .panel { background: var(--ed-canvas); }
+
+/* Thread + messages -------------------------------------------------- */
+[data-skin="editorial"] .thread { background: var(--ed-canvas); }
+
+/* User bubble: warm coral fill, white text, flat. The .me/.user pairing
+   is covered defensively — current DOM uses `.msg.me`. */
+[data-skin="editorial"] .msg.me,
+[data-skin="editorial"] .msg.user {
+  color: #fff;
+  background: var(--ed-coral);
+  box-shadow: var(--ed-shadow-soft);
+  border: 1px solid var(--ed-coral-active);
+}
+
+/* AI bubble: calm cream card on the canvas, warm ink text, hairline. */
+[data-skin="editorial"] .msg.ai {
+  background: var(--ed-surface-card);
+  border: 1px solid var(--ed-hairline);
+  color: hsl(var(--ink));
+  box-shadow: none;
+}
+[data-skin="editorial"] .msg.ai .md { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .msg.ai .md strong { color: hsl(var(--ink)); }
+
+[data-skin="editorial"] .msg-thinking {
+  color: hsl(var(--ink-faint));
+  background: transparent;
+}
+[data-skin="editorial"] .thinking-label { color: hsl(var(--ink-faint)); }
+
+/* typing dots -> muted ink */
+[data-skin="editorial"] .typing i { background: hsl(var(--ink-faint)); }
+
+/* Composer: hairline divider, flat */
+[data-skin="editorial"] .composer { border-top: 1px solid var(--ed-hairline); }
+
+/* Message footer: copy + sources ------------------------------------- */
+[data-skin="editorial"] .msg-copy {
+  color: hsl(var(--ink-faint));
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-canvas);
+}
+[data-skin="editorial"] .msg-copy:hover {
+  color: hsl(var(--ink));
+  background: var(--ed-surface-soft);
+  border-color: hsl(var(--ed-muted-h) / .5);
+}
+[data-skin="editorial"] .msg-copy.copied {
+  color: #fff;
+  background: var(--ed-coral);
+  border-color: var(--ed-coral-active);
+}
+
+[data-skin="editorial"] .msg-source-chip {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-soft);
+  color: hsl(var(--ink-soft));
+}
+
+/* Artifact card (chat built something in another tool) --------------- */
+[data-skin="editorial"] .chat-artifact {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-card);
+  box-shadow: var(--ed-shadow-soft);
+}
+[data-skin="editorial"] .chat-artifact:hover {
+  border-color: hsl(var(--ed-coral-h) / .65);
+  box-shadow: var(--ed-shadow);
+}
+[data-skin="editorial"] .chat-artifact-icon {
+  background: var(--ed-coral);
+  color: #fff;
+}
+[data-skin="editorial"] .chat-artifact-title { color: hsl(var(--ink)); }
+[data-skin="editorial"] .chat-artifact-sub { color: hsl(var(--ed-coral-h)); }
+
+/* Overview empty-state card (NotebookLM-style) ----------------------- */
+[data-skin="editorial"] .chat-overview {
+  background: var(--ed-surface-card);
+  background-image: none;
+  border: 1px solid var(--ed-hairline);
+  box-shadow: var(--ed-shadow);
+}
+[data-skin="editorial"] .chat-overview-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.02em;
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .chat-overview-sources { color: hsl(var(--ink-faint)); }
+[data-skin="editorial"] .chat-overview-body { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .chat-overview-body strong,
+[data-skin="editorial"] .chat-overview-body b { color: hsl(var(--ink)); }
+
+/* Starter-question pills + prompt chips: cream pills, coral on hover */
+[data-skin="editorial"] .chat-overview-q,
+[data-skin="editorial"] .agent-prompt-chip {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-soft);
+  color: hsl(var(--ink));
+  box-shadow: none;
+}
+[data-skin="editorial"] .chat-overview-q:hover,
+[data-skin="editorial"] .agent-prompt-chip:hover {
+  border-color: hsl(var(--ed-coral-h) / .7);
+  background: hsl(var(--ed-coral-h) / .1);
+  box-shadow: var(--ed-shadow);
+}
+
+/* ── Agentic reasoning trace ─────────────────────────────────────────── */
+[data-skin="editorial"] .msg-trace-btn {
+  color: hsl(var(--ink-soft));
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-canvas);
+}
+[data-skin="editorial"] .msg-trace-btn:hover {
+  color: hsl(var(--ink));
+  border-color: hsl(var(--ed-coral-h) / .55);
+}
+[data-skin="editorial"] .msg-trace-btn .trace-count {
+  background: hsl(var(--ed-coral-h) / .14);
+  color: hsl(var(--ed-coral-a-h));
+}
+
+/* connector rail between step dots */
+[data-skin="editorial"] .trace-node:not(:last-child)::before {
+  background: linear-gradient(hsl(var(--ed-muted-h) / .35), hsl(var(--ed-muted-h) / .08));
+}
+
+/* step dots — recolour each stage to the editorial accents */
+[data-skin="editorial"] .trace-node--rewrite .trace-dot {
+  color: var(--ed-coral-active); border-color: hsl(var(--ed-coral-h) / .5); background: hsl(var(--ed-coral-h) / .14);
+}
+[data-skin="editorial"] .trace-node--retrieve .trace-dot {
+  color: var(--ed-teal); border-color: hsl(var(--ed-teal-h) / .5); background: hsl(var(--ed-teal-h) / .16);
+}
+[data-skin="editorial"] .trace-node--grade .trace-dot {
+  color: hsl(var(--ed-success-h)); border-color: hsl(var(--ed-success-h) / .5); background: hsl(var(--ed-success-h) / .16);
+}
+[data-skin="editorial"] .trace-node--grade.trace-v--insufficient .trace-dot,
+[data-skin="editorial"] .trace-node--grade.trace-v--limit .trace-dot {
+  color: hsl(var(--ed-warning-h)); border-color: hsl(var(--ed-warning-h) / .5); background: hsl(var(--ed-warning-h) / .16);
+}
+[data-skin="editorial"] .trace-node--generate .trace-dot {
+  color: hsl(var(--ink-soft)); border-color: hsl(var(--ed-muted-h) / .45); background: hsl(var(--ed-muted-h) / .12);
+}
+
+[data-skin="editorial"] .trace-node-head { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .trace-node-head:hover { color: hsl(var(--ink)); }
+[data-skin="editorial"] .trace-node-chev { color: hsl(var(--ink-faint)); }
+[data-skin="editorial"] .trace-note { color: hsl(var(--ink-faint)); }
+
+/* search-query chips */
+[data-skin="editorial"] .trace-q {
+  background: hsl(var(--ed-coral-h) / .1);
+  border: 1px solid hsl(var(--ed-coral-h) / .28);
+  color: hsl(var(--ink-soft));
+}
+
+/* retrieved-passage block */
+[data-skin="editorial"] .trace-pass {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-soft);
+}
+[data-skin="editorial"] .trace-pass-src { color: var(--ed-teal); }
+[data-skin="editorial"] .trace-pass-pg {
+  color: hsl(var(--ink-faint));
+  border: 1px solid var(--ed-hairline);
+}
+[data-skin="editorial"] .trace-pass-text { color: hsl(var(--ink-faint)); }
+
+/* grading verdict pills */
+[data-skin="editorial"] .trace-verdict--sufficient {
+  color: hsl(var(--ed-success-h)); background: hsl(var(--ed-success-h) / .16); border: 1px solid hsl(var(--ed-success-h) / .42);
+}
+[data-skin="editorial"] .trace-verdict--insufficient,
+[data-skin="editorial"] .trace-verdict--limit {
+  color: hsl(var(--ed-warning-h)); background: hsl(var(--ed-warning-h) / .16); border: 1px solid hsl(var(--ed-warning-h) / .42);
+}
+
+/* raw-prompt reveal */
+[data-skin="editorial"] .trace-prompt-btn {
+  color: hsl(var(--ink-faint));
+  border: 1px dashed hsl(var(--ed-muted-h) / .4);
+}
+[data-skin="editorial"] .trace-prompt-btn:hover,
+[data-skin="editorial"] .trace-prompt-btn.is-open {
+  color: hsl(var(--ed-coral-h));
+  border-color: hsl(var(--ed-coral-h) / .5);
+}
+[data-skin="editorial"] .trace-prompt {
+  color: hsl(var(--ink-soft));
+  background: var(--ed-surface-soft);
+  border: 1px solid var(--ed-hairline);
+}
+
+/* Voice buttons (mic + read-aloud) in the composer -------------------- */
+[data-skin="editorial"] #voiceTtsBtn[aria-pressed="true"] {
+  box-shadow: inset 0 0 0 1.5px var(--ed-coral);
+  color: hsl(var(--ed-coral-h));
+}
+/* keep the live-recording dot a true alert red — read clearly on cream */
+[data-skin="editorial"] #voiceMicBtn.is-rec::after {
+  background: hsl(var(--ed-error-h));
+  box-shadow: 0 0 6px hsl(var(--ed-error-h) / .8);
+}
+
+/* ============================================================
+   QUIZ  (also reused by exam MCQ option buttons)
+   ============================================================ */
+
+/* MCQ option buttons: cream surface, hairline; selected = coral */
+[data-skin="editorial"] .opt {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-card);
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .opt:hover:not(:disabled) {
+  border-color: hsl(var(--ed-coral-h) / .7);
+}
+[data-skin="editorial"] .opt .key {
+  background: hsl(var(--ed-muted-h) / .14);
+  color: hsl(var(--ink-soft));
+}
+
+/* selected-but-ungraded (aria-pressed) — coral wash */
+[data-skin="editorial"] .opt[aria-pressed="true"] {
+  border-color: var(--ed-coral);
+  background: hsl(var(--ed-coral-h) / .12);
+}
+[data-skin="editorial"] .opt[aria-pressed="true"] .key {
+  background: var(--ed-coral);
+  color: #fff;
+}
+
+/* graded states: correct = success, wrong = error — calm on cream */
+[data-skin="editorial"] .opt[data-state="correct"] {
+  border-color: hsl(var(--ed-success-h));
+  background: hsl(var(--ed-success-h) / .16);
+}
+[data-skin="editorial"] .opt[data-state="correct"] .key {
+  background: hsl(var(--ed-success-h)); color: #fff;
+}
+[data-skin="editorial"] .opt[data-state="wrong"] {
+  border-color: hsl(var(--ed-error-h));
+  background: hsl(var(--ed-error-h) / .14);
+}
+[data-skin="editorial"] .opt[data-state="wrong"] .key {
+  background: hsl(var(--ed-error-h)); color: #fff;
+}
+
+/* explanation callout + the named .quiz-q / .exam-q wrappers (defensive) */
+[data-skin="editorial"] .explain,
+[data-skin="editorial"] .quiz-q,
+[data-skin="editorial"] .exam-q,
+[data-skin="editorial"] .exam-prompt,
+[data-skin="editorial"] .exam-mcq,
+[data-skin="editorial"] .exam-short {
+  background: var(--ed-surface-soft);
+  border: 1px solid var(--ed-hairline);
+  color: hsl(var(--ink-soft));
+}
+
+/* score ring: solid coral number (no glassy gradient text) */
+[data-skin="editorial"] .score-ring {
+  font-family: var(--font-display);
+  font-weight: 600;
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: var(--ed-coral);
+}
+
+/* confidence-rating buttons (.rate uses .btn / .btn-accent kids — already
+   handled by the shared skin; the named .rate scope kept for safety) */
+[data-skin="editorial"] .rate .btn { background: var(--ed-canvas); }
+
+/* MCQ option / short-answer named exam buttons (defensive) */
+[data-skin="editorial"] .exam-opt-btn {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-card);
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .exam-opt-btn[aria-pressed="true"] {
+  border-color: var(--ed-coral);
+  background: hsl(var(--ed-coral-h) / .12);
+}
+
+/* ============================================================
+   FLASHCARDS  (3D flip — colour/border/shadow only; the
+   preserve-3d / backface / rotateY transforms stay untouched)
+   ============================================================ */
+
+/* both faces become calm cream cards with a hairline. We must NOT add
+   filter/backdrop-filter/overflow to .flip itself (would collapse 3D);
+   the shared skin already strips glass blur off .flip-face. */
+[data-skin="editorial"] .flip-face {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-card);
+  box-shadow: var(--ed-shadow);
+}
+[data-skin="editorial"] .flip-face .q {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.02em;
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .flip-face .a { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .flip-face .topic { color: hsl(var(--ink-faint)); }
+[data-skin="editorial"] .flip-face .fliphint { color: hsl(var(--ink-faint)); }
+
+/* ============================================================
+   MOCK EXAM  (paper + report)
+   The exam view reuses .panel / .panel-soft / .opts / .opt /
+   .score-ring / .progress / .badge / .explain / details>summary,
+   most of which are handled above + by the shared skin. Below
+   covers the exam-specific report surfaces + named classes.
+   ============================================================ */
+
+/* live timer badge — keep it a calm coral pill (turns red < 60s via inline
+   style set in exam.js; we don't fight the inline color) */
+[data-skin="editorial"] #ex-clock,
+[data-skin="editorial"] .exam-timer {
+  background: hsl(var(--ed-coral-h) / .14);
+  border: 1px solid hsl(var(--ed-coral-h) / .4);
+  color: hsl(var(--ed-coral-a-h));
+}
+
+/* per-question feedback <details> blocks (rendered as .panel-soft) and the
+   named report wrappers (defensive) */
+[data-skin="editorial"] .exam-report,
+[data-skin="editorial"] .report-q {
+  background: var(--ed-surface-card);
+  border: 1px solid var(--ed-hairline);
+}
+[data-skin="editorial"] details.panel-soft > summary { color: hsl(var(--ink)); }
+
+/* topic-breakdown bars (.progress) -> coral fill on a quiet cream track */
+[data-skin="editorial"] .progress { background: hsl(var(--ed-muted-h) / .14); }
+[data-skin="editorial"] .progress > i {
+  background: var(--ed-coral);
+}
+
+/* ============================================================
+   MIND MAP  (interactive concept graph)
+   Recolour only — the scale/transform-origin/scroll layout and
+   the mm-enter / mm-link-enter animations are preserved.
+   ============================================================ */
+
+[data-skin="editorial"] .mm-canvas {
+  border: 1px solid var(--ed-hairline);
+  background:
+    radial-gradient(130% 120% at 18% 0%, hsl(var(--ed-coral-h) / .06), transparent 60%),
+    var(--ed-surface-soft);
+}
+
+/* floating zoom controls -> cream pill, hairline */
+[data-skin="editorial"] .mm-zoom {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-canvas);
+  box-shadow: var(--ed-shadow);
+}
+[data-skin="editorial"] .mm-zoom button { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .mm-zoom button:hover {
+  background: hsl(var(--ed-coral-h) / .14);
+  color: hsl(var(--ink));
+}
+
+/* connector curves -> muted warm ink, light coral feel */
+[data-skin="editorial"] .mm-link {
+  stroke: hsl(var(--ed-muted-h) / .45);
+}
+
+/* nodes ------------------------------------------------------ */
+[data-skin="editorial"] .mm-card {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-card);
+  color: hsl(var(--ink-soft));
+}
+[data-skin="editorial"] .mm-card:hover {
+  border-color: hsl(var(--ed-coral-h) / .6);
+}
+/* root node (lvl0) = the one bold coral moment */
+[data-skin="editorial"] .mm-card.lvl0 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.01em;
+  color: #fff;
+  border-color: var(--ed-coral-active);
+  background: var(--ed-coral);
+  box-shadow: var(--ed-shadow);
+}
+[data-skin="editorial"] .mm-card.lvl1 { color: hsl(var(--ink)); }
+[data-skin="editorial"] .mm-card.lvl2 {
+  color: hsl(var(--ink-soft));
+  background: hsl(var(--ed-teal-h) / .14);
+  border-color: hsl(var(--ed-teal-h) / .3);
+}
+
+/* expand/collapse toggle bubble */
+[data-skin="editorial"] .mm-toggle {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-canvas);
+  color: hsl(var(--ink-soft));
+}
+[data-skin="editorial"] .mm-toggle:hover {
+  border-color: var(--ed-coral);
+  background: hsl(var(--ed-coral-h) / .14);
+  color: hsl(var(--ink));
+}
+
+/* ============================================================
+   PROGRESS  (mastery dashboard + weakness heatmap)
+   ============================================================ */
+
+[data-skin="editorial"] .prog-tile-value,
+[data-skin="editorial"] .prog-act-count {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .prog-act--zero .prog-act-count { color: hsl(var(--ink-faint)); }
+[data-skin="editorial"] .prog-act-label { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .prog-act:hover,
+[data-skin="editorial"] a.prog-rec:hover {
+  border-color: hsl(var(--ed-coral-h) / .6);
+}
+
+[data-skin="editorial"] .prog-weak-name { color: hsl(var(--ink)); }
+[data-skin="editorial"] .prog-subj {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.01em;
+  color: hsl(var(--ink));
+}
+
+/* weakness bar -> quiet cream track, coral fill (per-bar inline width kept) */
+[data-skin="editorial"] .prog-bar { background: hsl(var(--ed-muted-h) / .14); }
+[data-skin="editorial"] .prog-bar > i { background: var(--ed-coral); }
+
+/* heat cells: the bg is a dynamic inline hsl() by accuracy — DO NOT fight it.
+   We only soften the border/radius and ensure the on-cell text reads. The
+   inline colours are vivid enough that white text + a subtle shadow stays
+   legible on cream, so we keep the cell's own white text. */
+[data-skin="editorial"] .prog-cell {
+  border: 1px solid hsl(var(--ed-ink-h) / .08);
+  box-shadow: var(--ed-shadow-soft);
+}
+
+/* AI insight + recommendation cards */
+[data-skin="editorial"] .prog-insight-headline {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.01em;
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .prog-rec-action { color: hsl(var(--ink)); }
+[data-skin="editorial"] .prog-rec-go { color: hsl(var(--ed-coral-h)); }
+
+/* ============================================================
+   QUESTION PREDICTOR
+   (.panel.stack + .panel-soft pattern rows, likelihood badges,
+   .btn-ghost "Why?" reasoning toggle + .hint reasoning box)
+   ============================================================ */
+
+/* high-likelihood badge leans on .badge-accent (coral via shared skin);
+   keep the named .likelihood-* hooks defensive */
+[data-skin="editorial"] .likelihood-high,
+[data-skin="editorial"] .badge.likelihood-high {
+  color: hsl(var(--ed-coral-a-h));
+  background: hsl(var(--ed-coral-h) / .16);
+  border-color: hsl(var(--ed-coral-h) / .4);
+}
+[data-skin="editorial"] .likelihood-medium {
+  color: hsl(var(--ed-amber-h)); background: hsl(var(--ed-amber-h) / .16); border-color: hsl(var(--ed-amber-h) / .4);
+}
+[data-skin="editorial"] .likelihood-low {
+  color: hsl(var(--ink-soft)); background: hsl(var(--ed-muted-h) / .12); border-color: var(--ed-hairline);
+}
+
+/* reasoning toggle + reveal box */
+[data-skin="editorial"] [data-accent="predictor"] .btn-ghost:hover { color: hsl(var(--ed-coral-h)); }
+[data-skin="editorial"] .hint { color: hsl(var(--ink-faint)); }
+
+/* ============================================================
+   TEACH-BACK TUTOR
+   Reuses .thread / .msg / .msg.me / .msg.ai (styled above) plus
+   an evaluation card built as .panel-soft.stack. The score badge
+   uses .badge-accent and the strengths/gaps/review lists use
+   .label + .badge / .row.row-wrap (handled by the shared skin).
+   ============================================================ */
+
+/* the evaluation card (function name evaluationCard -> .panel-soft) and the
+   named .evaluationCard hook (defensive) */
+[data-skin="editorial"] .evaluationCard {
+  background: var(--ed-surface-card);
+  border: 1px solid var(--ed-hairline);
+  box-shadow: var(--ed-shadow-soft);
+}
+[data-skin="editorial"] .evaluationCard .label,
+[data-skin="editorial"] .panel-soft .label { color: hsl(var(--ink-soft)); }
+
+/* ============================================================
+   SCAN NOTES + PLANNER + CHEAT SHEET
+   The generated document is a `.panel.day` (a .panel given the
+   .day class) holding .md content. Editorial gives it a calm
+   cream "paper" look with warm ink body text and a coral spine.
+   Thumbnail grids use .row.row-wrap (handled by shared skin).
+   ============================================================ */
+
+/* the document "paper": flat cream, hairline, faint shadow, coral spine */
+[data-skin="editorial"] .panel.day {
+  background: var(--ed-canvas);
+  border: 1px solid var(--ed-hairline);
+  border-left: 3px solid var(--ed-coral);
+  box-shadow: var(--ed-shadow);
+}
+/* the bare .day spine recolour (when not on a .panel) */
+[data-skin="editorial"] .day { border-left-color: var(--ed-coral); }
+
+/* markdown typography inside any tool document -> serif headings, warm ink */
+[data-skin="editorial"] .md { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .md h1,
+[data-skin="editorial"] .md h2,
+[data-skin="editorial"] .md h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.02em;
+  color: hsl(var(--ink));
+}
+/* h2 was glass-accent coloured; on cream let it stay coral for hierarchy */
+[data-skin="editorial"] .md h2 { color: hsl(var(--ed-coral-a-h)); }
+[data-skin="editorial"] .md p,
+[data-skin="editorial"] .md li { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .md strong { color: hsl(var(--ink)); }
+[data-skin="editorial"] .md hr { border-top: 1px solid var(--ed-hairline); }
+
+/* planner day cards (planner.js appends md into .panel-soft.stack-sm rows) —
+   keep them as quiet cream paper too */
+[data-skin="editorial"] .panel-soft.stack-sm .md p,
+[data-skin="editorial"] .panel-soft.stack-sm .md li { color: hsl(var(--ink-soft)); }

@@ -1,0 +1,707 @@
+/* ============================================================
+   STUDY ASSISTANT HUB — "Editorial" skin (Agent A: foundation + shell)
+   Warm cream + coral + Cormorant slab-serif design, modelled on
+   Anthropic / Claude.com. Loads AFTER styles.css and scopes every
+   rule under [data-skin="editorial"]. Token redefinitions use
+   :root[data-skin="editorial"] so they beat :root / [data-theme].
+   Cream palette is FORCED regardless of data-theme (light/dark).
+   This file = foundation + glass neutralisation + shell/generic kit.
+   ============================================================ */
+
+/* ============================================================
+   1. TOKEN REDEFINITIONS
+   Forced for both light & dark data-theme so editorial always
+   reads as the calm cream canvas. HSL triples computed from the
+   design.md hexes; full values for backgrounds/borders/shadows.
+   ============================================================ */
+:root[data-skin="editorial"],
+[data-skin="editorial"][data-theme="dark"],
+[data-skin="editorial"][data-theme="light"] {
+  /* fonts */
+  --font-display: "Cormorant Garamond", Georgia, serif;
+  --font-serif: "Cormorant Garamond", Georgia, serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* ink scale (warm dark on cream) — HSL triples consumed via hsl(var(--x)) */
+  --ink: 60 3% 8%;          /* ink #141413 */
+  --ink-soft: 60 4% 23%;    /* body #3d3d3a */
+  --ink-faint: 50 4% 41%;   /* muted #6c6a64 */
+
+  /* primary accent + per-tool accents — coral is the through-line, with the
+     design.md secondary hues for variety where the code paints per-card. */
+  /* Editorial is a cohesive cream + coral + ink palette (per the reference): the
+     interactive accent is coral EVERYWHERE — no per-tool rainbow. Green survives
+     only as the "ready"/success pulse via the .led/.dot override further below. */
+  --accent: 16 50% 58%;     /* coral #cc785c */
+  --c-chat: 16 50% 58%;     /* coral */
+  --c-quiz: 16 50% 58%;     /* coral (was teal) */
+  --c-cards: 16 50% 58%;    /* coral (was amber) */
+  --c-plan: 16 50% 58%;     /* coral (was green) */
+  --c-add: 16 50% 58%;      /* coral (nav add) */
+  --c-mind: 15 47% 45%;     /* coral-active #a9583e (deeper, for root nodes) */
+
+  /* page background — full values */
+  --bg-0: #faf9f5;          /* canvas / page floor */
+  --bg-1: #f5f0e8;          /* surface-soft (gradient partner) */
+
+  /* glass surfaces flattened to flat cream fills */
+  --glass-fill: #efe9de;        /* surface-card */
+  --glass-fill-2: #f5f0e8;      /* surface-soft */
+  --glass-border: #e6dfd8;      /* hairline */
+  --glass-blur: 0px;
+  --glass-sat: 100%;
+  --glass-bright: 1;
+
+  /* fields / popovers */
+  --field-bg: #faf9f5;          /* canvas */
+  --popover-bg: #faf9f5;        /* opaque cream */
+  --popover-border: #e6dfd8;    /* hairline */
+
+  /* kill the lensed edge-ring: a flat hairline-coloured "ring" */
+  --edge-light: #e6dfd8;
+  --edge-dim: #e6dfd8;
+  --edge-ring: none;
+
+  /* faint editorial float shadow (no heavy glass stack) */
+  --shadow-float: 0 1px 3px rgba(20, 20, 19, .08);
+
+  /* ambient layers off in editorial */
+  --orb-opacity: 0;
+  --noise-opacity: 0;
+
+  /* radii — md 8, lg 12, sm 6, pill 9999 */
+  --r-card: 12px;
+  --r-md: 8px;
+  --r-sm: 6px;
+  --r-pill: 9999px;
+}
+
+/* Hide the light/dark toggle — cream palette is forced in editorial */
+[data-skin="editorial"] #themeToggle { display: none !important; }
+
+/* Page floor + body type */
+[data-skin="editorial"] body {
+  font-family: var(--font-body);
+  color: hsl(var(--ink));
+  background: var(--bg-0);
+}
+[data-skin="editorial"] ::selection { background: hsl(var(--accent) / .22); color: hsl(var(--ink)); }
+[data-skin="editorial"] :focus-visible { outline: 2px solid hsl(var(--accent) / .6); outline-offset: 3px; }
+
+/* ============================================================
+   2. AMBIENT BACKGROUND — tame to a calm flat cream canvas
+   ============================================================ */
+[data-skin="editorial"] .bg {
+  background:
+    radial-gradient(120% 90% at 80% -10%, hsl(33 60% 90% / .5), transparent 60%),
+    linear-gradient(160deg, var(--bg-1), var(--bg-0));
+}
+[data-skin="editorial"] .orbs,
+[data-skin="editorial"] .orb,
+[data-skin="editorial"] .grain,
+[data-skin="editorial"] .cursor-glow {
+  display: none !important;
+}
+
+/* ============================================================
+   3. GLASS NEUTRALISATION — .glass / .panel / .panel-soft become
+   flat cream cards with a 1px hairline, no backdrop blur, and the
+   lens (::before) + edge-ring (::after) pseudo-layers killed.
+   ============================================================ */
+[data-skin="editorial"] .glass,
+[data-skin="editorial"] .panel {
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-card);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: var(--shadow-float);
+}
+[data-skin="editorial"] .panel-soft {
+  background: var(--glass-fill-2);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none;
+}
+/* kill the lens + refractive edge-ring pseudo layers entirely */
+[data-skin="editorial"] .glass::before,
+[data-skin="editorial"] .glass::after,
+[data-skin="editorial"] .panel::before,
+[data-skin="editorial"] .panel::after {
+  display: none !important;
+  content: none !important;
+}
+/* override the per-theme glass/panel box-shadow stacks from styles.css */
+[data-skin="editorial"][data-theme="light"] .glass,
+[data-skin="editorial"][data-theme="dark"] .glass,
+[data-skin="editorial"][data-theme="light"] .panel,
+[data-skin="editorial"][data-theme="dark"] .panel {
+  box-shadow: var(--shadow-float);
+}
+
+/* ============================================================
+   4. LAYOUT SHELL
+   ============================================================ */
+[data-skin="editorial"] .nav {
+  background: hsl(45 33% 97% / .92);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: saturate(120%) blur(6px);
+  backdrop-filter: saturate(120%) blur(6px);
+}
+[data-skin="editorial"] .brand {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.02em;
+  color: hsl(var(--ink));
+}
+/* mark: calm coral tile, flat (no rainbow conic, no glow) */
+[data-skin="editorial"] .brand .mark {
+  background: hsl(var(--accent));
+  box-shadow: none;
+  color: #fff;
+}
+[data-skin="editorial"] .brand .mark svg { color: #fff; }
+[data-skin="editorial"] .tag {
+  color: hsl(var(--ink-faint));
+  border: 1px solid var(--glass-border);
+  background: #faf9f5;
+}
+
+/* nav "Add subject" — solid coral, white text, flat */
+[data-skin="editorial"] .nav-add {
+  color: #fff;
+  background: hsl(var(--accent));
+  border: 1px solid transparent;
+  box-shadow: none;
+  font-family: var(--font-body);
+  font-weight: 600;
+}
+[data-skin="editorial"] .nav-add:hover {
+  background: hsl(15 47% 45%);   /* coral-active */
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-float);
+}
+[data-skin="editorial"] .nav-add:active { transform: scale(.97); }
+
+/* Secondary nav action (Analytics): quiet cream pill, hairline, coral on hover */
+[data-skin="editorial"] .nav-analytics {
+  color: hsl(var(--ink));
+  background: #faf9f5;
+  border: 1px solid var(--glass-border);
+  box-shadow: none;
+  font-family: var(--font-body);
+  font-weight: 600;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+[data-skin="editorial"] .nav-analytics:hover {
+  border-color: hsl(var(--accent) / .6);
+  color: hsl(var(--accent));
+  transform: translateY(-1px);
+}
+
+/* theme toggle is hidden in editorial, but style the generic .toggle in case */
+[data-skin="editorial"] .toggle {
+  border: 1px solid var(--glass-border);
+  background: #faf9f5;
+  color: hsl(var(--ink));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+[data-skin="editorial"] .user-btn-slot { align-items: center; }
+
+/* key warning banner */
+[data-skin="editorial"] .keywarn {
+  border: 1px solid hsl(44 81% 46% / .45);    /* warning */
+  background: hsl(44 81% 46% / .1);
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .keywarn code {
+  font-family: var(--font-mono);
+  background: hsl(var(--ink) / .07);
+  color: hsl(var(--ink));
+}
+
+/* ============================================================
+   5. HERO
+   ============================================================ */
+[data-skin="editorial"] .eyebrow {
+  color: hsl(var(--ink-faint));
+  border: 1px solid var(--glass-border);
+  background: #faf9f5;
+  letter-spacing: .14em;
+}
+[data-skin="editorial"] .eyebrow .dot {
+  background: hsl(var(--accent));
+  box-shadow: none;
+}
+[data-skin="editorial"] .hero h1 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.03em;
+  color: hsl(var(--ink));
+  line-height: 1;
+}
+/* serif headline — coral as the single editorial highlight, flat (no gradient/glow) */
+[data-skin="editorial"] .hero h1 .glow {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: hsl(var(--accent));
+  filter: none;
+}
+[data-skin="editorial"] .hero h1 em {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 500;
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .hero p { color: hsl(var(--ink-soft)); }
+
+/* stats pills */
+[data-skin="editorial"] .stat {
+  color: hsl(var(--ink-faint));
+  border: 1px solid var(--glass-border);
+  background: #faf9f5;
+}
+[data-skin="editorial"] .stat b { font-family: var(--font-body); font-weight: 700; color: hsl(var(--ink)); }
+
+/* section head */
+[data-skin="editorial"] .section-head h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.02em;
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .section-head span { color: hsl(var(--ink-faint)); }
+
+/* ============================================================
+   6. HUB TOOL GRID — flat cream cards, hairline, no wash glow
+   ============================================================ */
+[data-skin="editorial"] .card {
+  background: var(--glass-fill);          /* surface-card */
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-float);
+}
+/* subtle/transparent wash; no colored radial bloom */
+[data-skin="editorial"] .card .wash {
+  background: none;
+  opacity: 0;
+}
+[data-skin="editorial"] .card .sheen { display: none !important; }
+[data-skin="editorial"] .card:hover {
+  box-shadow: 0 6px 18px rgba(20, 20, 19, .1);
+  border-color: hsl(var(--accent) / .4);
+}
+/* chip: calm cream/ink icon tile (not a rainbow gradient) */
+[data-skin="editorial"] .chip {
+  background: #e8e0d2;        /* surface-cream-strong */
+  color: hsl(var(--ink));
+  border: 1px solid var(--glass-border);
+  box-shadow: none;
+}
+[data-skin="editorial"] .chip svg { color: hsl(var(--ink)); }
+[data-skin="editorial"] .status {
+  color: hsl(var(--ink-faint));
+  border: 1px solid var(--glass-border);
+  background: #faf9f5;
+}
+[data-skin="editorial"] .status .led {
+  background: hsl(134 38% 54%);   /* success */
+  box-shadow: none;
+}
+[data-skin="editorial"] .card h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.025em;
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .card p { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .open {
+  font-family: var(--font-body);
+  font-weight: 600;
+  color: hsl(var(--ink));
+}
+/* the arrow may use coral as the single per-card accent */
+[data-skin="editorial"] .open .arrow {
+  background: hsl(var(--accent));
+  color: #fff;
+  box-shadow: none;
+}
+[data-skin="editorial"] .port { font-family: var(--font-body); color: hsl(var(--ink-faint)); }
+
+/* ============================================================
+   7. FOOTER — the one big dark moment (navy/charcoal surface)
+   ============================================================ */
+[data-skin="editorial"] .foot {
+  background: #181715;          /* surface-dark */
+  border: 1px solid #252320;    /* surface-dark-elevated */
+  box-shadow: var(--shadow-float);
+}
+[data-skin="editorial"] .foot p { color: #faf9f5; }            /* on-dark */
+[data-skin="editorial"] .foot .by { color: #a09d96; }          /* on-dark-soft */
+[data-skin="editorial"] .foot .heart { color: hsl(var(--accent)); }
+[data-skin="editorial"] .foot a { color: #faf9f5; }
+
+/* ============================================================
+   8. VIEW CHROME
+   ============================================================ */
+[data-skin="editorial"] .view-head h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.03em;
+  color: hsl(var(--ink));
+}
+
+/* ============================================================
+   9. COMPONENT KIT — generic shared components
+   ============================================================ */
+[data-skin="editorial"] .muted { color: hsl(var(--ink-faint)); }
+[data-skin="editorial"] .soft { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .label { color: hsl(var(--ink-soft)); font-weight: 600; }
+[data-skin="editorial"] .hint { color: hsl(var(--ink-faint)); }
+
+/* inputs / textarea / select — canvas bg, hairline, radius 8, coral focus ring */
+[data-skin="editorial"] .input,
+[data-skin="editorial"] .textarea,
+[data-skin="editorial"] select.select {
+  font-family: var(--font-body);
+  color: hsl(var(--ink));
+  background: var(--field-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+[data-skin="editorial"] .input::placeholder,
+[data-skin="editorial"] .textarea::placeholder { color: hsl(var(--ink-faint)); }
+[data-skin="editorial"] .input:focus,
+[data-skin="editorial"] .textarea:focus,
+[data-skin="editorial"] select.select:focus {
+  border-color: hsl(var(--accent) / .8);
+  box-shadow: 0 0 0 3px hsl(var(--accent) / .16);
+}
+/* recolour the select chevron to a warm muted tone. The `.input` rule above uses
+   the `background` shorthand (resets background-repeat to `repeat`), so the chevron
+   MUST restate no-repeat/position/size or it tiles across the whole control. */
+[data-skin="editorial"] select.select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%236c6a64' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right .85rem center;
+  background-size: 14px 14px;
+  padding-right: 2.4rem;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* segmented control (also reused by the skin switch) */
+[data-skin="editorial"] .seg {
+  border: 1px solid var(--glass-border);
+  background: var(--field-bg);
+  border-radius: var(--r-pill);
+}
+[data-skin="editorial"] .seg button {
+  color: hsl(var(--ink-soft));
+  font-family: var(--font-body);
+  font-weight: 600;
+  border-radius: var(--r-pill);
+}
+[data-skin="editorial"] .seg button:hover { color: hsl(var(--ink)); }
+/* active segment — solid coral fill, white text, flat */
+[data-skin="editorial"] .seg button[aria-pressed="true"] {
+  background: hsl(var(--accent));
+  color: #fff;
+  box-shadow: none;
+}
+
+/* range slider */
+[data-skin="editorial"] input[type="range"] { background: hsl(var(--ink) / .12); }
+[data-skin="editorial"] input[type="range"]::-webkit-slider-thumb {
+  background: hsl(var(--accent));
+  box-shadow: 0 1px 3px rgba(20, 20, 19, .2), 0 0 0 3px hsl(var(--accent) / .2);
+}
+[data-skin="editorial"] input[type="range"]::-moz-range-thumb {
+  background: hsl(var(--accent));
+  box-shadow: 0 1px 3px rgba(20, 20, 19, .2);
+}
+
+/* checkbox accent */
+[data-skin="editorial"] input[type="checkbox"],
+[data-skin="editorial"] input[type="radio"] { accent-color: hsl(var(--accent)); }
+
+/* ---------- buttons ---------- */
+/* secondary .btn — canvas bg + hairline + ink text, flat */
+[data-skin="editorial"] .btn,
+[data-skin="editorial"] .btn-accent,
+[data-skin="editorial"] .btn-ghost {
+  font-family: var(--font-body);
+  font-weight: 600;
+  letter-spacing: 0;
+  border-radius: var(--r-md);
+  border: 1px solid var(--glass-border);
+  color: hsl(var(--ink));
+  background: var(--field-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+[data-skin="editorial"] .btn:hover {
+  background: #f5f0e8;
+  border-color: hsl(var(--ink) / .2);
+  transform: none;
+}
+/* primary .btn-accent — solid coral, white text, flat */
+[data-skin="editorial"] .btn-accent {
+  color: #fff;
+  border: 1px solid transparent;
+  background: hsl(var(--accent));
+  box-shadow: none;
+}
+[data-skin="editorial"] .btn-accent:hover {
+  background: hsl(15 47% 45%);   /* coral-active */
+  transform: none;
+  box-shadow: none;
+}
+/* ghost — transparent */
+[data-skin="editorial"] .btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+[data-skin="editorial"] .btn-ghost:hover { background: hsl(var(--ink) / .05); transform: none; }
+[data-skin="editorial"] .btn:disabled,
+[data-skin="editorial"] .btn-accent:disabled,
+[data-skin="editorial"] .btn-ghost:disabled { opacity: .5; box-shadow: none; }
+
+/* ---------- badges ---------- */
+[data-skin="editorial"] .badge {
+  border: 1px solid var(--glass-border);
+  background: #faf9f5;
+  color: hsl(var(--ink-soft));
+  font-family: var(--font-body);
+}
+[data-skin="editorial"] .badge-accent {
+  background: hsl(var(--accent) / .14);
+  border-color: hsl(var(--accent) / .4);
+  color: hsl(15 47% 38%);
+}
+[data-skin="editorial"] .count { font-family: var(--font-body); font-weight: 700; }
+
+/* ---------- progress ---------- */
+[data-skin="editorial"] .progress { background: hsl(var(--ink) / .1); }
+[data-skin="editorial"] .progress > i {
+  background: hsl(var(--accent));
+}
+
+/* ---------- spinner ---------- */
+[data-skin="editorial"] .spinner {
+  border-color: hsl(var(--ink) / .15);
+  border-top-color: hsl(var(--accent));
+}
+[data-skin="editorial"] .loading { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .skeleton {
+  background: linear-gradient(90deg, hsl(var(--ink) / .05), hsl(var(--ink) / .1), hsl(var(--ink) / .05));
+  background-size: 200% 100%;
+}
+
+/* ---------- empty state ---------- */
+[data-skin="editorial"] .empty { color: hsl(var(--ink-faint)); }
+[data-skin="editorial"] .empty .big { color: hsl(var(--ink-soft)); }
+
+/* ---------- utility: glow / dot ---------- */
+[data-skin="editorial"] .glow {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: hsl(var(--accent));
+  filter: none;
+}
+[data-skin="editorial"] .dot { background: hsl(var(--accent)); box-shadow: none; }
+
+/* ============================================================
+   10. TOASTS — cream surface, hairline, flat (no backdrop blur)
+   ============================================================ */
+[data-skin="editorial"] .toast {
+  color: hsl(var(--ink));
+  border: 1px solid var(--glass-border);
+  background: #faf9f5;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: var(--shadow-float);
+}
+[data-skin="editorial"] .toast.err {
+  border-color: hsl(0 52% 53% / .5);     /* error */
+  background: hsl(0 52% 53% / .1);
+  color: hsl(0 52% 38%);
+}
+[data-skin="editorial"] .toast.ok {
+  border-color: hsl(134 38% 54% / .5);   /* success */
+  background: hsl(134 38% 54% / .12);
+  color: hsl(134 38% 30%);
+}
+
+/* ============================================================
+   11. AUTH GATE — cream surfaces, hairline, flat
+   ============================================================ */
+[data-skin="editorial"] .auth-gate {
+  background: hsl(40 30% 90% / .65);
+  backdrop-filter: blur(10px) saturate(120%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+}
+[data-skin="editorial"] .auth-card .auth-mark {
+  background: hsl(var(--accent));
+  box-shadow: none;
+  color: #fff;
+}
+[data-skin="editorial"] .auth-card .auth-mark svg { color: #fff; }
+[data-skin="editorial"] .auth-card h1 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.03em;
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .auth-card h1 .glow {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: hsl(var(--accent));
+  filter: none;
+}
+[data-skin="editorial"] .auth-card h1 em {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 500;
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .auth-card > p { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .auth-loading { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .auth-foot { color: hsl(var(--ink-faint)); }
+
+/* ============================================================
+   12. HISTORY POPOVER — cream, hairline, flat (no backdrop blur)
+   ============================================================ */
+[data-skin="editorial"] .hist-popover {
+  background: var(--popover-bg);
+  border: 1px solid var(--popover-border);
+  border-radius: var(--r-card);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: 0 16px 40px rgba(20, 20, 19, .14), 0 2px 6px rgba(20, 20, 19, .08);
+}
+[data-skin="editorial"] .hist-popover-backdrop--open { background: hsl(60 5% 12% / .28); }
+[data-skin="editorial"] .hist-popover-head { border-bottom: 1px solid var(--glass-border); }
+[data-skin="editorial"] .hist-popover-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.01em;
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .chat-hist-drawer {
+  background: var(--popover-bg);
+  border: 1px solid var(--popover-border);
+  box-shadow: 0 16px 40px rgba(20, 20, 19, .14);
+}
+[data-skin="editorial"] .history-panel .hist-search { /* uses .input rules */ }
+[data-skin="editorial"] .hist-empty { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .hist-item {
+  border: 1px solid var(--glass-border);
+  background: var(--field-bg);
+}
+[data-skin="editorial"] .hist-item:hover {
+  border-color: hsl(var(--accent) / .5);
+  box-shadow: 0 4px 12px rgba(20, 20, 19, .08);
+}
+[data-skin="editorial"] .hist-title { color: hsl(var(--ink)); }
+[data-skin="editorial"] .hist-date { color: hsl(var(--ink-faint)); }
+[data-skin="editorial"] .hist-del:hover { color: hsl(0 52% 53%); }       /* error */
+[data-skin="editorial"] .hist-edit:hover { color: hsl(var(--accent)); }
+/* bottom-sheet grab handle (mobile) */
+[data-skin="editorial"] .hist-popover--sheet::after { background: hsl(var(--ink) / .2); }
+
+/* ============================================================
+   13. MARKDOWN — readable on cream; code on a dark block
+   ============================================================ */
+[data-skin="editorial"] .md { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .md h1,
+[data-skin="editorial"] .md h2,
+[data-skin="editorial"] .md h3,
+[data-skin="editorial"] .md h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -.02em;
+  color: hsl(var(--ink));
+}
+/* the planner accents h2 with var(--accent); keep it as coral, slightly deeper for legibility */
+[data-skin="editorial"] .md h2 { color: hsl(15 47% 42%); }
+[data-skin="editorial"] .md p { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .md a { color: hsl(15 47% 45%); text-decoration: underline; text-underline-offset: 2px; }
+[data-skin="editorial"] .md a:hover { opacity: .8; }
+[data-skin="editorial"] .md strong { color: hsl(var(--ink)); font-weight: 600; }
+[data-skin="editorial"] .md li { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .md li::marker { color: hsl(var(--accent)); }
+[data-skin="editorial"] .md blockquote {
+  border-left: 3px solid hsl(var(--accent) / .6);
+  background: hsl(var(--accent) / .07);
+  color: hsl(var(--ink-soft));
+}
+[data-skin="editorial"] .md hr { border-top: 1px solid var(--glass-border); }
+[data-skin="editorial"] .md code.inline {
+  font-family: var(--font-mono);
+  background: hsl(var(--ink) / .07);
+  border: 1px solid var(--glass-border);
+  color: hsl(var(--ink));
+}
+
+/* fenced code blocks — sit on a dark surface-dark-soft block per design.md */
+[data-skin="editorial"] .codeblock {
+  border: 1px solid #252320;          /* surface-dark-elevated */
+  background: #1f1e1b;                 /* surface-dark-soft */
+  box-shadow: var(--shadow-float);
+}
+[data-skin="editorial"] .cb-head {
+  background: #181715;                 /* surface-dark */
+  border-bottom: 1px solid hsl(0 0% 100% / .06);
+}
+[data-skin="editorial"] .cb-lang { font-family: var(--font-mono); color: #a09d96; }   /* on-dark-soft */
+[data-skin="editorial"] .cb-copy {
+  font-family: var(--font-body);
+  color: #a09d96;
+  background: hsl(0 0% 100% / .06);
+  border: 1px solid hsl(0 0% 100% / .12);
+}
+[data-skin="editorial"] .cb-copy:hover { background: hsl(0 0% 100% / .12); color: #faf9f5; }
+[data-skin="editorial"] .cb-copy.copied {
+  background: hsl(134 38% 54% / .3);
+  border-color: hsl(134 38% 54% / .6);
+  color: #fff;
+}
+[data-skin="editorial"] .codeblock pre,
+[data-skin="editorial"] .codeblock code { font-family: var(--font-mono); }
+[data-skin="editorial"] .codeblock code.hljs { color: #d6d3cc; background: transparent; }
+
+/* tables */
+[data-skin="editorial"] .table-wrap { border: 1px solid var(--glass-border); }
+[data-skin="editorial"] .md-table th,
+[data-skin="editorial"] .md-table td { border-bottom: 1px solid var(--glass-border); }
+[data-skin="editorial"] .md-table thead th {
+  background: hsl(var(--accent) / .12);
+  color: hsl(var(--ink));
+  font-family: var(--font-body);
+  font-weight: 700;
+}
+[data-skin="editorial"] .md-table tbody tr:nth-child(even) { background: hsl(var(--ink) / .03); }
+[data-skin="editorial"] .md-table tbody tr:hover { background: hsl(var(--accent) / .07); }
+
+/* chat copy button (generic shared affordance) */
+[data-skin="editorial"] .msg-copy {
+  color: hsl(var(--ink));
+  border: 1px solid hsl(var(--ink) / .25);
+  background: transparent;
+}
+[data-skin="editorial"] .msg-copy:hover { background: hsl(var(--ink) / .06); border-color: hsl(var(--ink) / .45); }
+[data-skin="editorial"] .msg-copy.copied { color: #faf9f5; background: hsl(var(--ink)); border-color: hsl(var(--ink)); }

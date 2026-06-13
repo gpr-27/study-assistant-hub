@@ -603,6 +603,25 @@ ${contentHtml}
     localStorage.setItem("sah-theme", next);
   });
 
+  /* ---------------- skin (glass | editorial; applied early by an inline head script) ---------------- */
+  const skinSwitch = document.getElementById("skinSwitch");
+  if (skinSwitch) {
+    const skinButtons = [...skinSwitch.querySelectorAll("[data-skin-choice]")];
+    const syncSkin = (skin) => {
+      skinButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.skinChoice === skin)));
+    };
+    // Reflect the skin the head script already set (default "glass").
+    syncSkin(root.getAttribute("data-skin") || "glass");
+    skinButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const skin = btn.dataset.skinChoice;
+        root.setAttribute("data-skin", skin);
+        try { localStorage.setItem("sah-skin", skin); } catch (_) {}
+        syncSkin(skin);
+      });
+    });
+  }
+
   /* ---------------- ambient: cursor glow + orb parallax ---------------- */
   const glow = document.getElementById("glow");
   const orbs = [...document.querySelectorAll(".orb")];
