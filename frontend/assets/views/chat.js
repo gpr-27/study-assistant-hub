@@ -334,6 +334,9 @@
     // same path a typed message uses.
     card.append(buildPromptChips());
 
+    // Replace the plain "Session ready" placeholder with the overview card so the
+    // empty state IS the NotebookLM-style card (not the card plus a leftover line).
+    if (placeholder) placeholder.remove();
     thread.append(card);
     thread.scrollTop = thread.scrollHeight;
   }

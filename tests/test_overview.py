@@ -120,7 +120,9 @@ class BuildOverviewTests(unittest.TestCase):
         # sources is still computed from the PDF count before the failure.
         self.assertEqual(card["sources"], 2)
 
-    def test_empty_failure_is_cached_not_retried(self):
+    def test_empty_failure_is_retried_not_cached(self):
+        # A transient failure (e.g. rate limit) must NOT be cached — otherwise the
+        # card would stay empty forever. The next open retries the generation.
         boom = FakeLLM("")
         boom.invoke = mock.Mock(side_effect=RuntimeError("boom"))
         p_llm, p_key = self._patch_llm(boom)
@@ -129,8 +131,17 @@ class BuildOverviewTests(unittest.TestCase):
              mock.patch.object(overview, "read_pdf", return_value="content"):
             overview.build_overview(subject="DSA", owner="u1")
             overview.build_overview(subject="DSA", owner="u1")
-        # The empty result was cached, so the broken subject is not re-tried.
-        self.assertEqual(boom.invoke.call_count, 1)
+        self.assertEqual(boom.invoke.call_count, 2)   # retried — empty was not cached
+
+    def test_successful_result_is_cached(self):
+        llm = FakeLLM('{"overview": "ok", "questions": ["q1"]}')
+        p_llm, p_key = self._patch_llm(llm)
+        with p_llm, p_key, \
+             mock.patch.object(overview, "list_pdf_names", return_value=["a.pdf"]), \
+             mock.patch.object(overview, "read_pdf", return_value="content"):
+            overview.build_overview(subject="DSA", owner="u1")
+            overview.build_overview(subject="DSA", owner="u1")
+        self.assertEqual(len(llm.calls), 1)   # second call served from cache
 
 
 class OverviewEndpointTests(unittest.TestCase):

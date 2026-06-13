@@ -157,8 +157,10 @@ def build_overview(
       * topic mode: ``sources`` is 0; the overview is generated from the topic alone.
 
     Best-effort by contract — NEVER raises. On any failure ``overview`` is "" and
-    ``questions`` is ``[]``, and that empty result is cached so a broken subject is
-    not re-generated on every open. ``refresh=True`` bypasses the cache.
+    ``questions`` is ``[]``. Only SUCCESSFUL (non-empty) results are cached — a
+    transient failure (e.g. a Groq rate-limit) must NOT be cached, or the card would
+    stay permanently empty for that subject until the process restarts, even after
+    the model recovers. ``refresh=True`` bypasses the cache.
     """
     is_subject = bool(subject)
     label = (subject if is_subject else topic) or ""
@@ -183,5 +185,8 @@ def build_overview(
         result = dict(_EMPTY)
 
     card = {"label": label, "sources": sources, **result}
-    _cache_put(key, card)
+    # Cache only successful results so a transient generation failure is retried on
+    # the next open instead of serving an empty card forever.
+    if result["overview"] or result["questions"]:
+        _cache_put(key, card)
     return card
