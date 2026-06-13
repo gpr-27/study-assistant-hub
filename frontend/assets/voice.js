@@ -147,20 +147,23 @@
         // Final text is LEFT in the input — the user reviews and hits Send.
         input.value = (base + finals + interim).replace(/^\s+/, "");
       };
-      // Surface WHY it stopped — a silent failure is what made the laptop mic
-      // feel broken. The most common laptop cause is a blocked OS/browser
-      // permission, which the user can only fix if we tell them.
+      // Surface ONLY errors the user can act on. "not-allowed"/"audio-capture"
+      // are actionable (fix a permission, plug in a mic). "network" is NOT a
+      // user-connection problem — the Web Speech API routes audio to Google's
+      // speech backend, and "network" fires on transient/region/browser issues
+      // even when the user's internet is fine; blaming their connection is wrong
+      // and just noise. "aborted" is normal (tapping the mic to stop). So those
+      // fail quietly and the user can simply type instead.
       rec.onerror = (ev) => {
         const err = (ev && ev.error) || "";
         if (err === "not-allowed" || err === "service-not-allowed") {
           notify("Microphone is blocked — allow mic access in your browser/system settings.", "error");
         } else if (err === "audio-capture") {
           notify("No microphone found.", "error");
-        } else if (err === "network") {
-          notify("Speech service unreachable — check your connection.", "error");
         } else if (err === "no-speech") {
           notify("Didn't catch anything — tap the mic and speak again.");
         }
+        // "network" / "aborted" / anything else: stop silently, no toast.
         stopRecognition();
       };
       rec.onend = () => {
