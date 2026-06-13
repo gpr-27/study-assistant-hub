@@ -404,29 +404,83 @@
     send();
   }
 
-  // ── Thinking animation while waiting ──────────────────────
-  const THINKING_STEPS = [
-    "Rewriting question into search queries…",
-    "Retrieving relevant passages…",
-    "Grading context quality…",
-    "Generating answer…",
-  ];
+  // ── Live reasoning rails ──────────────────────────────────
+  //    Replaces the old hardcoded THINKING_STEPS cycle. As the backend streams
+  //    real steps over SSE we append a row into a "reasoning" panel inside the
+  //    pending AI bubble. Two visually distinct rails by step.kind:
+  //      • kind === "tool"  → TOOL rail (building an artifact)
+  //      • rewrite/retrieve/grade/generate → GROUNDING rail (RAG over notes)
+  //    On done the bubble is removed and the final answer + collapsed trace render.
 
+  // Friendly, rail-specific copy for one live step.
+  function liveStepCopy(step) {
+    const kind = step.kind || "generate";
+    if (kind === "tool") {
+      const tool = step.tool || step.title || "tool";
+      return { rail: "tool", ico: "🛠", label: step.title || ("Building " + tool) };
+    }
+    if (kind === "rewrite") {
+      const n = (step.queries && step.queries.length) || 0;
+      return { rail: "ground", ico: "⌕", label: n ? `Searching your notes · ${n} quer${n === 1 ? "y" : "ies"}` : "Searching your notes…" };
+    }
+    if (kind === "retrieve") {
+      const n = Array.isArray(step.passages) ? step.passages.length : (step.count || 0);
+      return { rail: "ground", ico: "⌕", label: n ? `Retrieved ${n} passage${n === 1 ? "" : "s"}` : "Retrieving passages…" };
+    }
+    if (kind === "grade") {
+      const v = step.verdict;
+      const label = v === "sufficient" ? "Verified — context is sufficient"
+                  : v === "limit" ? "Verifying — reached search limit"
+                  : v === "insufficient" ? "Verifying — looking for more"
+                  : "Verifying context";
+      return { rail: "ground", ico: "✓", label };
+    }
+    // generate
+    return { rail: "ground", ico: "✦", label: step.title || "Answering from your notes…" };
+  }
+
+  // Render one live row and append it; previous rows lose their "active" pulse.
+  function appendLiveStep(panel, step) {
+    panel.querySelectorAll(".reason-step.is-active").forEach((r) => r.classList.remove("is-active"));
+    const c = liveStepCopy(step);
+    const row = el(`<div class="reason-step reason-step--${c.rail === "tool" ? "tool" : "ground"} is-active"></div>`);
+    const ico = el(`<span class="reason-ico" aria-hidden="true"></span>`);
+    ico.textContent = c.ico;
+    const label = el(`<span class="reason-label"></span>`);
+    label.textContent = c.label;
+    row.append(ico, label);
+    panel.append(row);
+    return row;
+  }
+
+  // The pending AI bubble that hosts the live reasoning panel.
   function appendThinking(thread) {
     const wrap = el(`<div class="msg ai msg-thinking"></div>`);
-    const stepEl = el(`<span class="thinking-label"></span>`);
-    const dots = el(`<span class="typing"><i></i><i></i><i></i></span>`);
-    wrap.append(stepEl, dots);
+    const panel = el(`<div class="reason-live"></div>`);
+    wrap.append(panel);
     thread.append(wrap);
+    return {
+      el: wrap,
+      panel,
+      step(s) { appendLiveStep(panel, s); thread.scrollTop = thread.scrollHeight; },
+      stop() { panel.querySelectorAll(".reason-step.is-active").forEach((r) => r.classList.remove("is-active")); },
+    };
+  }
 
-    let idx = 0;
-    stepEl.textContent = THINKING_STEPS[0];
-    const timer = setInterval(() => {
-      idx = (idx + 1) % THINKING_STEPS.length;
-      stepEl.textContent = THINKING_STEPS[idx];
-    }, 1800);
-
-    return { el: wrap, stop: () => clearInterval(timer) };
+  // ── Build the same identity headers the API layer attaches, for raw fetch ──
+  //    Mirrors app.js authHeaders(): Clerk bearer token + guest id. Kept local so
+  //    the streaming fetch carries auth without exposing app.js internals.
+  async function streamHeaders() {
+    const headers = { "Content-Type": "application/json", "Accept": "text/event-stream" };
+    try {
+      const token = window.Auth && window.Auth.getToken ? await window.Auth.getToken() : null;
+      if (token) headers["Authorization"] = "Bearer " + token;
+    } catch (_) {}
+    try {
+      const gid = localStorage.getItem("sah-guest-id");
+      if (gid) headers["X-Guest-Id"] = gid;
+    } catch (_) {}
+    return headers;
   }
 
   // ── Resume saved chat ──────────────────────────────────────
@@ -560,21 +614,25 @@
     const thinking = appendThinking(thread);
     thread.scrollTop = thread.scrollHeight;
 
-    try {
-      const resp = await window.api.post("/chat/message", { session_id: session.id, message: text });
+    const onFirstTurn = () => {
+      if (!firstTurn) return;
+      const hp = document.querySelector('.history-panel[data-kind="chats"]');
+      if (hp?.refresh) hp.refresh();
+      setTimeout(() => { if (hp?.refresh) hp.refresh(); }, 3500);
+    };
+
+    const renderDone = (answer, sources, artifact, steps) => {
       thinking.stop();
       thinking.el.remove();
-      appendMessage(thread, "assistant", resp.answer, {
-        steps: resp.steps || [],
-        sources: resp.sources || [],
+      appendMessage(thread, "assistant", answer, {
+        steps: steps || [],
+        sources: sources || [],
       });
-      if (resp.artifact) appendArtifactCard(thread, resp.artifact);
-      if (firstTurn) {
-        const hp = document.querySelector('.history-panel[data-kind="chats"]');
-        if (hp?.refresh) hp.refresh();
-        setTimeout(() => { if (hp?.refresh) hp.refresh(); }, 3500);
-      }
-    } catch (e) {
+      if (artifact) appendArtifactCard(thread, artifact);
+      onFirstTurn();
+    };
+
+    const onError = (e) => {
       thinking.stop();
       thinking.el.remove();
       const errMsg = el(`<div class="msg ai"></div>`);
@@ -582,13 +640,96 @@
       thread.append(errMsg);
       toast(e.message, "error");
       if (/expired/i.test(e.message)) session = null;
-    } finally {
+    };
+
+    const finish = () => {
       thread.scrollTop = thread.scrollHeight;
       if (session) {
         input.disabled = false;
         sendBtn.disabled = false;
         input.focus();
       }
+    };
+
+    // ── Non-stream fallback (the original path) ──────────────
+    const sendNonStream = async () => {
+      try {
+        const resp = await window.api.post("/chat/message", { session_id: session.id, message: text });
+        renderDone(resp.answer, resp.sources, resp.artifact, resp.steps);
+      } catch (e) {
+        onError(e);
+      } finally {
+        finish();
+      }
+    };
+
+    // ── Live SSE stream (primary path) ───────────────────────
+    //    Streams real reasoning steps into the live panel, then renders the final
+    //    answer + artifact on the "done" event. Any failure (no body-stream
+    //    support, HTTP error, malformed frame, mid-stream drop) falls back to the
+    //    non-stream window.api.post("/chat/message", …) path above.
+    if (!(window.ReadableStream && window.TextDecoder && window.fetch)) {
+      await sendNonStream();
+      return;
+    }
+
+    const sid = session.id;
+    let collected = [];          // step dicts seen, for the final collapsed trace
+    let gotDone = false;
+    let started = false;         // any byte processed → past the point of clean fallback
+    try {
+      const headers = await streamHeaders();
+      const res = await fetch(window.AppConfig.apiBase + "/chat/message/stream", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ session_id: sid, message: text }),
+      });
+      if (!res.ok || !res.body) throw new Error("stream_unavailable_" + (res.status || 0));
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      // Parse SSE frames separated by a blank line; each frame is "data: <json>".
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        started = true;
+        buf += decoder.decode(value, { stream: true });
+        let sep;
+        while ((sep = buf.indexOf("\n\n")) !== -1) {
+          const frame = buf.slice(0, sep);
+          buf = buf.slice(sep + 2);
+          const line = frame.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          let ev;
+          try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+          if (ev.type === "step" && ev.step) {
+            collected.push(ev.step);
+            thinking.step(ev.step);
+          } else if (ev.type === "done") {
+            gotDone = true;
+            renderDone(ev.answer, ev.sources, ev.artifact, collected);
+          } else if (ev.type === "error") {
+            throw new Error(ev.detail || ev.message || "The assistant hit an error.");
+          }
+        }
+      }
+      if (!gotDone) {
+        // Stream ended without a done frame. If we never processed anything we can
+        // still fall back cleanly; otherwise surface the truncation.
+        if (!started) { await sendNonStream(); return; }
+        throw new Error("Connection dropped mid-answer. Please try again.");
+      }
+      finish();
+    } catch (e) {
+      // Clean fallback only if nothing was streamed yet and the session looks alive
+      // — otherwise we'd duplicate a partially-rendered answer.
+      if (!started && !gotDone && session && !/expired/i.test(e.message || "")) {
+        await sendNonStream();
+        return;
+      }
+      if (!gotDone) onError(e);
+      finish();
     }
   }
 

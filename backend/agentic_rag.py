@@ -235,7 +235,8 @@ def _generate(llm, persona: str, history_messages: list, question: str, context:
 
 
 def answer(
-    retriever, llm, question: str, history_messages: list, persona: str, *, max_iters: int | None = None
+    retriever, llm, question: str, history_messages: list, persona: str, *,
+    max_iters: int | None = None, on_step=None,
 ) -> tuple[str, list[dict], list[str]]:
     """Run the agentic retrieval loop and return ``(answer, steps, sources)``.
 
@@ -247,15 +248,27 @@ def answer(
 
     ``history_messages`` is the already-rendered list of prior Human/AI messages.
     Reuses the session ``llm`` (a ChatGroq) for every step.
+
+    ``on_step`` is an optional callback invoked with each step dict at the moment it
+    is appended — including the ``generate`` step, which is emitted BEFORE the slow
+    final LLM call so a streaming caller can show progress while the answer is being
+    written. It defaults to a no-op, so the return value and behaviour are identical
+    for non-streaming callers.
     """
     rounds = max_iters or config.AGENTIC_RAG_MAX_ITERS
     docs: list = []
     seen: set[str] = set()
     steps: list[dict] = []
 
+    def _emit(step: dict) -> None:
+        """Record a step and notify the (optional) streaming callback."""
+        steps.append(step)
+        if on_step is not None:
+            on_step(step)
+
     queries, rewrite_prompt = _rewrite(llm, question, history_messages)
     q_word = "query" if len(queries) == 1 else "queries"
-    steps.append({
+    _emit({
         "kind": "rewrite",
         "title": f"Rewrote your question into {len(queries)} search {q_word}",
         "queries": queries,
@@ -272,7 +285,7 @@ def answer(
                 docs.append(doc)
                 round_new.append(doc)
         n_new = len(round_new)
-        steps.append({
+        _emit({
             "kind": "retrieve",
             "title": (
                 f"Retrieved {n_new} new passage{'' if n_new == 1 else 's'}"
@@ -293,7 +306,7 @@ def answer(
                 "Agentic RAG round %d/%d: %d queries, %d docs, final (grade skipped).",
                 attempt + 1, rounds, len(queries), len(docs),
             )
-            steps.append({
+            _emit({
                 "kind": "grade", "verdict": "final",
                 "title": "Answering with the retrieved context",
                 "missing": "", "prompt": "",
@@ -305,19 +318,19 @@ def answer(
             attempt + 1, rounds, len(queries), len(docs), sufficient,
         )
         if sufficient:
-            steps.append({
+            _emit({
                 "kind": "grade", "verdict": "sufficient",
                 "title": "Context verified — enough to answer",
                 "missing": "", "prompt": grade_prompt,
             })
             break
-        steps.append({
+        _emit({
             "kind": "grade", "verdict": "insufficient",
             "title": "Context looks insufficient — searching again",
             "missing": missing, "prompt": grade_prompt,
         })
         queries, rewrite_prompt = _rewrite(llm, question, history_messages, previous=queries, missing=missing)
-        steps.append({
+        _emit({
             "kind": "rewrite",
             "title": f"Reformulated into {len(queries)} new {'query' if len(queries) == 1 else 'queries'}",
             "queries": queries,
@@ -328,7 +341,7 @@ def answer(
             break
 
     final_context = _format_context(docs)
-    steps.append({
+    _emit({
         "kind": "generate",
         "title": "Writing the grounded answer",
         "passages_used": len(docs),

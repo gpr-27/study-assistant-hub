@@ -4,7 +4,10 @@ resume a saved chat. Sessions and messages are persisted per user (when enabled)
 DocumentError and MissingApiKeyError bubble up to the global handlers in main.py
 (mapped to 404 and 503 respectively). LLM/parse failures surface as 502.
 """
+import json
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 
 from backend.auth import current_owner
 from backend.schemas import (
@@ -111,4 +114,35 @@ def send_message(request: ChatMessageRequest) -> ChatMessageResponse:
         steps=result.get("steps", []),
         sources=result.get("sources", []),
         artifact=result.get("artifact"),
+    )
+
+
+@router.post("/message/stream")
+def stream_message(request: ChatMessageRequest) -> StreamingResponse:
+    """Stream the assistant's reasoning live as Server-Sent Events.
+
+    Yields one ``data:`` frame per ``ask_stream`` event — a ``{"type":"step",...}``
+    for every trace step the moment it happens, then a terminal ``{"type":"done",...}``
+    carrying the final answer, sources, and artifact. The non-streaming
+    ``POST /api/chat/message`` endpoint stays unchanged for clients that can't stream.
+
+    An unknown/expired session is reported as a single ``{"type":"error"}`` frame (the
+    response has already begun, so we can't switch to a 404), matching the 404 the
+    non-stream endpoint returns by surfacing the same message for the client to handle.
+    """
+    def _events():
+        try:
+            for event in chat_service.ask_stream(request.session_id, request.message):
+                yield f"data: {json.dumps(event)}\n\n"
+        except chat_service.ChatSessionError:
+            err = {"type": "error", "detail": "Session expired, start a new chat."}
+            yield f"data: {json.dumps(err)}\n\n"
+        except Exception as exc:  # noqa: BLE001 — report mid-stream failures to the client
+            err = {"type": "error", "detail": str(exc) or "Something went wrong."}
+            yield f"data: {json.dumps(err)}\n\n"
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

@@ -369,6 +369,190 @@ def ask(session_id: str, message: str) -> dict:
     return {"answer": answer, "steps": steps, "sources": sources, "artifact": artifact}
 
 
+def _record_exchange(session: dict, message: str, answer: str, first_turn: bool) -> None:
+    """Mirror a completed user/assistant exchange to the persisted chat.
+
+    Shared by ``ask`` and ``ask_stream`` so both record history identically (a no-op
+    when persistence is off). Kicks off background auto-naming on the first turn.
+    """
+    owner, chat_id = session.get("owner", LOCAL_OWNER), session.get("chat_id")
+    if not chat_id:
+        return
+    if first_turn:
+        db.set_chat_title(owner, chat_id, message[:60])  # provisional, until the summary lands
+    db.append_chat_message(owner, chat_id, "user", message)
+    db.append_chat_message(owner, chat_id, "assistant", answer)
+    if first_turn:
+        threading.Thread(
+            target=_autoname_chat, args=(owner, chat_id, message, answer, session["llm"]), daemon=True
+        ).start()
+
+
+def ask_stream(session_id: str, message: str):
+    """Generator twin of :func:`ask` that yields events as the answer is built.
+
+    Yields, in order, one ``{"type": "step", "step": {...}}`` event per trace step as
+    it happens, then a single terminal ``{"type": "done", "answer", "sources",
+    "artifact"}`` event. The step dicts are exactly the ones :func:`ask` collects (same
+    ``kind``/``title``/internals), so the trace UI can render the live rails and then
+    the final collapsed trace from the same shape.
+
+    Routing mirrors :func:`ask` precisely — autonomous tool gate, then smalltalk
+    short-circuit, then agentic / classic / topic RAG — and history is recorded the
+    same way. The non-streaming :func:`ask` stays intact as the fallback path.
+    """
+    session = _sessions.get(session_id)
+    if session is None:
+        raise ChatSessionError(f"Unknown or expired chat session: {session_id}")
+
+    require_groq_key()
+
+    history: list[tuple[str, str]] = session["history"]
+    retriever = session["retriever"]
+    first_turn = not history
+    steps: list[dict] = []
+    sources: list[str] = []
+    artifact = None
+    persona = session.get("persona") or _SUBJECT_PERSONA_BASE
+
+    # --- Autonomous tool gate (build an artifact) -------------------------------
+    intent = None
+    if session.get("autonomous"):
+        from backend.services import chat_tools
+        intent = chat_tools.detect_intent(session["llm"], message)
+
+    if intent is not None:
+        from backend.services import chat_tools
+        # Announce the tool BEFORE the (slow) build so the user sees it start.
+        starting = {
+            "kind": "tool",
+            "tool": intent.get("tool"),
+            "title": f"Calling {intent.get('tool')}…",
+        }
+        steps.append(starting)
+        yield {"type": "step", "step": starting}
+
+        tool_result = chat_tools.run_tool(session, intent, message)
+        if tool_result is not None:
+            answer = tool_result["answer"]
+            artifact = tool_result.get("artifact")
+            for st in tool_result["steps"]:
+                # Tag the tool's own trace rows so the UI rails them as tool steps.
+                row = {**st} if isinstance(st, dict) else {"kind": "tool", "title": str(st)}
+                row.setdefault("kind", "tool")
+                steps.append(row)
+                yield {"type": "step", "step": row}
+            _record_exchange(session, message, answer, first_turn)
+            history.append((message, answer))
+            yield {"type": "done", "answer": answer, "sources": sources, "artifact": artifact}
+            return
+        # run_tool declined (e.g. PDF session with no topic) → fall through to RAG.
+
+    # --- Smalltalk short-circuit ------------------------------------------------
+    if _is_smalltalk(message):
+        step = {"kind": "generate", "title": "Replied directly — no document lookup needed"}
+        steps.append(step)
+        yield {"type": "step", "step": step}
+        msgs = [SystemMessage(content=_SMALLTALK_PERSONA), *_history_messages(history),
+                HumanMessage(content=message)]
+        answer = str(session["llm"].invoke(msgs).content)
+
+    # --- Agentic RAG (steps stream live via on_step) ----------------------------
+    elif retriever is not None and config.AGENTIC_RAG:
+        artifact_block = _recent_artifact_block(session)
+        agentic_persona = f"{persona}\n\n{artifact_block}" if artifact_block else persona
+
+        # agentic_rag.answer runs synchronously and pushes each step to on_step as it
+        # is appended. We bridge that callback to this generator through a queue so we
+        # can yield steps the instant they land, while the loop keeps running.
+        import queue as _queue
+
+        q: "_queue.Queue" = _queue.Queue()
+        result: dict = {}
+
+        def _on_step(step: dict) -> None:
+            q.put(("step", step))
+
+        def _run() -> None:
+            try:
+                ans, stp, src = agentic_rag.answer(
+                    retriever, session["llm"], message, _history_messages(history),
+                    agentic_persona, on_step=_on_step,
+                )
+                result.update(answer=str(ans), steps=stp, sources=src)
+                q.put(("ok", None))
+            except Exception as exc:  # noqa: BLE001 — surface to the consumer below
+                result["error"] = exc
+                q.put(("error", exc))
+
+        worker = threading.Thread(target=_run, daemon=True)
+        worker.start()
+        while True:
+            kind, payload = q.get()
+            if kind == "step":
+                steps.append(payload)
+                yield {"type": "step", "step": payload}
+            elif kind == "ok":
+                break
+            elif kind == "error":
+                worker.join()
+                raise payload
+        worker.join()
+        answer = result["answer"]
+        # agentic_rag owns the authoritative steps/sources list; adopt it.
+        steps = result["steps"]
+        sources = result["sources"]
+
+    # --- Classic single-shot RAG (AGENTIC_RAG disabled) -------------------------
+    elif retriever is not None:
+        docs = retriever.invoke(message)
+        context = "\n\n".join(doc.page_content for doc in docs)
+        artifact_block = _recent_artifact_block(session)
+        if artifact_block:
+            context = f"{artifact_block}\n\n{context}"
+        retrieve_step = {
+            "kind": "retrieve",
+            "title": f"Retrieved {len(docs)} passage{'s' if len(docs) != 1 else ''}",
+            "queries": [message],
+            "passages": agentic_rag.passage_view(docs),
+        }
+        steps.append(retrieve_step)
+        yield {"type": "step", "step": retrieve_step}
+        generate_step = {"kind": "generate", "title": "Writing the answer", "passages_used": len(docs)}
+        steps.append(generate_step)
+        yield {"type": "step", "step": generate_step}
+        seen_names: set[str] = set()
+        for doc in docs:
+            src = (getattr(doc, "metadata", {}) or {}).get("source", "")
+            if src:
+                name = _Path(src).name
+                if name not in seen_names:
+                    seen_names.add(name)
+                    sources.append(name)
+        msgs = [SystemMessage(content=persona)]
+        msgs.extend(_history_messages(history))
+        msgs.append(HumanMessage(content=f"Context:\n{context}\n\nQuestion: {message}"))
+        answer = str(session["llm"].invoke(msgs).content)
+
+    # --- Topic / generic (no retriever) -----------------------------------------
+    else:
+        _persona = _topic_persona(session["topic"]) if session.get("topic") else _GENERIC_PERSONA
+        artifact_block = _recent_artifact_block(session)
+        if artifact_block:
+            _persona = f"{_persona}\n\n{artifact_block}"
+        step = {"kind": "generate", "title": "Answered from topic knowledge (no document retrieval)"}
+        steps.append(step)
+        yield {"type": "step", "step": step}
+        msgs = [SystemMessage(content=_persona)]
+        msgs.extend(_history_messages(history))
+        msgs.append(HumanMessage(content=message))
+        answer = str(session["llm"].invoke(msgs).content)
+
+    history.append((message, answer))
+    _record_exchange(session, message, answer, first_turn)
+    yield {"type": "done", "answer": answer, "sources": sources, "artifact": artifact}
+
+
 def session_overview(session_id: str, *, refresh: bool = False) -> dict:
     """Return a NotebookLM-style overview card for an existing session.
 

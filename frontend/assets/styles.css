@@ -1467,3 +1467,86 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
   .cl-next:hover, .cl-navbtn:active, .cl-opt:active, .cl-mm-toggle,
   .cl-exam-submit:hover, .cl-exam-opt:active { transform: none; }
 }
+
+/* ── Live reasoning rails — real streamed steps in the pending AI bubble ───── */
+/* Two visually distinct rails:
+   .reason-step--tool   → building an artifact (coral / cards accent)
+   .reason-step--ground → grounded RAG over the notes (calm chat-blue)        */
+.reason-live {
+  display: flex; flex-direction: column; gap: .3rem;
+  margin: .15rem 0 .1rem; padding: .55rem .7rem .5rem;
+  border-radius: 14px;
+  border: 1px solid var(--glass-border);
+  background: hsl(var(--ink) / .03);
+  animation: rise .28s var(--ease-spring) both;
+}
+.reason-live[hidden] { display: none !important; }
+
+.reason-step {
+  display: flex; align-items: flex-start; gap: .55rem;
+  font-size: .8rem; line-height: 1.4; color: hsl(var(--ink-soft));
+  padding: .26rem .35rem; border-radius: 9px;
+  border: 1px solid transparent;
+  animation: reason-in .32s var(--ease-spring) both;
+  transition: background .2s, border-color .2s, opacity .25s;
+}
+@keyframes reason-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* completed (non-active) steps recede a touch so the live row leads the eye */
+.reason-step.is-done { opacity: .62; }
+
+.reason-ico {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center; font-size: .72rem; line-height: 1;
+  border: 1px solid; margin-top: .02rem;
+}
+.reason-label { flex: 1; min-width: 0; padding-top: .12rem; }
+.reason-label b { font-weight: 700; color: hsl(var(--ink)); }
+.reason-label small {
+  display: block; font-size: .7rem; color: hsl(var(--ink-faint)); margin-top: .05rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* TOOL rail — warm coral/cards accent, "building" feel */
+.reason-step--tool .reason-ico {
+  color: hsl(var(--c-cards)); border-color: hsl(var(--c-cards) / .5);
+  background: hsl(var(--c-cards) / .15);
+}
+.reason-step--tool.is-active {
+  background: hsl(var(--c-cards) / .1); border-color: hsl(var(--c-cards) / .32);
+}
+
+/* GROUNDING rail — calm chat-blue, "searching the notes" feel */
+.reason-step--ground .reason-ico {
+  color: hsl(var(--c-chat)); border-color: hsl(var(--c-chat) / .5);
+  background: hsl(var(--c-chat) / .14);
+}
+.reason-step--ground.is-active {
+  background: hsl(var(--c-chat) / .09); border-color: hsl(var(--c-chat) / .3);
+}
+
+/* the active (in-progress) step gets a subtle live pulse on its icon */
+.reason-step.is-active .reason-ico { animation: reason-pulse-ground 1.4s var(--ease-out) infinite; }
+.reason-step--tool.is-active   .reason-ico { animation-name: reason-pulse-tool; }
+.reason-step--ground.is-active .reason-ico { animation-name: reason-pulse-ground; }
+@keyframes reason-pulse-ground {
+  0%, 100% { box-shadow: 0 0 0 0 hsl(var(--c-chat) / .45); }
+  60%      { box-shadow: 0 0 0 6px hsl(var(--c-chat) / 0); }
+}
+@keyframes reason-pulse-tool {
+  0%, 100% { box-shadow: 0 0 0 0 hsl(var(--c-cards) / .5); }
+  60%      { box-shadow: 0 0 0 6px hsl(var(--c-cards) / 0); }
+}
+.reason-step.is-active .reason-label b { color: hsl(var(--ink)); }
+
+@media (max-width: 560px) {
+  .reason-live { padding: .5rem .55rem; }
+  .reason-step { font-size: .78rem; }
+  .reason-label small { font-size: .68rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reason-live, .reason-step { animation: none; }
+  .reason-step.is-active .reason-ico { animation: none; }
+}

@@ -5,6 +5,7 @@ returns canned documents. Covers JSON extraction, query rewriting (+fallbacks), 
 merge/de-dupe, grading, the corrective re-retrieve loop, round bounding, rate-limit
 propagation, and the chat service choosing agentic vs classic by config.
 """
+import json
 import unittest
 from unittest import mock
 
@@ -173,6 +174,56 @@ class AnswerLoopTests(unittest.TestCase):
         self.assertEqual(len(llm.calls), 2)  # rewrite + generate only — no grade call
 
 
+class OnStepStreamingTests(unittest.TestCase):
+    """answer() invokes on_step for EVERY step, in order, as each is appended —
+    including the generate step BEFORE the slow final LLM call, so a streaming
+    caller can show progress. The callback default (no-op) keeps the return value
+    and behaviour identical for non-streaming callers."""
+
+    def test_on_step_fires_for_each_step_in_order(self):
+        retriever = FakeRetriever({"q1": [_Doc("relevant ctx")]})
+        llm = FakeLLM([
+            '{"queries": ["q1"]}',          # rewrite
+            '{"sufficient": true}',          # grade -> stop
+            "FINAL ANSWER",                  # generate
+        ])
+        seen: list[dict] = []
+        text, steps, _sources = agentic_rag.answer(
+            retriever, llm, "question?", [], "persona", max_iters=2, on_step=seen.append
+        )
+        # The callback saw exactly the same step dicts, in the same order, as the
+        # returned trace (rewrite → retrieve → grade → generate).
+        self.assertEqual([s["kind"] for s in seen], ["rewrite", "retrieve", "grade", "generate"])
+        self.assertEqual(seen, steps)
+        self.assertEqual(text, "FINAL ANSWER")
+
+    def test_on_step_for_generate_fires_before_the_final_llm_call(self):
+        """The generate step must be emitted BEFORE the (slow) final generation, so
+        a streaming UI can show "Answering…" while the answer is being written."""
+        retriever = FakeRetriever({"q": [_Doc("ctx")]})
+        llm = FakeLLM(['{"queries": ["q"]}', "ANSWER"])  # max_iters=1 skips grading
+        order: list[str] = []
+
+        def record(step):
+            if step["kind"] == "generate":
+                # at this point the model has only been called for rewrite — the
+                # final generate invoke has NOT happened yet.
+                order.append(f"emit-generate@{len(llm.calls)}")
+
+        agentic_rag.answer(retriever, llm, "q?", [], "persona", max_iters=1, on_step=record)
+        # rewrite was call #1; generate was emitted while still at 1 call (before #2).
+        self.assertEqual(order, ["emit-generate@1"])
+        self.assertEqual(len(llm.calls), 2)  # rewrite + generate
+
+    def test_default_on_step_is_noop_and_behaviour_unchanged(self):
+        retriever = FakeRetriever({"q1": [_Doc("relevant ctx")]})
+        llm = FakeLLM(['{"queries": ["q1"]}', '{"sufficient": true}', "FINAL ANSWER"])
+        # No on_step passed → must not raise and must behave exactly as before.
+        text, steps, sources = agentic_rag.answer(retriever, llm, "question?", [], "persona", max_iters=2)
+        self.assertEqual(text, "FINAL ANSWER")
+        self.assertEqual([s["kind"] for s in steps], ["rewrite", "retrieve", "grade", "generate"])
+
+
 class ChatServiceWiringTests(unittest.TestCase):
     """chat.ask() routes to agentic vs classic RAG based on config.AGENTIC_RAG."""
 
@@ -276,6 +327,141 @@ class RecentArtifactContextTests(unittest.TestCase):
         system_msg = chat_mod._sessions[sid]["llm"].calls[-1][0].content
         self.assertIn("The student just created Flashcards · Recursion", system_msg)
         self.assertIn("stops the recursion", system_msg)
+
+
+class AskStreamTests(unittest.TestCase):
+    """chat.ask_stream() yields a {"type":"step"} event per trace step as it happens,
+    then a terminal {"type":"done"} carrying the answer/sources/artifact — for both the
+    autonomous TOOL path and the AGENTIC RAG path."""
+
+    def _session(self, retriever, **over):
+        from backend.services import chat
+        base = {
+            "mode": "subject", "retriever": retriever, "llm": object(), "history": [],
+            "label": "L", "topic": None, "subject": "Bio", "owner": "local", "chat_id": None,
+            "autonomous": True,
+        }
+        base.update(over)
+        return chat, chat._register(base)
+
+    def test_tool_path_streams_tool_step_then_done_with_artifact(self):
+        from backend.services import chat, chat_tools
+        chat_mod, sid = self._session(FakeRetriever({}))
+        art = {"kind": "quizzes", "id": "x", "title": "Quiz · Bio", "route": "#quiz", "tool": "Quiz Generator"}
+        tool_result = {
+            "answer": "Built your quiz.",
+            "steps": [{"kind": "tool", "title": "Generated 5 questions"}],
+            "artifact": art,
+        }
+        with mock.patch.object(chat_mod, "require_groq_key", lambda: None), \
+             mock.patch.object(chat_tools, "detect_intent", return_value={"tool": "quiz"}), \
+             mock.patch.object(chat_tools, "run_tool", return_value=tool_result):
+            events = list(chat_mod.ask_stream(sid, "create a quiz"))
+
+        # First a "Calling <tool>…" step is announced BEFORE the build, then the
+        # tool's own result steps, then a terminal done carrying the artifact.
+        self.assertEqual(events[0]["type"], "step")
+        self.assertEqual(events[0]["step"]["kind"], "tool")
+        self.assertEqual(events[0]["step"]["tool"], "quiz")
+        self.assertIn("quiz", events[0]["step"]["title"])
+        # the tool's own row is tagged kind="tool" and streamed
+        self.assertTrue(any(e["type"] == "step" and e["step"].get("title") == "Generated 5 questions"
+                            and e["step"]["kind"] == "tool" for e in events))
+        done = events[-1]
+        self.assertEqual(done["type"], "done")
+        self.assertEqual(done["answer"], "Built your quiz.")
+        self.assertEqual(done["artifact"], art)
+        # history was recorded for the turn
+        self.assertEqual(chat_mod._sessions[sid]["history"][-1], ("create a quiz", "Built your quiz."))
+
+    def test_agentic_path_streams_steps_then_done(self):
+        from backend.services import chat, chat_tools
+        retriever = FakeRetriever({"q1": [_Doc("ctx about cells")]})
+        chat_mod, sid = self._session(retriever)
+        chat_mod._sessions[sid]["llm"] = FakeLLM([
+            '{"queries": ["q1"]}',   # rewrite
+            '{"sufficient": true}',   # grade -> stop
+            "Cells are the unit of life.",   # generate
+        ])
+        with mock.patch.object(chat_mod, "require_groq_key", lambda: None), \
+             mock.patch.object(chat_mod.config, "AGENTIC_RAG", True), \
+             mock.patch.object(chat_tools, "detect_intent", return_value=None):
+            events = list(chat_mod.ask_stream(sid, "What is a cell?"))
+
+        step_kinds = [e["step"]["kind"] for e in events if e["type"] == "step"]
+        # the real agentic loop streamed live: rewrite → retrieve → grade → generate
+        self.assertEqual(step_kinds, ["rewrite", "retrieve", "grade", "generate"])
+        done = events[-1]
+        self.assertEqual(done["type"], "done")
+        self.assertEqual(done["answer"], "Cells are the unit of life.")
+        self.assertEqual(done["sources"], [])  # _Doc has no source metadata
+        self.assertIsNone(done["artifact"])
+        # exactly one done event, and it is last
+        self.assertEqual(sum(1 for e in events if e["type"] == "done"), 1)
+
+    def test_unknown_session_raises(self):
+        from backend.services import chat
+        with mock.patch.object(chat, "require_groq_key", lambda: None):
+            with self.assertRaises(chat.ChatSessionError):
+                list(chat.ask_stream("nope", "hello"))
+
+
+class StreamEndpointTests(unittest.TestCase):
+    """POST /api/chat/message/stream returns text/event-stream with `data:` frames,
+    one JSON event per frame, ending in a done event (TestClient, no network)."""
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        from backend.main import app
+
+        self.client = TestClient(app)
+
+    def _parse_sse(self, body: str) -> list[dict]:
+        events = []
+        for frame in body.split("\n\n"):
+            frame = frame.strip()
+            if frame.startswith("data:"):
+                events.append(json.loads(frame[len("data:"):].strip()))
+        return events
+
+    def test_stream_endpoint_emits_sse_frames(self):
+        from backend.services import chat
+
+        retriever = FakeRetriever({"photosynthesis basics": [_Doc("Light becomes sugar.")]})
+        llm = FakeLLM([
+            '{"queries": ["photosynthesis basics"]}',   # rewrite
+            '{"sufficient": true}',                       # grade -> stop
+            "Plants make food from light.",               # generate
+        ])
+        with mock.patch.object(chat.config, "AGENTIC_RAG", True), \
+             mock.patch.object(chat, "require_groq_key", lambda: None), \
+             mock.patch.object(chat.vector_store, "get_subject_retriever", return_value=retriever), \
+             mock.patch.object(chat, "_new_chat_model", return_value=llm):
+            start = self.client.post("/api/chat/start", json={"mode": "subject", "subject": "Mathematics"})
+            self.assertEqual(start.status_code, 200, start.text)
+            sid = start.json()["session_id"]
+
+            resp = self.client.post("/api/chat/message/stream",
+                                    json={"session_id": sid, "message": "What is photosynthesis?"})
+
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertTrue(resp.headers["content-type"].startswith("text/event-stream"))
+        events = self._parse_sse(resp.text)
+        self.assertTrue(events, "expected at least one SSE data frame")
+        self.assertTrue(all(isinstance(e, dict) and "type" in e for e in events))
+        self.assertEqual([e["type"] for e in events if e["type"] == "step"][:1], ["step"])
+        done = events[-1]
+        self.assertEqual(done["type"], "done")
+        self.assertEqual(done["answer"], "Plants make food from light.")
+
+    def test_unknown_session_emits_error_frame(self):
+        resp = self.client.post("/api/chat/message/stream",
+                                json={"session_id": "does-not-exist", "message": "hi"})
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertTrue(resp.headers["content-type"].startswith("text/event-stream"))
+        events = self._parse_sse(resp.text)
+        self.assertEqual(events[-1]["type"], "error")
+        self.assertIn("expired", events[-1]["detail"].lower())
 
 
 class HttpEndToEndTests(unittest.TestCase):

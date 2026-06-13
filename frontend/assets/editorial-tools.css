@@ -805,3 +805,41 @@
 }
 [data-skin="editorial"] .cl-foot button,
 [data-skin="editorial"] .cl-foot a { color: hsl(var(--ed-coral-h)); }
+
+/* ── Live reasoning rails (editorial) ────────────────────────────────────── */
+/* Tool rail → coral (building); grounding rail → teal (searching the notes). */
+[data-skin="editorial"] .reason-live {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-soft);
+}
+[data-skin="editorial"] .reason-step { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .reason-step.is-done { opacity: .6; }
+[data-skin="editorial"] .reason-label b { color: hsl(var(--ink)); }
+[data-skin="editorial"] .reason-label small { color: hsl(var(--ink-faint)); }
+
+[data-skin="editorial"] .reason-step--tool .reason-ico {
+  color: var(--ed-coral-active); border-color: hsl(var(--ed-coral-h) / .5); background: hsl(var(--ed-coral-h) / .15);
+}
+[data-skin="editorial"] .reason-step--tool.is-active {
+  background: hsl(var(--ed-coral-h) / .1); border-color: hsl(var(--ed-coral-h) / .32);
+}
+[data-skin="editorial"] .reason-step--ground .reason-ico {
+  color: var(--ed-teal); border-color: hsl(var(--ed-teal-h) / .5); background: hsl(var(--ed-teal-h) / .16);
+}
+[data-skin="editorial"] .reason-step--ground.is-active {
+  background: hsl(var(--ed-teal-h) / .1); border-color: hsl(var(--ed-teal-h) / .32);
+}
+[data-skin="editorial"] .reason-step--tool.is-active .reason-ico {
+  animation-name: reason-pulse-tool-ed;
+}
+[data-skin="editorial"] .reason-step--ground.is-active .reason-ico {
+  animation-name: reason-pulse-ground-ed;
+}
+@keyframes reason-pulse-ground-ed {
+  0%, 100% { box-shadow: 0 0 0 0 hsl(var(--ed-teal-h) / .5); }
+  60%      { box-shadow: 0 0 0 6px hsl(var(--ed-teal-h) / 0); }
+}
+@keyframes reason-pulse-tool-ed {
+  0%, 100% { box-shadow: 0 0 0 0 hsl(var(--ed-coral-h) / .5); }
+  60%      { box-shadow: 0 0 0 6px hsl(var(--ed-coral-h) / 0); }
+}
