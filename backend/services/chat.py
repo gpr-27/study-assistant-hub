@@ -70,7 +70,13 @@ class ChatSessionError(Exception):
 
 def _new_chat_model(model: str | None = None) -> ChatGroq:
     """Create the chat LLM lazily (never at import time)."""
-    return ChatGroq(model=model_for("chat", model), temperature=0.3)
+    # Cap output tokens: Groq's free tier counts *reserved* output tokens against
+    # the 6000 TPM budget. Without this, each of the 3-5 sequential agentic-RAG
+    # calls reserves ~8192 tokens — blowing the entire per-minute budget on the
+    # first call and forcing a throttle wait before the answer is even generated.
+    # 800 tokens is generous for the rewrite/grade helper calls and tight enough
+    # to keep the full agentic loop (3-5 calls) well under 6000 TPM.
+    return ChatGroq(model=model_for("chat", model), temperature=0.3, max_tokens=800)
 
 
 def _register(session: dict) -> str:

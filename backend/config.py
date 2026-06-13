@@ -298,8 +298,8 @@ MAX_CONTENT_TOKENS: int = (_get_int("MAX_CONTENT_TOKENS")[0]) or 3000
 # fall back to classic single-shot RAG. MAX_ITERS bounds the corrective re-retrieve
 # rounds so cost/latency stay bounded.
 AGENTIC_RAG: bool = _get_bool("AGENTIC_RAG", True)
-AGENTIC_RAG_MAX_ITERS: int = max(1, (_get_int("AGENTIC_RAG_MAX_ITERS")[0]) or 2)
-AGENTIC_RAG_QUERIES: int = max(1, (_get_int("AGENTIC_RAG_QUERIES")[0]) or 3)
+AGENTIC_RAG_MAX_ITERS: int = max(1, (_get_int("AGENTIC_RAG_MAX_ITERS")[0]) or 1)
+AGENTIC_RAG_QUERIES: int = max(1, (_get_int("AGENTIC_RAG_QUERIES")[0]) or 2)
 
 
 # ---------------------------------------------------------------------------
