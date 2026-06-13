@@ -1550,3 +1550,154 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
   .reason-live, .reason-step { animation: none; }
   .reason-step.is-active .reason-ico { animation: none; }
 }
+
+
+/* ============================================================
+   LAST-THREE TOOLS — inline teach-back, inline progress, and
+   the composer scan-notes button + pending scan bubble.
+   Glass skin here; editorial overrides live in editorial-tools.css
+   under [data-skin="editorial"]. DOM is built by artifact-inline.js
+   (renderTeachback → cl-tb*, renderProgress → cl-prog*, scans → cl-doc)
+   and by chat.js (composer #chatScanBtn + .chat-scan-pending bubble).
+   Selectors below mirror those emitted classes exactly.
+   ============================================================ */
+
+/* — Teach-back tutor (live Socratic mini-chat) —
+   cl-tb > cl-tb-concept, cl-tb-thread(cl-tb-msg .cl-tb-tutor|.cl-tb-student),
+   cl-tb-form(cl-tb-input + cl-tb-send), cl-tb-eval(cl-tb-score + cl-tb-eval-sec). */
+.cl-tb { display: flex; flex-direction: column; gap: .75rem; }
+.cl-tb-concept { font-size: .88rem; color: hsl(var(--ink-soft)); }
+.cl-tb-concept strong { color: hsl(var(--ink)); }
+.cl-tb-thread { display: flex; flex-direction: column; gap: .55rem; }
+.cl-tb-msg {
+  max-width: 88%; padding: .6rem .8rem; border-radius: 14px;
+  font-size: .92rem; line-height: 1.5; overflow-wrap: anywhere;
+  animation: rise .3s var(--ease-spring) both;
+}
+.cl-tb-msg.cl-tb-tutor {
+  align-self: flex-start; border-bottom-left-radius: 6px; color: hsl(var(--ink));
+  border: 1px solid var(--glass-border); background: hsl(var(--ink) / .04);
+}
+.cl-tb-msg.cl-tb-student {
+  align-self: flex-end; border-bottom-right-radius: 6px; color: #fff;
+  background: linear-gradient(150deg, hsl(var(--accent) / .95), hsl(var(--accent) / .65));
+  box-shadow: 0 4px 12px hsl(var(--accent) / .3);
+}
+.cl-tb-msg.is-pending { opacity: .6; }
+.cl-tb-msg > *:first-child { margin-top: 0; }
+.cl-tb-msg > *:last-child { margin-bottom: 0; }
+.cl-tb-form { display: flex; align-items: flex-end; gap: .5rem; }
+.cl-tb-input {
+  flex: 1; min-width: 0; min-height: 44px; resize: none; font: inherit; font-size: .94rem;
+  line-height: 1.45; color: hsl(var(--ink)); padding: .6rem .85rem; border-radius: 14px;
+  border: 1px solid var(--glass-border); background: var(--field-bg);
+  transition: border-color .2s, box-shadow .2s, background .2s;
+}
+.cl-tb-input:focus { outline: none; border-color: hsl(var(--accent) / .8); box-shadow: 0 0 0 4px hsl(var(--accent) / .18); }
+.cl-tb-input:disabled { opacity: .65; cursor: default; }
+.cl-tb-send {
+  flex: none; min-height: 44px; min-width: 44px; padding: .55rem 1.15rem; border: 0; cursor: pointer;
+  font: inherit; font-weight: 600; font-size: .92rem; color: #fff; border-radius: var(--r-pill);
+  background: linear-gradient(150deg, hsl(var(--accent) / .98), hsl(var(--accent) / .62));
+  box-shadow: 0 6px 16px hsl(var(--accent) / .35); transition: transform .15s var(--ease-out), box-shadow .15s;
+}
+.cl-tb-send:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 22px hsl(var(--accent) / .45); }
+.cl-tb-send:active:not(:disabled) { transform: scale(.97); }
+.cl-tb-send:disabled { opacity: .55; cursor: default; }
+.cl-tb-err { font-size: .85rem; color: hsl(0 72% 55%); padding: .1rem .2rem; }
+.cl-tb-eval {
+  display: flex; flex-direction: column; gap: .7rem;
+  padding: .85rem .9rem; border-radius: 12px;
+  border: 1px solid var(--glass-border); background: hsl(var(--ink) / .03);
+  animation: rise .3s var(--ease-spring) both;
+}
+.cl-tb-score {
+  text-align: center; font-family: var(--font-display); font-weight: 700; letter-spacing: -.01em;
+  font-size: 1.25rem; color: hsl(var(--ink)); padding: .45rem .6rem; border-radius: 11px;
+  background: hsl(var(--accent) / .1); border: 1px solid hsl(var(--accent) / .3);
+}
+.cl-tb-eval-sec { display: flex; flex-direction: column; gap: .3rem; }
+.cl-tb-eval-sec > strong { font-size: .8rem; color: hsl(var(--ink)); }
+.cl-tb-eval-sec ul { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: .25rem; }
+.cl-tb-eval-sec li { font-size: .86rem; line-height: 1.45; color: hsl(var(--ink-soft)); overflow-wrap: anywhere; }
+.cl-tb-eval-sec.is-gap li::marker { color: hsl(0 72% 58%); }
+.cl-tb-eval-sec.is-strength li::marker { color: hsl(var(--c-plan, 145 55% 48%)); }
+.cl-tb-eval-sec.is-review li::marker { color: hsl(var(--accent)); }
+
+/* — Progress (read-only insight tiles) —
+   cl-prog > cl-prog-headline, cl-prog-tiles(cl-prog-tile > cl-prog-tile-v/-l),
+   cl-prog-obs, cl-prog-activity(cl-prog-act-row), cl-prog-weak(cl-prog-weak-row),
+   cl-prog-recs(cl-prog-rec > cl-prog-rec-a/-r), cl-prog-empty. */
+.cl-prog { display: flex; flex-direction: column; gap: .9rem; }
+.cl-prog-headline { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; letter-spacing: -.01em; color: hsl(var(--ink)); }
+.cl-prog-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem; }
+.cl-prog-tile {
+  text-align: center; padding: .85rem .6rem; border-radius: 12px;
+  border: 1px solid var(--glass-border); background: hsl(var(--ink) / .04);
+  display: flex; flex-direction: column; gap: .2rem;
+}
+.cl-prog-tile-v { font-family: var(--font-display); font-weight: 800; font-size: clamp(1.25rem, 5vw, 1.7rem); letter-spacing: -.02em; color: hsl(var(--accent)); }
+.cl-prog-tile-l { font-size: .72rem; font-weight: 600; letter-spacing: .03em; color: hsl(var(--ink-faint)); }
+.cl-prog-obs { display: flex; flex-direction: column; gap: .35rem; font-size: .88rem; line-height: 1.5; color: hsl(var(--ink-soft)); }
+.cl-prog-activity, .cl-prog-weak, .cl-prog-recs { display: flex; flex-direction: column; gap: .45rem; }
+.cl-prog-activity > strong, .cl-prog-weak > strong, .cl-prog-recs > strong { font-size: .8rem; color: hsl(var(--ink)); }
+.cl-prog-act-row, .cl-prog-weak-row {
+  display: flex; align-items: center; justify-content: space-between; gap: .6rem;
+  padding: .55rem .75rem; border-radius: 10px; font-size: .88rem; color: hsl(var(--ink));
+  border: 1px solid var(--glass-border); background: hsl(var(--ink) / .03); overflow-wrap: anywhere;
+}
+.cl-prog-act-row span:first-child, .cl-prog-weak-row span:first-child { font-weight: 600; min-width: 0; }
+.cl-prog-act-row span:last-child { flex: none; color: hsl(var(--ink-soft)); }
+.cl-prog-weak-row span:last-child { flex: none; font-family: var(--font-display); font-weight: 700; color: hsl(0 72% 58%); }
+.cl-prog-rec {
+  padding: .6rem .8rem; border-radius: 10px; overflow-wrap: anywhere;
+  background: hsl(var(--accent) / .08); border-left: 3px solid hsl(var(--accent) / .6);
+}
+.cl-prog-rec-a { font-weight: 600; font-size: .9rem; line-height: 1.45; color: hsl(var(--ink)); }
+.cl-prog-rec-r { font-size: .82rem; line-height: 1.45; color: hsl(var(--ink-soft)); margin-top: .15rem; }
+.cl-prog-empty {
+  text-align: center; font-size: .9rem; line-height: 1.55; color: hsl(var(--ink-faint));
+  padding: 1.1rem .9rem; border-radius: 12px;
+  border: 1px dashed var(--glass-border); background: hsl(var(--ink) / .02);
+}
+
+/* — Composer scan-notes button (#chatScanBtn / .chat-scan-btn) —
+   sits inside #chatComposer; sized to match the Send button height. */
+.chat-scan-btn {
+  flex: none; min-height: 44px; min-width: 44px; padding: .5rem .7rem; line-height: 1;
+  display: grid; place-items: center; cursor: pointer; font-size: 1.15rem;
+  color: hsl(var(--ink-soft)); border-radius: var(--r-pill);
+  border: 1px solid var(--glass-border); background: hsl(var(--ink) / .04);
+  transition: border-color .18s, background .18s, color .18s, transform .12s var(--ease-out);
+}
+.chat-scan-btn:hover:not(:disabled) { border-color: hsl(var(--accent) / .65); background: hsl(var(--accent) / .1); color: hsl(var(--ink)); }
+.chat-scan-btn:active:not(:disabled) { transform: scale(.94); }
+.chat-scan-btn:disabled { opacity: .55; cursor: default; }
+
+/* — Pending scan bubble (.msg.me.chat-scan-pending → thumb + status spinner) — */
+.chat-scan-pending { display: flex; align-items: center; gap: .65rem; }
+.chat-scan-thumb {
+  flex: none; width: 46px; height: 46px; border-radius: 10px; object-fit: cover;
+  border: 1px solid hsl(0 0% 100% / .35); background: hsl(var(--ink) / .12);
+}
+.chat-scan-status { display: inline-flex; align-items: center; gap: .45rem; font-size: .9rem; font-weight: 600; }
+.chat-scan-status::before {
+  content: ""; width: 13px; height: 13px; flex: none; border-radius: 50%;
+  border: 2px solid hsl(0 0% 100% / .45); border-top-color: #fff;
+  animation: scan-spin .8s linear infinite;
+}
+@keyframes scan-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 560px) {
+  .cl-tb, .cl-prog { max-width: 100%; }
+  .cl-tb-msg { max-width: 92%; }
+  .cl-tb-input { min-height: 46px; font-size: 16px; }
+  .cl-tb-send { min-height: 46px; min-width: 46px; }
+  .cl-prog-tiles { grid-template-columns: 1fr; }
+  .chat-scan-btn { min-height: 46px; min-width: 46px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cl-tb-msg, .cl-tb-eval, .cl-prog-tile { animation: none; }
+  .cl-tb-send:hover, .cl-tb-send:active, .chat-scan-btn:active { transform: none; }
+  .chat-scan-status::before { animation: none; }
+}

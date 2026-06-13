@@ -843,3 +843,102 @@
   0%, 100% { box-shadow: 0 0 0 0 hsl(var(--ed-coral-h) / .5); }
   60%      { box-shadow: 0 0 0 6px hsl(var(--ed-coral-h) / 0); }
 }
+
+/* ============================================================
+   LAST-THREE TOOLS (editorial overrides)
+   COLOURS / BORDERS / SHADOWS only — layout owned by styles.css.
+   Selectors mirror the classes artifact-inline.js / chat.js emit.
+   ============================================================ */
+
+/* — Teach-back tutor — */
+[data-skin="editorial"] .cl-tb-concept strong { color: hsl(var(--ink)); }
+[data-skin="editorial"] .cl-tb-msg.cl-tb-tutor {
+  color: hsl(var(--ink));
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-card);
+}
+[data-skin="editorial"] .cl-tb-msg.cl-tb-student {
+  color: #fff;
+  background: var(--ed-coral);
+  box-shadow: var(--ed-shadow);
+}
+[data-skin="editorial"] .cl-tb-input {
+  color: hsl(var(--ink));
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-canvas);
+}
+[data-skin="editorial"] .cl-tb-input:focus {
+  border-color: hsl(var(--ed-coral-h) / .8);
+  box-shadow: 0 0 0 3px hsl(var(--ed-coral-h) / .15);
+}
+[data-skin="editorial"] .cl-tb-send {
+  background: var(--ed-coral);
+  box-shadow: var(--ed-shadow);
+}
+[data-skin="editorial"] .cl-tb-send:hover:not(:disabled) {
+  background: var(--ed-coral-active);
+  box-shadow: var(--ed-shadow);
+}
+[data-skin="editorial"] .cl-tb-eval {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-soft);
+}
+[data-skin="editorial"] .cl-tb-score {
+  color: hsl(var(--ink));
+  background: hsl(var(--ed-coral-h) / .1);
+  border: 1px solid hsl(var(--ed-coral-h) / .3);
+}
+[data-skin="editorial"] .cl-tb-eval-sec > strong { color: hsl(var(--ink)); }
+[data-skin="editorial"] .cl-tb-eval-sec li { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .cl-tb-eval-sec.is-gap li::marker { color: hsl(var(--ed-error-h)); }
+[data-skin="editorial"] .cl-tb-eval-sec.is-strength li::marker { color: hsl(var(--ed-success-h)); }
+[data-skin="editorial"] .cl-tb-err { color: hsl(var(--ed-error-h)); }
+
+/* — Progress (read-only tiles) — */
+[data-skin="editorial"] .cl-prog-headline { color: hsl(var(--ink)); }
+[data-skin="editorial"] .cl-prog-tile {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-card);
+}
+[data-skin="editorial"] .cl-prog-tile-v { color: var(--ed-coral); }
+[data-skin="editorial"] .cl-prog-tile-l { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .cl-prog-activity > strong,
+[data-skin="editorial"] .cl-prog-weak > strong,
+[data-skin="editorial"] .cl-prog-recs > strong { color: hsl(var(--ink)); }
+[data-skin="editorial"] .cl-prog-act-row,
+[data-skin="editorial"] .cl-prog-weak-row {
+  color: hsl(var(--ink));
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-soft);
+}
+[data-skin="editorial"] .cl-prog-weak-row span:last-child { color: hsl(var(--ed-error-h)); }
+[data-skin="editorial"] .cl-prog-act-row span:last-child { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .cl-prog-rec {
+  background: var(--ed-surface-soft);
+  border-left: 3px solid hsl(var(--ed-coral-h) / .6);
+}
+[data-skin="editorial"] .cl-prog-rec-a { color: hsl(var(--ink)); }
+[data-skin="editorial"] .cl-prog-rec-r { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .cl-prog-empty {
+  color: hsl(var(--ink-faint));
+  border: 1px dashed var(--ed-hairline);
+  background: var(--ed-surface-soft);
+}
+
+/* — Composer scan-notes button — */
+[data-skin="editorial"] .chat-scan-btn {
+  color: hsl(var(--ink-soft));
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-canvas);
+}
+[data-skin="editorial"] .chat-scan-btn:hover:not(:disabled) {
+  color: hsl(var(--ink));
+  border-color: hsl(var(--ed-coral-h) / .65);
+  background: var(--ed-surface-soft);
+}
+
+/* — Pending scan bubble (.msg.me reused; thumb on coral) — */
+[data-skin="editorial"] .chat-scan-thumb {
+  border: 1px solid hsl(0 0% 100% / .35);
+  background: hsl(var(--ed-coral-h) / .25);
+}

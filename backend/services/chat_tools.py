@@ -37,19 +37,22 @@ from backend.services import flashcards as flashcards_service
 from backend.services import mindmap as mindmap_service
 from backend.services import planner as planner_service
 from backend.services import predictor as predictor_service
+from backend.services import progress as progress_service
 from backend.services import quiz as quiz_service
+from backend.services import teachback as teachback_service
 
 log = logging.getLogger(__name__)
 
 # ---- stage 1: regex gate (no LLM cost) ----
 _VERBS = r"(?:create|make|generate|build|prepare|design|predict|start|begin|take|attempt|give\s+me|set\s+up|setup|let'?s\s+(?:start|do|take|make|create|build|begin|generate)|can\s+you\s+(?:create|make|generate|build|predict|start|do|take|begin))"
-_TOOLS = r"(?:quiz(?:zes)?|test|flash\s?cards?|summar(?:y|ies|ize|ise)|study\s?plan|plan(?:ner)?|mind\s?map|cheat\s?sheet|predict(?:ion|or)?s?|likely\s+(?:exam\s+)?questions|(?:mock\s?)?exam)"
+_TOOLS = r"(?:quiz(?:zes)?|test|flash\s?cards?|summar(?:y|ies|ize|ise)|study\s?plan|plan(?:ner)?|mind\s?map|cheat\s?sheet|predict(?:ion|or)?s?|likely\s+(?:exam\s+)?questions|(?:mock\s?)?exam|teach[\s-]?back|feynman)"
 _GATE = re.compile(rf"\b{_VERBS}\b.{{0,60}}\b{_TOOLS}\b", re.IGNORECASE | re.DOTALL)
 
 _INTENT_SYSTEM = (
     "You classify whether a student's chat message is a request to CREATE a study "
     "artifact (quiz, flashcards, summary, study plan, mind map, cheat sheet, "
-    "exam-question predictions, or a mock exam to take), and extract parameters. "
+    "exam-question predictions, a mock exam to take, or a teach-back/Feynman "
+    "session where the student explains a concept aloud), and extract parameters. "
     "Questions ABOUT these things (e.g. 'what is a mind map?') are NOT creation "
     "requests. Always reply with valid JSON only."
 )
@@ -63,17 +66,31 @@ _TOOL_ROUTES = {
     "cheatsheet": ("cheatsheets", "#cheatsheet", "Cheat Sheet"),
     "predictor": ("predictions", "#predictor", "Question Predictor"),
     "exam": ("exams", "#exam", "Mock Exam"),
+    "teachback": ("teachbacks", "#teachback", "Teach-back Tutor"),
+    "progress": ("progress", "#progress", "Progress"),
 }
+
+# Read-only progress/insights request — no creation verb, so it's detected
+# separately from the creation gate (see detect_intent).
+_PROGRESS_GATE = re.compile(
+    r"\bmy\s+progress\b|\bhow\s+am\s+i\s+doing\b|\bmy\s+(?:stats|analytics|insights|mastery)\b"
+    r"|\bshow\b.{0,30}\bprogress\b",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def detect_intent(llm, message: str) -> dict | None:
     """Return {"tool", "topic", "count", "days"} if the message asks to create one, else None."""
+    # Read-only progress/insights ("how am i doing", "my stats") — no creation
+    # verb, so it bypasses the creation gate and the confirming LLM call entirely.
+    if _PROGRESS_GATE.search(message or ""):
+        return {"tool": "progress", "topic": None, "count": None, "days": None}
     if not _GATE.search(message or ""):
         return None
     instruction = (
         f"Message: {message}\n\n"
         'Return ONLY JSON: {"is_request": true|false, '
-        '"tool": "quiz"|"flashcards"|"summary"|"plan"|"mindmap"|"cheatsheet"|"predictor"|"exam"|null, '
+        '"tool": "quiz"|"flashcards"|"summary"|"plan"|"mindmap"|"cheatsheet"|"predictor"|"exam"|"teachback"|null, '
         '"topic": "<specific topic mentioned, or null>", '
         '"count": <number of questions/cards if mentioned, else null>, '
         '"days": <days until target date if mentioned, else null>}'
@@ -254,6 +271,37 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
     owner = session.get("owner") or "local"
     subject = session.get("subject")
     topic = intent.get("topic") or session.get("topic")
+
+    # Progress is a READ-ONLY insight view, not a creation: pull the same summary
+    # the Progress dashboard uses (pure Python aggregation, no LLM, nothing saved).
+    if tool == "progress":
+        steps = [_trace("Pulled your progress")]
+        try:
+            summary = progress_service.build_summary(owner)
+        except Exception as exc:  # noqa: BLE001 — never 502 the chat over a read
+            log.warning("Chat progress read failed: %s", exc)
+            return {
+                "answer": f"I couldn't pull your progress right now: {exc}",
+                "steps": steps, "artifact": None,
+            }
+        has_activity = bool(summary.get("overall", {}).get("total_attempts")) or any(
+            (a.get("count") or 0) for a in (summary.get("activity") or [])
+        )
+        answer = (
+            "Here's where you stand across your tools."
+            if has_activity
+            else "No activity yet — take a quiz, review flashcards or sit a mock exam and "
+                 "your progress will show up here."
+        )
+        return {
+            "answer": answer,
+            "steps": steps,
+            "artifact": {
+                "kind": kind, "id": None, "title": "Progress", "route": route,
+                "tool": tool_name, "data": summary,
+            },
+        }
+
     steps = [_trace(f"Detected a {tool_name.lower()} request", intent.get("topic") and f"topic → {intent['topic']}")]
 
     try:
@@ -380,6 +428,28 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
             detail = None
             art_data = {"markdown": markdown}
 
+        elif tool == "teachback":
+            # A live Socratic session: pick the concept + opening prompt and open
+            # the session. The transcript is saved to "teachbacks" only when the
+            # student finishes (POST /api/teachback/message -> done), not here.
+            if subject:
+                content, _ = _subject_content(subject, owner)
+                session_id, concept, opening = teachback_service.start_session(
+                    "subject", content=content, label=subject, owner=owner,
+                )
+                source = subject
+            elif topic:
+                session_id, concept, opening = teachback_service.start_session(
+                    "topic", topic=topic, label=f"Topic · {topic}", owner=owner,
+                )
+                source = topic
+            else:
+                return None
+            saved_id = None
+            title = f"Teach-back · {source}"
+            detail = concept
+            art_data = {"session_id": session_id, "concept": concept, "opening": opening}
+
         elif tool == "predictor":
             if not subject:
                 raise _ToolFailure(
@@ -455,6 +525,17 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
         return {
             "answer": "Here is your mock exam — take it below, then hit Submit and "
                       "I'll grade it for you.",
+            "steps": steps,
+            "artifact": {
+                "kind": kind, "id": None, "title": title, "route": route,
+                "tool": tool_name, "data": art_data,
+            },
+        }
+    if tool == "teachback":
+        # A live session — saved to history only when the student finishes it.
+        return {
+            "answer": f"Let's do a teach-back on **{detail}**. Explain it to me below in "
+                      "your own words, and I'll probe your understanding.",
             "steps": steps,
             "artifact": {
                 "kind": kind, "id": None, "title": title, "route": route,

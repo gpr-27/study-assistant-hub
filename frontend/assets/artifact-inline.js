@@ -412,6 +412,216 @@
     return true;
   }
 
+  /* ---------------- teach-back: live Socratic mini-chat ---------------- */
+  function renderTeachback(container, data) {
+    const sessionId = str(data && data.session_id);
+    const opening = str(data && data.opening);
+    if (!sessionId || !opening) return false;
+
+    const concept = str(data.concept);
+    let done = false;
+    let busy = false;
+
+    const wrap = el(`<div class="cl-tb"></div>`);
+    if (concept) wrap.append(el(`<div class="cl-tb-concept">Explain: <strong>${esc(concept)}</strong></div>`));
+    const thread = el(`<div class="cl-tb-thread"></div>`);
+    wrap.append(thread);
+    container.append(wrap);
+
+    function bubble(role, text) {
+      const b = el(`<div class="cl-tb-msg cl-tb-${role}"></div>`);
+      b.append(el(`<div>${esc(text)}</div>`));
+      thread.append(b);
+      b.scrollIntoView({ block: "nearest" });
+      return b;
+    }
+
+    bubble("tutor", opening);
+
+    const form = el(`<div class="cl-tb-form"></div>`);
+    const input = el(`<textarea class="cl-tb-input" rows="2" placeholder="Explain it in your own words…"></textarea>`);
+    const send = el(`<button class="cl-tb-send" type="button">Send</button>`);
+    form.append(input, send);
+    wrap.append(form);
+
+    async function submit() {
+      if (done || busy) return;
+      const message = input.value.trim();
+      if (!message) return;
+      busy = true;
+      send.disabled = true;
+      input.disabled = true;
+      bubble("student", message);
+      input.value = "";
+      const pending = bubble("tutor", "…");
+      pending.classList.add("is-pending");
+      try {
+        const res = await window.api.post("/teachback/message", {
+          session_id: sessionId,
+          message: message,
+        });
+        pending.remove();
+        bubble("tutor", str(res && res.reply) || "…");
+        if (res && res.done) {
+          done = true;
+          form.remove();
+          renderEval(res.evaluation);
+        } else {
+          busy = false;
+          send.disabled = false;
+          input.disabled = false;
+          input.focus();
+        }
+      } catch (err) {
+        pending.remove();
+        busy = false;
+        send.disabled = false;
+        input.disabled = false;
+        thread.append(el(`<div class="cl-tb-err">Couldn't reach the tutor — ${esc((err && err.message) || "try again")}.</div>`));
+      }
+    }
+
+    send.addEventListener("click", submit);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); }
+    });
+
+    function renderEval(evaluation) {
+      if (!isObj(evaluation)) return;
+      const score = Number(evaluation.understanding_score_0_to_10);
+      const ev = el(`<div class="cl-tb-eval"></div>`);
+      if (Number.isFinite(score)) {
+        ev.append(el(`<div class="cl-tb-score">Understanding: ${score} / 10</div>`));
+      }
+      const block = (title, items, cls) => {
+        const arr = Array.isArray(items) ? items.filter((s) => str(s).trim()) : [];
+        if (!arr.length) return;
+        const sec = el(`<div class="cl-tb-eval-sec ${cls}"></div>`);
+        sec.append(el(`<strong>${esc(title)}</strong>`));
+        const list = el(`<ul></ul>`);
+        arr.forEach((s) => list.append(el(`<li>${esc(str(s))}</li>`)));
+        sec.append(list);
+        ev.append(sec);
+      };
+      block("Strengths", evaluation.strengths, "is-strength");
+      block("Gaps", evaluation.gaps, "is-gap");
+      block("Review next", evaluation.suggested_review, "is-review");
+      wrap.append(ev);
+    }
+
+    return true;
+  }
+
+  /* ---------------- progress: read-only insight tiles ---------------- */
+  function renderProgress(container, data) {
+    if (!isObj(data)) return false;
+
+    const overall = isObj(data.overall) ? data.overall : null;
+    const subjects = Array.isArray(data.subjects) ? data.subjects : [];
+    const weakest = Array.isArray(data.weakest) ? data.weakest : [];
+    const activity = Array.isArray(data.activity) ? data.activity : [];
+    // Insights-style fields (when the agent returns the richer insights payload).
+    const headline = str(data.headline);
+    const observations = Array.isArray(data.observations) ? data.observations : [];
+    const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
+    const focusTopics = Array.isArray(data.focus_topics) ? data.focus_topics : [];
+
+    const totalAttempts = overall ? Number(overall.total_attempts) || 0 : 0;
+    const hasAnything = totalAttempts > 0 || subjects.length || weakest.length ||
+      activity.length || headline || observations.length || recommendations.length;
+    if (!hasAnything) {
+      container.append(el(`<div class="cl-prog cl-prog-empty">No activity yet — take a quiz, run a teach-back, or sit a mock exam and your progress will show up here.</div>`));
+      return true;
+    }
+
+    const wrap = el(`<div class="cl-prog"></div>`);
+
+    if (headline) wrap.append(el(`<div class="cl-prog-headline">${esc(headline)}</div>`));
+
+    if (overall) {
+      const tiles = el(`<div class="cl-prog-tiles"></div>`);
+      const tile = (label, value) => {
+        const t = el(`<div class="cl-prog-tile"></div>`);
+        t.append(el(`<div class="cl-prog-tile-v">${esc(String(value))}</div>`));
+        t.append(el(`<div class="cl-prog-tile-l">${esc(label)}</div>`));
+        tiles.append(t);
+      };
+      tile("Attempts", totalAttempts);
+      tile("Accuracy", `${Math.round((Number(overall.overall_accuracy) || 0) * 100)}%`);
+      tile("Day streak", Number(overall.streak_days) || 0);
+      wrap.append(tiles);
+    }
+
+    if (observations.length) {
+      const obs = el(`<div class="cl-prog-obs"></div>`);
+      observations.forEach((o) => { if (str(o).trim()) obs.append(el(`<div>${esc(str(o))}</div>`)); });
+      if (obs.childElementCount) wrap.append(obs);
+    }
+
+    if (activity.length) {
+      const act = el(`<div class="cl-prog-activity"></div>`);
+      act.append(el(`<strong>Recent activity</strong>`));
+      activity.forEach((a) => {
+        if (!isObj(a)) return;
+        const label = str(a.label) || str(a.tool);
+        if (!label) return;
+        const count = Number(a.count) || 0;
+        const metric = str(a.metric);
+        const row = el(`<div class="cl-prog-act-row"></div>`);
+        row.append(el(`<span>${esc(label)}</span>`));
+        row.append(el(`<span>${esc(String(count))}${metric ? " · " + esc(metric) : ""}</span>`));
+        act.append(row);
+      });
+      if (act.childElementCount > 1) wrap.append(act);
+    }
+
+    if (weakest.length) {
+      const weak = el(`<div class="cl-prog-weak"></div>`);
+      weak.append(el(`<strong>Weak spots</strong>`));
+      weakest.forEach((w) => {
+        if (!isObj(w)) return;
+        const topic = str(w.topic);
+        if (!topic) return;
+        const subj = str(w.subject);
+        const acc = Math.round((Number(w.accuracy) || 0) * 100);
+        const row = el(`<div class="cl-prog-weak-row"></div>`);
+        row.append(el(`<span>${esc(topic)}${subj ? " · " + esc(subj) : ""}</span>`));
+        row.append(el(`<span>${acc}%</span>`));
+        weak.append(row);
+      });
+      if (weak.childElementCount > 1) wrap.append(weak);
+    } else if (focusTopics.length) {
+      const focus = el(`<div class="cl-prog-weak"></div>`);
+      focus.append(el(`<strong>Focus topics</strong>`));
+      focusTopics.forEach((t) => { if (str(t).trim()) focus.append(el(`<div class="cl-prog-weak-row"><span>${esc(str(t))}</span></div>`)); });
+      if (focus.childElementCount > 1) wrap.append(focus);
+    }
+
+    if (recommendations.length) {
+      const recs = el(`<div class="cl-prog-recs"></div>`);
+      recs.append(el(`<strong>Recommendations</strong>`));
+      recommendations.forEach((r) => {
+        let action = "";
+        let reason = "";
+        if (typeof r === "string") action = r;
+        else if (isObj(r)) { action = str(r.action || r.text || ""); reason = str(r.reason || r.why || ""); }
+        if (!action) return;
+        const rec = el(`<div class="cl-prog-rec"></div>`);
+        rec.append(el(`<div class="cl-prog-rec-a">${esc(action)}</div>`));
+        if (reason) rec.append(el(`<div class="cl-prog-rec-r">${esc(reason)}</div>`));
+        recs.append(rec);
+      });
+      if (recs.childElementCount > 1) wrap.append(recs);
+    }
+
+    if (!wrap.childElementCount) {
+      container.append(el(`<div class="cl-prog cl-prog-empty">No activity yet — take a quiz, run a teach-back, or sit a mock exam and your progress will show up here.</div>`));
+      return true;
+    }
+    container.append(wrap);
+    return true;
+  }
+
   /* ---------------- dispatch ---------------- */
   function renderArtifactInline(container, artifact) {
     if (!container || !isObj(artifact)) return false;
@@ -429,6 +639,10 @@
         case "summaries":   return renderSummaries(container, data);
         case "mindmaps":    return renderMindmap(container, data);
         case "predictions": return renderPredictions(container, data);
+        case "teachback":   return renderTeachback(container, data);
+        case "teachbacks":  return renderTeachback(container, data);
+        case "progress":    return renderProgress(container, data);
+        case "scans":       return renderDoc(container, data.markdown);
         default:            return false;
       }
     } catch (_) {

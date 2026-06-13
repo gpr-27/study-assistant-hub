@@ -733,6 +733,62 @@
     }
   }
 
+  // ── Scan notes via photo upload (composer 📷 button) ──────────
+  //    Independent of the chat session/streaming path. Picks an image, shows a
+  //    pending "Scanning…" user bubble, POSTs it to the scan-notes transcribe
+  //    endpoint (multipart field `images`, which transcribes AND saves to the
+  //    "scans" history), then renders the returned markdown inline as an artifact
+  //    card. On error the pending bubble is swapped for a friendly notice.
+  async function scanPhoto(file) {
+    if (!file) return;
+    const thread = document.querySelector("#chatThread");
+    if (!thread) return;
+
+    // Clear any empty/overview placeholders so the scan bubble isn't crowded.
+    thread.querySelector(".empty")?.remove();
+    thread.querySelector(".chat-overview")?.remove();
+    thread.querySelector(".chat-overview-loading")?.remove();
+
+    // Pending user bubble: a thumbnail of the chosen photo + a "Scanning…" hint.
+    const pending = el(`<div class="msg me chat-scan-pending"></div>`);
+    let objectUrl = null;
+    try {
+      objectUrl = URL.createObjectURL(file);
+      const thumb = el(`<img class="chat-scan-thumb" alt="Scanned note" />`);
+      thumb.src = objectUrl;
+      pending.append(thumb);
+    } catch (_) {}
+    pending.append(el(`<span class="chat-scan-status">Scanning your notes…</span>`));
+    thread.append(pending);
+    thread.scrollTop = thread.scrollHeight;
+
+    try {
+      const fd = new FormData();
+      fd.append("images", file, file.name || "note.jpg");
+      const resp = await window.api.postForm("/scannotes/extract", fd);
+      if (objectUrl) { try { URL.revokeObjectURL(objectUrl); } catch (_) {} }
+      pending.remove();
+      const markdown = (resp && resp.markdown) || "";
+      appendArtifactCard(thread, {
+        kind: "scans",
+        id: (resp && resp.id) || null,
+        route: "#scannotes",
+        tool: "Scan Notes",
+        title: (resp && resp.title) || "Scanned notes",
+        data: { markdown },
+      });
+      thread.scrollTop = thread.scrollHeight;
+    } catch (e) {
+      if (objectUrl) { try { URL.revokeObjectURL(objectUrl); } catch (_) {} }
+      pending.remove();
+      const errMsg = el(`<div class="msg ai"></div>`);
+      errMsg.textContent = "⚠ " + (e && e.message ? e.message : "Couldn't scan that photo.");
+      thread.append(errMsg);
+      toast(e && e.message ? e.message : "Couldn't scan that photo.", "error");
+      thread.scrollTop = thread.scrollHeight;
+    }
+  }
+
   // ── Show / hide the collapsible setup panel (Options toggle) ──
   function setChatSetup(open) {
     const setup = document.getElementById("chatSetup");
@@ -806,6 +862,8 @@
               <div class="empty"><div class="big">✦</div><div>Start a new session or open a saved chat.</div></div>
             </div>
             <div class="composer" id="chatComposer">
+              <button id="chatScanBtn" class="chat-scan-btn" type="button" title="Scan handwritten notes from a photo" aria-label="Scan notes from a photo">📷</button>
+              <input id="chatScanInput" type="file" accept="image/*" hidden />
               <input class="input" type="text" placeholder="Ask a question…" aria-label="Message" disabled />
               <button id="chatSend" class="btn-accent" type="button" disabled>Send</button>
             </div>
@@ -846,6 +904,15 @@
       composer.querySelector("#chatSend").addEventListener("click", send);
       composer.querySelector(".input").addEventListener("keydown", (e) => {
         if (e.key === "Enter") { e.preventDefault(); send(); }
+      });
+
+      // Wire 📷 scan-notes upload (independent of the chat session/streaming path).
+      const scanInput = composer.querySelector("#chatScanInput");
+      composer.querySelector("#chatScanBtn").addEventListener("click", () => scanInput.click());
+      scanInput.addEventListener("change", () => {
+        const file = scanInput.files && scanInput.files[0];
+        scanInput.value = "";  // allow re-picking the same file
+        if (file) scanPhoto(file);
       });
     },
 

@@ -108,6 +108,53 @@ class GateTests(unittest.TestCase):
             self.assertIsNone(chat_tools.detect_intent(llm, phrase))
         self.assertEqual(llm.calls, [])
 
+    def test_teachback_phrasings_pass_the_regex_gate(self):
+        """The gate must let teach-back/Feynman creation phrasings reach the LLM."""
+        for phrase in (
+            "start a teach-back session",
+            "let's do a teachback",
+            "begin a feynman session on this",
+            "give me a teach back",
+            "create a teachback for this subject",
+        ):
+            llm = FakeLLM(['{"is_request": true, "tool": "teachback", "topic": null, "count": null, "days": null}'])
+            chat_tools.detect_intent(llm, phrase)
+            self.assertEqual(len(llm.calls), 1, f"gate should pass for: {phrase!r}")
+
+    def test_teachback_request_detected(self):
+        llm = FakeLLM(['{"is_request": true, "tool": "teachback", "topic": null, "count": null, "days": null}'])
+        intent = chat_tools.detect_intent(llm, "let's do a teach-back")
+        self.assertEqual(intent["tool"], "teachback")
+        self.assertEqual(len(llm.calls), 1)
+
+    def test_plain_question_about_teachback_skips_the_llm(self):
+        """A plain question about teach-back must not trip the gate."""
+        llm = FakeLLM([])
+        self.assertIsNone(chat_tools.detect_intent(llm, "what is the feynman technique?"))
+        self.assertEqual(llm.calls, [])
+
+    def test_progress_request_detected_without_creation_verb(self):
+        """Progress is read-only: no creation verb, no LLM call — detected by its own gate."""
+        for phrase in (
+            "show my progress",
+            "how am i doing?",
+            "my stats",
+            "my analytics",
+            "my insights",
+            "my mastery",
+        ):
+            llm = FakeLLM([])  # must never reach the LLM
+            intent = chat_tools.detect_intent(llm, phrase)
+            self.assertIsNotNone(intent, f"progress not detected for: {phrase!r}")
+            self.assertEqual(intent["tool"], "progress", f"wrong tool for: {phrase!r}")
+            self.assertEqual(llm.calls, [], f"progress must not cost an LLM call: {phrase!r}")
+
+    def test_ordinary_message_is_not_progress(self):
+        """A normal question must not be mistaken for a progress request."""
+        llm = FakeLLM([])
+        self.assertIsNone(chat_tools.detect_intent(llm, "what is the progress of a wave?"))
+        self.assertEqual(llm.calls, [])
+
 
 def _subject_session(**over):
     base = {"mode": "subject", "subject": "DBMS", "topic": None, "owner": "u1", "llm": FakeLLM([])}
@@ -270,6 +317,69 @@ class RunToolTests(unittest.TestCase):
         )
         self.assertIsNone(out["artifact"])
         self.assertIn("documents", out["answer"])
+
+    def test_teachback_from_subject_starts_a_session(self):
+        """A subject teach-back reads the subject content, opens a live session, and
+        returns a teachback artifact carrying the session_id/concept/opening — nothing saved."""
+        with mock.patch.object(chat_tools, "_subject_content", return_value=("CONTENT", ["a.pdf"])) as content, \
+             mock.patch.object(chat_tools.teachback_service, "start_session",
+                               return_value=("tb-sess-1", "Normalization", "Explain normalization to me.")) as mk, \
+             mock.patch.object(chat_tools.db, "save") as save:
+            out = chat_tools.run_tool(_subject_session(), {"tool": "teachback", "topic": None, "count": None, "days": None}, "m")
+        content.assert_called_once_with("DBMS", "u1")
+        mk.assert_called_once_with("subject", content="CONTENT", label="DBMS", owner="u1")
+        save.assert_not_called()  # the transcript is saved only when the student finishes
+        art = out["artifact"]
+        self.assertEqual(art["kind"], "teachbacks")
+        self.assertEqual(art["route"], "#teachback")
+        self.assertEqual(art["tool"], "Teach-back Tutor")
+        self.assertIsNone(art["id"])
+        self.assertEqual(art["title"], "Teach-back · DBMS")
+        self.assertEqual(art["data"]["session_id"], "tb-sess-1")
+        self.assertEqual(art["data"]["concept"], "Normalization")
+        self.assertEqual(art["data"]["opening"], "Explain normalization to me.")
+
+    def test_teachback_from_topic_starts_a_session(self):
+        with mock.patch.object(chat_tools.teachback_service, "start_session",
+                               return_value=("tb-sess-2", "Recursion", "Explain recursion.")) as mk, \
+             mock.patch.object(chat_tools.db, "save") as save:
+            out = chat_tools.run_tool(_topic_session(), {"tool": "teachback", "topic": None, "count": None, "days": None}, "m")
+        mk.assert_called_once_with("topic", topic="Recursion", label="Topic · Recursion", owner="u1")
+        save.assert_not_called()
+        art = out["artifact"]
+        self.assertEqual(art["kind"], "teachbacks")
+        self.assertEqual(art["title"], "Teach-back · Recursion")
+        self.assertEqual(art["data"]["session_id"], "tb-sess-2")
+
+    def test_progress_returns_read_only_summary_without_saving(self):
+        """Progress pulls the same summary the dashboard uses and returns it inline; nothing saved."""
+        summary = {
+            "overall": {"total_attempts": 12, "overall_accuracy": 0.75, "streak_days": 3},
+            "subjects": [{"subject": "DBMS", "attempts": 12, "accuracy": 0.75, "topics": []}],
+            "weakest": [{"subject": "DBMS", "topic": "Joins", "attempts": 4, "accuracy": 0.4}],
+        }
+        with mock.patch.object(chat_tools.progress_service, "build_summary", return_value=summary) as mk, \
+             mock.patch.object(chat_tools.db, "save") as save:
+            out = chat_tools.run_tool(_subject_session(), {"tool": "progress", "topic": None, "count": None, "days": None}, "m")
+        mk.assert_called_once_with("u1")
+        save.assert_not_called()
+        art = out["artifact"]
+        self.assertEqual(art["kind"], "progress")
+        self.assertEqual(art["route"], "#progress")
+        self.assertEqual(art["tool"], "Progress")
+        self.assertIsNone(art["id"])
+        self.assertEqual(art["data"], summary)
+
+    def test_progress_with_no_activity_gives_friendly_note(self):
+        """When there are no attempts, progress still returns the (empty) summary with a friendly answer."""
+        empty = {"overall": {"total_attempts": 0}, "subjects": [], "weakest": [], "activity": []}
+        with mock.patch.object(chat_tools.progress_service, "build_summary", return_value=empty), \
+             mock.patch.object(chat_tools.db, "save") as save:
+            out = chat_tools.run_tool(_subject_session(), {"tool": "progress", "topic": None, "count": None, "days": None}, "m")
+        save.assert_not_called()
+        self.assertEqual(out["artifact"]["kind"], "progress")
+        self.assertEqual(out["artifact"]["data"], empty)
+        self.assertIn("No activity yet", out["answer"])
 
     def test_cheatsheet_tolerates_persistence_off(self):
         """db.save returns None when persistence is off — the artifact id is None, no crash."""
