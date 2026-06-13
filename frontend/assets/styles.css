@@ -175,7 +175,7 @@ a { color: inherit; }
   background: conic-gradient(from 210deg, hsl(var(--c-chat)), hsl(var(--c-quiz)), hsl(var(--c-cards)), hsl(var(--c-plan)), hsl(var(--c-chat)));
   box-shadow: 0 2px 10px hsl(var(--c-quiz) / .5), inset 0 1px 1px hsl(0 0% 100% / .6); }
 .brand .mark svg { width: 17px; height: 17px; }
-.nav-actions { display: flex; align-items: center; gap: .5rem; }
+.nav-actions { display: flex; align-items: center; gap: .5rem; min-width: 0; }
 .tag { font-size: .74rem; color: hsl(var(--ink-faint)); padding: .35rem .7rem; border-radius: var(--r-pill); border: 1px solid var(--glass-border); display: none; }
 @media (min-width: 720px) { .tag { display: inline-block; } }
 

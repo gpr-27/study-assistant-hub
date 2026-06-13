@@ -69,7 +69,7 @@ def _subject_fingerprint(subject: str, owner: str) -> str:
 def _cache_key(*, subject: str | None, topic: str | None, owner: str) -> str:
     if subject:
         return f"{owner}::subject::{subject}::{_subject_fingerprint(subject, owner)}"
-    return f"topic::{topic}"
+    return f"{owner}::topic::{topic}"
 
 
 def _cache_get(key: str) -> dict | None:

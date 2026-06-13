@@ -149,8 +149,7 @@
   background: hsl(45 33% 97% / .92);
   border: 1px solid var(--glass-border);
   box-shadow: var(--shadow-float);
-  -webkit-backdrop-filter: saturate(120%) blur(6px);
-  backdrop-filter: saturate(120%) blur(6px);
+  /* flat editorial nav — no frosted blur (the .glass neutralisation forces none anyway) */
 }
 [data-skin="editorial"] .brand {
   font-family: var(--font-display);
@@ -549,9 +548,9 @@
    11. AUTH GATE — cream surfaces, hairline, flat
    ============================================================ */
 [data-skin="editorial"] .auth-gate {
-  background: hsl(40 30% 90% / .65);
-  backdrop-filter: blur(10px) saturate(120%);
-  -webkit-backdrop-filter: blur(10px) saturate(120%);
+  background: hsl(40 30% 90% / .82);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 [data-skin="editorial"] .auth-card .auth-mark {
   background: hsl(var(--accent));
