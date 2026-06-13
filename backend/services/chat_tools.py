@@ -32,6 +32,7 @@ from backend import config, db
 from backend.config import MAX_CONTENT_TOKENS
 from backend.documents import clip_to_tokens, list_pdf_names, read_pdf
 from backend.services import cheatsheet as cheatsheet_service
+from backend.services import exam as exam_service
 from backend.services import flashcards as flashcards_service
 from backend.services import mindmap as mindmap_service
 from backend.services import planner as planner_service
@@ -42,15 +43,15 @@ log = logging.getLogger(__name__)
 
 # ---- stage 1: regex gate (no LLM cost) ----
 _VERBS = r"(?:create|make|generate|build|prepare|design|predict|start|begin|take|attempt|give\s+me|set\s+up|setup|let'?s\s+(?:start|do|take|make|create|build|begin|generate)|can\s+you\s+(?:create|make|generate|build|predict|start|do|take|begin))"
-_TOOLS = r"(?:quiz(?:zes)?|test|flash\s?cards?|summar(?:y|ies|ize|ise)|study\s?plan|plan(?:ner)?|mind\s?map|cheat\s?sheet|predict(?:ion|or)?s?|likely\s+(?:exam\s+)?questions)"
+_TOOLS = r"(?:quiz(?:zes)?|test|flash\s?cards?|summar(?:y|ies|ize|ise)|study\s?plan|plan(?:ner)?|mind\s?map|cheat\s?sheet|predict(?:ion|or)?s?|likely\s+(?:exam\s+)?questions|(?:mock\s?)?exam)"
 _GATE = re.compile(rf"\b{_VERBS}\b.{{0,60}}\b{_TOOLS}\b", re.IGNORECASE | re.DOTALL)
 
 _INTENT_SYSTEM = (
     "You classify whether a student's chat message is a request to CREATE a study "
-    "artifact (quiz, flashcards, summary, study plan, mind map, cheat sheet, or "
-    "exam-question predictions), and extract parameters. Questions ABOUT these "
-    "things (e.g. 'what is a mind map?') are NOT creation requests. Always reply "
-    "with valid JSON only."
+    "artifact (quiz, flashcards, summary, study plan, mind map, cheat sheet, "
+    "exam-question predictions, or a mock exam to take), and extract parameters. "
+    "Questions ABOUT these things (e.g. 'what is a mind map?') are NOT creation "
+    "requests. Always reply with valid JSON only."
 )
 
 _TOOL_ROUTES = {
@@ -61,6 +62,7 @@ _TOOL_ROUTES = {
     "mindmap": ("mindmaps", "#mindmap", "Mind Map"),
     "cheatsheet": ("cheatsheets", "#cheatsheet", "Cheat Sheet"),
     "predictor": ("predictions", "#predictor", "Question Predictor"),
+    "exam": ("exams", "#exam", "Mock Exam"),
 }
 
 
@@ -71,7 +73,7 @@ def detect_intent(llm, message: str) -> dict | None:
     instruction = (
         f"Message: {message}\n\n"
         'Return ONLY JSON: {"is_request": true|false, '
-        '"tool": "quiz"|"flashcards"|"summary"|"plan"|"mindmap"|"cheatsheet"|"predictor"|null, '
+        '"tool": "quiz"|"flashcards"|"summary"|"plan"|"mindmap"|"cheatsheet"|"predictor"|"exam"|null, '
         '"topic": "<specific topic mentioned, or null>", '
         '"count": <number of questions/cards if mentioned, else null>, '
         '"days": <days until target date if mentioned, else null>}'
@@ -144,6 +146,94 @@ def _subject_papers_corpus(subject: str, owner: str | None) -> tuple[str, list[s
 
 class _ToolFailure(Exception):
     """A readable reason the artifact couldn't be created (shown as the answer)."""
+
+
+# Roughly the token budget for the stored rendition; keeps follow-up context bounded.
+_ARTIFACT_TEXT_TOKENS = 1500
+
+
+def _outline(node: object, depth: int = 0) -> list[str]:
+    """Render a mind-map {label, children} tree as an indented bullet outline."""
+    if not isinstance(node, dict):
+        return []
+    label = str(node.get("label") or "").strip()
+    lines: list[str] = []
+    if label:
+        lines.append(f"{'  ' * depth}- {label}")
+    for child in node.get("children") or []:
+        lines.extend(_outline(child, depth + 1))
+    return lines
+
+
+def _artifact_text(tool: str, title: str, art_data: dict) -> str:
+    """Build a compact text rendition of a created artifact for follow-up chat.
+
+    Captures what the student is looking at so a later, non-tool turn can discuss
+    it ("why is C correct", "explain question 3", "summarise this cheat sheet").
+    The result is clipped to ``_ARTIFACT_TEXT_TOKENS`` by the caller.
+    """
+    parts: list[str] = []
+    if tool in ("quiz", "exam"):
+        for i, q in enumerate(art_data.get("questions") or [], start=1):
+            if not isinstance(q, dict):
+                continue
+            prompt = str(q.get("question") or "").strip()
+            if q.get("type") == "short" or (tool == "exam" and not q.get("options")):
+                points = q.get("expected_points") or []
+                parts.append(f"Q{i} (short answer). {prompt}")
+                if points:
+                    parts.append("Expected points: " + "; ".join(str(p) for p in points))
+                continue
+            options = q.get("options")
+            if isinstance(options, dict):  # quiz: {"A": "...", ...}, correct is a letter
+                opt_lines = [f"  {k}. {v}" for k, v in options.items()]
+                correct = str(q.get("correct") or "").strip()
+                correct_text = options.get(correct, "")
+                parts.append(f"Q{i}. {prompt}\n" + "\n".join(opt_lines))
+                parts.append(f"Correct answer: {correct}. {correct_text}".rstrip())
+            elif isinstance(options, list):  # exam MCQ: list + answer_index
+                opt_lines = [f"  {chr(65 + j)}. {o}" for j, o in enumerate(options)]
+                idx = q.get("answer_index")
+                correct_text = options[idx] if isinstance(idx, int) and 0 <= idx < len(options) else ""
+                letter = chr(65 + idx) if isinstance(idx, int) and 0 <= idx < len(options) else "?"
+                parts.append(f"Q{i}. {prompt}\n" + "\n".join(opt_lines))
+                parts.append(f"Correct answer: {letter}. {correct_text}".rstrip())
+            else:
+                parts.append(f"Q{i}. {prompt}")
+            explanation = str(q.get("explanation") or "").strip()
+            if explanation:
+                parts.append(f"Explanation: {explanation}")
+    elif tool == "flashcards":
+        for i, c in enumerate(art_data.get("cards") or [], start=1):
+            if not isinstance(c, dict):
+                continue
+            front = str(c.get("front") or "").strip()
+            back = str(c.get("back") or "").strip()
+            if front or back:
+                parts.append(f"Card {i}: {front} → {back}")
+    elif tool in ("cheatsheet", "plan"):
+        parts.append(str(art_data.get("markdown") or art_data.get("plan") or ""))
+    elif tool == "summary":
+        for pdf, summary in (art_data.get("summaries") or {}).items():
+            parts.append(f"## {pdf}\n{summary}")
+    elif tool == "mindmap":
+        parts.extend(_outline(art_data.get("root")))
+    elif tool == "predictor":
+        for i, p in enumerate(art_data.get("predicted_questions") or [], start=1):
+            if not isinstance(p, dict):
+                continue
+            question = str(p.get("question") or "").strip()
+            topic = str(p.get("topic") or "").strip()
+            likelihood = str(p.get("likelihood") or "").strip()
+            reasoning = str(p.get("reasoning") or "").strip()
+            head = f"{i}. [{likelihood}] {question}" if likelihood else f"{i}. {question}"
+            if topic:
+                head += f" (topic: {topic})"
+            parts.append(head)
+            if reasoning:
+                parts.append(f"   Why: {reasoning}")
+    text = "\n".join(p for p in parts if p).strip()
+    return clip_to_tokens(text, _ARTIFACT_TEXT_TOKENS) if text else ""
 
 
 def _trace(title: str, detail: str | None = None) -> dict:
@@ -290,7 +380,7 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
             detail = None
             art_data = {"markdown": markdown}
 
-        else:  # predictor
+        elif tool == "predictor":
             if not subject:
                 raise _ToolFailure(
                     "predictions are built from past papers — start a Subject chat so I have "
@@ -309,6 +399,29 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
             detail = f"{len(predicted)} likely questions"
             art_data = {"patterns": patterns, "predicted_questions": predicted}
 
+        else:  # exam — subject-locked; generated only from the session subject
+            if not subject:
+                raise _ToolFailure(
+                    "mock exams are built from documents — start a Subject chat so I have "
+                    "PDFs to examine you on."
+                )
+            num_mcq = min(intent.get("count") or 6, 10)
+            num_short = 2
+            content, _ = _subject_content(subject, owner)
+            data = exam_service.generate_exam(content, num_mcq, num_short)
+            questions = data.get("questions") or []
+            if not questions:
+                raise _ToolFailure("the model returned no usable questions — try again.")
+            # An exam is persisted as a GRADED ATTEMPT only after the user submits
+            # (POST /api/exam/grade), so nothing is saved here.
+            saved_id = None
+            title = f"Mock Exam · {subject}"
+            detail = f"{num_mcq} MCQ + {num_short} short"
+            art_data = {
+                "questions": questions, "subject": subject,
+                "num_mcq": num_mcq, "num_short": num_short,
+            }
+
     except _ToolFailure as exc:
         steps.append(_trace("Couldn't create it", str(exc)))
         return {
@@ -326,6 +439,28 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
         }
 
     steps.append(_trace(f"Created “{title}”" + (f" — {detail}" if detail else "")))
+
+    # Remember a compact rendition so later, non-tool turns can DISCUSS this
+    # artifact (e.g. "explain question 3", "summarise this cheat sheet"). This
+    # changes nothing shown in the chat — chat.ask() injects it into context.
+    try:
+        rendition = _artifact_text(tool, title, art_data)
+        if rendition:
+            session["recent_artifact"] = {"title": title, "kind": kind, "text": rendition}
+    except Exception:  # noqa: BLE001 — a rendition bug must never break artifact creation
+        log.debug("Could not build recent-artifact rendition (%s).", tool, exc_info=True)
+
+    if tool == "exam":
+        # Not saved yet — it's persisted as a graded attempt only after submit.
+        return {
+            "answer": "Here is your mock exam — take it below, then hit Submit and "
+                      "I'll grade it for you.",
+            "steps": steps,
+            "artifact": {
+                "kind": kind, "id": None, "title": title, "route": route,
+                "tool": tool_name, "data": art_data,
+            },
+        }
     saved_note = (
         f"It's saved in your **{tool_name}** history." if saved_id
         else f"Open the **{tool_name}** to use it (history is off, so it wasn't saved)."

@@ -1256,6 +1256,10 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
   font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: hsl(var(--ink-faint));
 }
 .cl-card.cl-flip .cl-face::before { content: "Back"; color: hsl(var(--accent)); }
+.cl-flip {
+  position: absolute; bottom: .55rem; right: .8rem; font-size: .62rem; font-weight: 700;
+  letter-spacing: .07em; text-transform: uppercase; color: hsl(var(--ink-faint));
+}
 .cl-nav { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
 .cl-navbtn {
   min-height: 40px; min-width: 44px; padding: .45rem 1rem; cursor: pointer; font: inherit;
@@ -1268,9 +1272,12 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
 .cl-navbtn:disabled { opacity: .4; cursor: not-allowed; }
 
 /* — document (cheatsheet / plan / summaries) — */
-.cl-doc { font-size: .94rem; line-height: 1.6; color: hsl(var(--ink-soft)); }
+.cl-doc { font-size: .94rem; line-height: 1.6; color: hsl(var(--ink-soft)); max-width: 100%; overflow-wrap: anywhere; }
 .cl-doc > *:first-child { margin-top: 0; }
 .cl-doc > *:last-child { margin-bottom: 0; }
+/* never let wide tables / code blocks blow out the bubble — allow scroll */
+.cl-doc table, .cl-doc pre { display: block; max-width: 100%; overflow-x: auto; }
+.cl-doc img { max-width: 100%; height: auto; }
 .cl-doc-h {
   font-family: var(--font-display); font-weight: 700; letter-spacing: -.01em;
   font-size: 1.02rem; color: hsl(var(--accent)); margin: 1rem 0 .35rem;
@@ -1279,17 +1286,18 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
 
 /* — mind map (collapsible tree) — */
 .cl-mm { font-size: .92rem; }
-.cl-mm-row { display: flex; align-items: flex-start; gap: .4rem; padding: .12rem 0; }
+.cl-mm-row { display: flex; align-items: flex-start; gap: .4rem; padding: .12rem 0; padding-left: calc(var(--mm-depth, 0) * 1.05rem); }
+.cl-mm-label-line { display: flex; align-items: flex-start; gap: .4rem; }
 .cl-mm-toggle {
-  flex: none; width: 20px; height: 20px; margin-top: .05rem; display: grid; place-items: center;
-  cursor: pointer; font: inherit; font-size: .7rem; color: hsl(var(--accent));
+  flex: none; width: 26px; height: 26px; min-width: 26px; margin-top: .05rem; display: grid; place-items: center;
+  cursor: pointer; font: inherit; font-size: .72rem; color: hsl(var(--accent));
   border: 1px solid hsl(var(--accent) / .4); border-radius: 6px; background: hsl(var(--accent) / .1);
   transition: background .15s, transform .15s var(--ease-spring);
 }
 .cl-mm-toggle:hover { background: hsl(var(--accent) / .2); }
 .cl-mm-toggle.is-leaf { visibility: hidden; }
 .cl-mm-label { line-height: 1.45; color: hsl(var(--ink)); padding-top: .05rem; }
-.cl-mm .cl-mm { margin-left: 1.05rem; border-left: 1px solid hsl(var(--accent) / .22); padding-left: .55rem; }
+.cl-mm-kids { margin-left: 1.05rem; border-left: 1px solid hsl(var(--accent) / .22); padding-left: .55rem; }
 
 /* — predictions — */
 .cl-pred { display: flex; flex-direction: column; gap: .7rem; }
@@ -1305,6 +1313,104 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
   background: hsl(var(--accent) / .08); border-left: 3px solid hsl(var(--accent) / .6);
 }
 
+/* — mock exam (interactive paper + graded report) —
+   Classes below MUST match exactly what artifact-inline.js emits:
+   cl-exam / cl-exam-body / cl-exam-qhead / cl-exam-num / cl-exam-prompt /
+   cl-exam-opts / cl-exam-opt (.is-chosen|.is-correct|.is-wrong) /
+   cl-exam-short / cl-exam-submit / cl-exam-fb / cl-exam-err /
+   cl-exam-report / cl-exam-score / cl-exam-topics / cl-exam-topic-row /
+   cl-exam-topic, plus .is-graded on the wrapper. */
+.cl-exam { display: flex; flex-direction: column; gap: 1rem; }
+.cl-exam-body { display: flex; flex-direction: column; gap: 1rem; }
+.cl-exam-q {
+  display: flex; flex-direction: column; gap: .55rem;
+  padding: .85rem .9rem; border-radius: 12px;
+  border: 1px solid var(--glass-border); background: hsl(var(--ink) / .03);
+}
+.cl-exam-qhead { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.cl-exam-num {
+  font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  color: hsl(var(--accent));
+}
+.cl-exam-topic {
+  font-size: .68rem; font-weight: 600; letter-spacing: .02em;
+  color: hsl(var(--ink-faint)); padding: .12rem .5rem; border-radius: var(--r-pill);
+  background: hsl(var(--ink) / .06); border: 1px solid var(--glass-border);
+}
+.cl-exam-prompt {
+  font-size: .96rem; font-weight: 600; line-height: 1.45; color: hsl(var(--ink));
+  overflow-wrap: anywhere;
+}
+.cl-exam-opts { display: flex; flex-direction: column; gap: .45rem; }
+.cl-exam-opt {
+  display: flex; align-items: center; gap: .6rem; width: 100%; min-height: 40px;
+  text-align: left; font: inherit; font-size: .92rem; color: hsl(var(--ink));
+  padding: .55rem .8rem; border-radius: 11px; cursor: pointer;
+  border: 1px solid var(--glass-border); background: hsl(var(--ink) / .04);
+  transition: border-color .15s, background .15s, transform .12s var(--ease-out);
+  overflow-wrap: anywhere;
+}
+.cl-exam-opt > span { flex: 1; min-width: 0; }
+.cl-exam-opt:hover:not(:disabled) { border-color: hsl(var(--accent) / .65); background: hsl(var(--accent) / .1); }
+.cl-exam-opt:active:not(:disabled) { transform: scale(.985); }
+.cl-exam-opt.is-chosen { border-color: hsl(var(--accent) / .8); background: hsl(var(--accent) / .14); }
+.cl-exam-opt:disabled { cursor: default; }
+.cl-exam-opt.is-correct {
+  border-color: hsl(var(--c-plan) / .7); background: hsl(var(--c-plan) / .18); color: hsl(var(--ink));
+}
+.cl-exam-opt.is-wrong {
+  border-color: hsl(0 72% 58% / .7); background: hsl(0 72% 58% / .16); color: hsl(var(--ink));
+}
+.cl-exam-short {
+  width: 100%; min-height: 76px; resize: vertical; font: inherit; font-size: .92rem;
+  line-height: 1.5; color: hsl(var(--ink)); padding: .6rem .75rem; border-radius: 11px;
+  border: 1px solid var(--glass-border); background: hsl(var(--ink) / .04);
+  transition: border-color .15s, background .15s;
+}
+.cl-exam-short:focus { outline: none; border-color: hsl(var(--accent) / .7); background: hsl(var(--accent) / .07); }
+.cl-exam-short:disabled { cursor: default; opacity: .85; }
+/* per-question feedback shown after grading */
+.cl-exam-fb {
+  font-size: .85rem; line-height: 1.5; color: hsl(var(--ink-soft));
+  padding: .55rem .75rem; border-radius: 10px;
+  background: hsl(var(--accent) / .08); border-left: 3px solid hsl(var(--accent) / .6);
+}
+.cl-exam-fb > *:first-child { margin-top: 0; }
+.cl-exam-fb > *:last-child { margin-bottom: 0; }
+.cl-exam-fb b { color: hsl(var(--ink)); }
+.cl-exam-err {
+  font-size: .88rem; line-height: 1.5; color: hsl(0 72% 58%);
+  padding: .6rem .8rem; border-radius: 10px;
+  background: hsl(0 72% 58% / .12); border: 1px solid hsl(0 72% 58% / .4);
+}
+.cl-exam-submit {
+  align-self: flex-end; min-height: 42px; padding: .55rem 1.4rem; border: 0; cursor: pointer;
+  font: inherit; font-weight: 600; font-size: .92rem; color: #fff; border-radius: var(--r-pill);
+  background: linear-gradient(150deg, hsl(var(--accent) / .98), hsl(var(--accent) / .62));
+  box-shadow: 0 6px 16px hsl(var(--accent) / .35); transition: transform .15s var(--ease-out), box-shadow .15s;
+}
+.cl-exam-submit:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 22px hsl(var(--accent) / .45); }
+.cl-exam-submit:active:not(:disabled) { transform: scale(.97); }
+.cl-exam-submit:disabled { opacity: .55; cursor: default; }
+.cl-exam.is-graded .cl-exam-opt { cursor: default; }
+.cl-exam-report { display: flex; flex-direction: column; gap: .9rem; animation: rise .3s var(--ease-spring) both; }
+.cl-exam-score {
+  text-align: center; font-family: var(--font-display); font-weight: 700; letter-spacing: -.01em;
+  font-size: 1.3rem; color: hsl(var(--ink)); padding: .5rem .6rem; border-radius: 12px;
+  background: hsl(var(--accent) / .1); border: 1px solid hsl(var(--accent) / .3);
+}
+.cl-exam-topics {
+  display: flex; flex-direction: column; gap: .4rem;
+  padding: .75rem .85rem; border-radius: 11px;
+  border: 1px solid var(--glass-border); background: hsl(var(--ink) / .03);
+}
+.cl-exam-topics > strong { font-size: .8rem; color: hsl(var(--ink)); }
+.cl-exam-topic-row {
+  display: flex; align-items: center; justify-content: space-between; gap: .6rem;
+  font-size: .86rem; color: hsl(var(--ink-soft));
+}
+.cl-exam-topic-row b { color: hsl(var(--ink)); }
+
 /* — footer (Saved in <tool> · Open) — */
 .cl-foot {
   display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
@@ -1318,10 +1424,46 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
 }
 .cl-foot button:hover, .cl-foot a:hover { opacity: .75; text-decoration: underline; }
 
+/* ---------------------------------------------------------------------------
+   Inline live-widget responsiveness (phones / tablets).
+   Every .cl-* widget must be full-width with no horizontal overflow; tap
+   targets >=44px on options, >=40px on buttons; long text wraps; doc tables
+   scroll instead of blowing out the bubble. Desktop layout stays untouched.
+--------------------------------------------------------------------------- */
 @media (max-width: 560px) {
   .chat-live { max-width: 100%; width: 100%; padding: .9rem; }
+  .chat-live, .cl-quiz, .cl-deck, .cl-nav, .cl-pred, .cl-exam, .cl-exam-body,
+  .cl-doc, .cl-mm { max-width: 100%; }
+
+  /* quiz + exam options: full-width, comfortable tap height, wrap long text */
+  .cl-opt, .cl-exam-opt {
+    width: 100%; min-height: 44px; font-size: .92rem;
+    align-items: flex-start; overflow-wrap: anywhere;
+  }
+  .cl-opt > span, .cl-exam-opt > span { flex: 1; min-width: 0; }
+
+  /* primary / nav buttons keep a >=40px tap target */
+  .cl-next, .cl-exam-submit { min-height: 44px; }
+  .cl-navbtn { min-height: 44px; min-width: 44px; }
+  .cl-nav { flex-wrap: wrap; }
+
+  /* flashcard fits the narrow bubble */
+  .cl-card, .cl-face { min-height: 132px; }
+  .cl-face { padding: 1rem .9rem; font-size: .96rem; }
+
+  /* mind map: rows wrap, indentation trimmed, toggle is a real tap target */
+  .cl-mm-row { flex-wrap: wrap; padding-left: calc(var(--mm-depth, 0) * .7rem); }
+  .cl-mm-label-line { flex: 1; min-width: 0; }
+  .cl-mm-label { overflow-wrap: anywhere; }
+  .cl-mm-kids { margin-left: .55rem; padding-left: .45rem; }
+  .cl-mm-toggle { width: 40px; height: 40px; min-width: 40px; font-size: .82rem; }
+
+  /* footer wraps; its action keeps a tappable size */
+  .cl-foot { gap: .5rem .9rem; }
+  .cl-foot button, .cl-foot a { min-height: 40px; display: inline-flex; align-items: center; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .chat-live, .cl-expl { animation: none; }
-  .cl-next:hover, .cl-navbtn:active, .cl-opt:active, .cl-mm-toggle { transform: none; }
+  .chat-live, .cl-expl, .cl-exam-report { animation: none; }
+  .cl-next:hover, .cl-navbtn:active, .cl-opt:active, .cl-mm-toggle,
+  .cl-exam-submit:hover, .cl-exam-opt:active { transform: none; }
 }

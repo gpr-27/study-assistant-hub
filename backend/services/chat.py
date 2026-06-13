@@ -233,6 +233,22 @@ def _autoname_chat(owner: str, chat_id: str, question: str, answer: str, llm: "C
         pass
 
 
+def _recent_artifact_block(session: dict) -> str:
+    """Labelled context for an artifact the student just created, or "".
+
+    Lets a normal (non-tool, non-smalltalk) follow-up turn discuss what was just
+    built — "explain question 3", "why is C correct", "summarise this cheat
+    sheet". Stored by chat_tools.run_tool, already clipped to a bounded size.
+    """
+    art = session.get("recent_artifact")
+    if not isinstance(art, dict) or not art.get("text"):
+        return ""
+    return (
+        f"The student just created {art.get('title') or 'a study artifact'}. "
+        f"Here it is:\n{art['text']}"
+    )
+
+
 def _history_messages(history: list[tuple[str, str]]) -> list:
     """Render the last few turns as alternating Human/AI messages."""
     messages: list = []
@@ -285,15 +301,22 @@ def ask(session_id: str, message: str) -> dict:
                 HumanMessage(content=message)]
         answer = str(session["llm"].invoke(msgs).content)
     elif retriever is not None and config.AGENTIC_RAG:
-        # Agentic RAG: an LLM-driven rewrite→retrieve→grade→correct loop.
+        # Agentic RAG: an LLM-driven rewrite→retrieve→grade→correct loop. If the
+        # student just built an artifact, fold it into the persona so this turn
+        # can discuss it without changing the agentic loop's signature.
+        artifact_block = _recent_artifact_block(session)
+        agentic_persona = f"{persona}\n\n{artifact_block}" if artifact_block else persona
         answer, steps, sources = agentic_rag.answer(
-            retriever, session["llm"], message, _history_messages(history), persona
+            retriever, session["llm"], message, _history_messages(history), agentic_persona
         )
         answer = str(answer)
     elif retriever is not None:
         # Classic single-shot RAG (AGENTIC_RAG disabled).
         docs = retriever.invoke(message)
         context = "\n\n".join(doc.page_content for doc in docs)
+        artifact_block = _recent_artifact_block(session)
+        if artifact_block:
+            context = f"{artifact_block}\n\n{context}"
         steps = [
             {
                 "kind": "retrieve",
@@ -317,6 +340,9 @@ def ask(session_id: str, message: str) -> dict:
         answer = str(session["llm"].invoke(msgs).content)
     else:
         _persona = _topic_persona(session["topic"]) if session.get("topic") else _GENERIC_PERSONA
+        artifact_block = _recent_artifact_block(session)
+        if artifact_block:
+            _persona = f"{_persona}\n\n{artifact_block}"
         steps = [{
             "kind": "generate",
             "title": "Answered from topic knowledge (no document retrieval)",

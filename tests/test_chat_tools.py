@@ -72,6 +72,31 @@ class GateTests(unittest.TestCase):
             chat_tools.detect_intent(llm, phrase)
             self.assertEqual(len(llm.calls), 1, f"gate should pass for: {phrase!r}")
 
+    def test_mock_exam_phrasings_pass_the_regex_gate(self):
+        """The gate must let mock-exam creation phrasings reach the LLM."""
+        for phrase in (
+            "start a mock exam",
+            "create a mock exam",
+            "give me a mock exam",
+            "let's take an exam",
+            "generate a mock exam for this subject",
+        ):
+            llm = FakeLLM(['{"is_request": true, "tool": "exam", "topic": null, "count": null, "days": null}'])
+            chat_tools.detect_intent(llm, phrase)
+            self.assertEqual(len(llm.calls), 1, f"gate should pass for: {phrase!r}")
+
+    def test_exam_request_detected(self):
+        llm = FakeLLM(['{"is_request": true, "tool": "exam", "topic": null, "count": null, "days": null}'])
+        intent = chat_tools.detect_intent(llm, "start a mock exam")
+        self.assertEqual(intent["tool"], "exam")
+        self.assertEqual(len(llm.calls), 1)
+
+    def test_plain_question_about_exam_skips_the_llm(self):
+        """A plain question about exams must not trip the gate."""
+        llm = FakeLLM([])
+        self.assertIsNone(chat_tools.detect_intent(llm, "what is a mock exam?"))
+        self.assertEqual(llm.calls, [])
+
     def test_plain_questions_about_new_tools_skip_the_llm(self):
         """Plain questions (no creation verb) must not trip the gate or cost an LLM call."""
         llm = FakeLLM([])
@@ -196,6 +221,56 @@ class RunToolTests(unittest.TestCase):
         self.assertIsNone(out["artifact"])
         self.assertIn("papers", out["answer"])
 
+    def test_exam_from_subject_returns_artifact_without_saving(self):
+        """A mock exam is generated from the session subject and is NOT saved here
+        (it's persisted as a graded attempt only after the user submits)."""
+        questions = [
+            {"id": "m1", "type": "mcq", "question": "Q1", "options": ["a", "b", "c", "d"],
+             "correct": "A", "explanation": "e", "topic": "t"},
+            {"id": "s1", "type": "short", "question": "Explain X"},
+        ]
+        with mock.patch.object(chat_tools, "_subject_content", return_value=("CONTENT", ["a.pdf"])) as content, \
+             mock.patch.object(chat_tools.exam_service, "generate_exam",
+                               return_value={"questions": questions}) as mk, \
+             mock.patch.object(chat_tools.db, "save", return_value="x1") as save:
+            out = chat_tools.run_tool(_subject_session(), {"tool": "exam", "topic": None, "count": None, "days": None}, "m")
+        content.assert_called_once_with("DBMS", "u1")
+        mk.assert_called_once_with("CONTENT", 6, 2)  # default 6 mcq + 2 short
+        save.assert_not_called()  # NOT saved until the graded attempt is submitted
+        art = out["artifact"]
+        self.assertEqual(art["kind"], "exams")
+        self.assertEqual(art["route"], "#exam")
+        self.assertEqual(art["tool"], "Mock Exam")
+        self.assertIsNone(art["id"])
+        self.assertEqual(art["title"], "Mock Exam · DBMS")
+        self.assertEqual(art["data"]["questions"], questions)
+        self.assertEqual(art["data"]["subject"], "DBMS")
+        self.assertEqual(art["data"]["num_mcq"], 6)
+        self.assertEqual(art["data"]["num_short"], 2)
+
+    def test_exam_uses_intent_count_capped_for_mcq(self):
+        questions = [{"id": "m1", "type": "mcq", "question": "Q", "options": ["a", "b", "c", "d"], "correct": "A"}]
+        with mock.patch.object(chat_tools, "_subject_content", return_value=("CONTENT", ["a.pdf"])), \
+             mock.patch.object(chat_tools.exam_service, "generate_exam",
+                               return_value={"questions": questions}) as mk, \
+             mock.patch.object(chat_tools.db, "save") as save:
+            chat_tools.run_tool(_subject_session(), {"tool": "exam", "topic": None, "count": 50, "days": None}, "m")
+        mk.assert_called_once_with("CONTENT", 10, 2)  # count capped at ~10
+        save.assert_not_called()
+
+    def test_exam_in_topic_session_gives_readable_failure(self):
+        out = chat_tools.run_tool(_topic_session(), {"tool": "exam", "topic": None, "count": None, "days": None}, "m")
+        self.assertIsNone(out["artifact"])
+        self.assertIn("documents", out["answer"])
+
+    def test_exam_with_no_subject_gives_readable_failure(self):
+        out = chat_tools.run_tool(
+            _subject_session(subject=None),
+            {"tool": "exam", "topic": None, "count": None, "days": None}, "m",
+        )
+        self.assertIsNone(out["artifact"])
+        self.assertIn("documents", out["answer"])
+
     def test_cheatsheet_tolerates_persistence_off(self):
         """db.save returns None when persistence is off — the artifact id is None, no crash."""
         with mock.patch.object(chat_tools, "_subject_content", return_value=("CONTENT", ["a.pdf"])), \
@@ -204,6 +279,69 @@ class RunToolTests(unittest.TestCase):
             out = chat_tools.run_tool(_subject_session(), {"tool": "cheatsheet", "topic": None, "count": None, "days": None}, "m")
         self.assertIsNone(out["artifact"]["id"])
         self.assertEqual(out["artifact"]["kind"], "cheatsheets")
+
+
+class RecentArtifactTests(unittest.TestCase):
+    """After a successful create, run_tool stores a compact text rendition on the
+    session so later (non-tool) chat turns can DISCUSS the artifact."""
+
+    def test_quiz_records_recent_artifact_with_question_and_answer(self):
+        qs = [{
+            "question": "What does a B-tree index optimize?",
+            "options": {"A": "writes", "B": "range scans", "C": "joins", "D": "locks"},
+            "correct": "B", "explanation": "B-trees keep keys sorted for range lookups.",
+        }]
+        session = _subject_session()
+        with mock.patch.object(chat_tools, "_subject_content", return_value=("CONTENT", ["a.pdf"])), \
+             mock.patch.object(chat_tools.quiz_service, "make_quiz", return_value={"questions": qs}), \
+             mock.patch.object(chat_tools.db, "save", return_value="id1"):
+            chat_tools.run_tool(session, {"tool": "quiz", "topic": None, "count": 5, "days": None}, "m")
+        art = session["recent_artifact"]
+        self.assertEqual(art["title"], "Quiz · DBMS")
+        self.assertEqual(art["kind"], "quizzes")
+        self.assertIn("What does a B-tree index optimize?", art["text"])
+        self.assertIn("Correct answer: B. range scans", art["text"])
+        self.assertIn("B-trees keep keys sorted", art["text"])  # explanation captured
+
+    def test_cheatsheet_records_markdown_rendition(self):
+        session = _subject_session()
+        with mock.patch.object(chat_tools, "_subject_content", return_value=("CONTENT", ["a.pdf"])), \
+             mock.patch.object(chat_tools.cheatsheet_service, "make_cheatsheet",
+                               return_value="# Normalization\n- 1NF\n- 2NF\n- 3NF"), \
+             mock.patch.object(chat_tools.db, "save", return_value="cs1"):
+            chat_tools.run_tool(session, {"tool": "cheatsheet", "topic": None, "count": None, "days": None}, "m")
+        art = session["recent_artifact"]
+        self.assertEqual(art["kind"], "cheatsheets")
+        self.assertIn("# Normalization", art["text"])
+        self.assertIn("- 2NF", art["text"])
+
+    def test_exam_records_recent_artifact_with_correct_answers(self):
+        questions = [
+            {"id": "m1", "type": "mcq", "question": "Which is ACID's I?",
+             "options": ["Atomicity", "Isolation", "Indexing"], "answer_index": 1,
+             "explanation": "Isolation is the I in ACID."},
+            {"id": "s1", "type": "short", "question": "Define a deadlock.",
+             "expected_points": ["circular wait", "resource hold"]},
+        ]
+        session = _subject_session()
+        with mock.patch.object(chat_tools, "_subject_content", return_value=("CONTENT", ["a.pdf"])), \
+             mock.patch.object(chat_tools.exam_service, "generate_exam", return_value={"questions": questions}), \
+             mock.patch.object(chat_tools.db, "save", return_value=None):
+            chat_tools.run_tool(session, {"tool": "exam", "topic": None, "count": None, "days": None}, "m")
+        art = session["recent_artifact"]
+        self.assertEqual(art["title"], "Mock Exam · DBMS")
+        self.assertEqual(art["kind"], "exams")
+        self.assertIn("Which is ACID's I?", art["text"])
+        self.assertIn("Correct answer: B. Isolation", art["text"])
+        self.assertIn("Define a deadlock.", art["text"])
+        self.assertIn("circular wait", art["text"])
+
+    def test_failed_create_leaves_no_recent_artifact(self):
+        """A readable failure (no artifact) must not stamp a recent_artifact."""
+        session = _topic_session()
+        out = chat_tools.run_tool(session, {"tool": "summary", "topic": None, "count": None, "days": None}, "m")
+        self.assertIsNone(out["artifact"])
+        self.assertNotIn("recent_artifact", session)
 
 
 class InlineDataTests(unittest.TestCase):

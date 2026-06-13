@@ -122,6 +122,140 @@
     return true;
   }
 
+  /* ---------------- mock exams: take → submit → graded report ---------------- */
+  function renderExam(container, data) {
+    const raw = (data && data.questions) || [];
+    if (!nonEmptyArr(raw)) return false;
+
+    // Assign stable ids (q1, q2, …) in order — matches the grader's fallback so
+    // answers and questions line up. We send these ids in the grade request.
+    const questions = raw.map((q, i) => {
+      const item = isObj(q) ? q : {};
+      const id = (typeof item.id === "string" && item.id.trim()) ? item.id.trim() : `q${i + 1}`;
+      return Object.assign({}, item, { id: id });
+    });
+    const subject = str(data.subject);
+
+    const answers = {};          // id -> chosen index (mcq) | text (short)
+    const wrap = el(`<div class="cl-exam"></div>`);
+    const body = el(`<div class="cl-exam-body"></div>`);
+    wrap.append(body);
+    container.append(wrap);
+
+    questions.forEach((q, i) => {
+      const type = str(q.type) || (nonEmptyArr(q.options) ? "mcq" : "short");
+      const qEl = el(`<div class="cl-exam-q" data-qid="${esc(q.id)}"></div>`);
+      const topic = str(q.topic);
+      const head = el(`<div class="cl-exam-qhead"></div>`);
+      head.append(el(`<span class="cl-exam-num">Q${i + 1}</span>`));
+      if (topic) head.append(el(`<span class="cl-exam-topic">${esc(topic)}</span>`));
+      qEl.append(head);
+      qEl.append(el(`<div class="cl-exam-prompt">${esc(str(q.question))}</div>`));
+
+      if (type === "mcq") {
+        const options = Array.isArray(q.options) ? q.options : [];
+        const opts = el(`<div class="cl-exam-opts"></div>`);
+        options.forEach((opt, oi) => {
+          const b = el(`<button class="cl-exam-opt" type="button"><b>${esc(KEYS[oi] || String(oi + 1))}</b> <span>${esc(str(opt))}</span></button>`);
+          b.addEventListener("click", () => {
+            if (wrap.classList.contains("is-graded")) return;
+            answers[q.id] = oi;
+            opts.querySelectorAll(".cl-exam-opt").forEach((o) => o.classList.remove("is-chosen"));
+            b.classList.add("is-chosen");
+          });
+          opts.append(b);
+        });
+        qEl.append(opts);
+      } else {
+        const ta = el(`<textarea class="cl-exam-short" rows="3" placeholder="Your answer…"></textarea>`);
+        ta.addEventListener("input", () => { answers[q.id] = ta.value; });
+        qEl.append(ta);
+      }
+      body.append(qEl);
+    });
+
+    const submit = el(`<button class="cl-exam-submit" type="button">Submit exam</button>`);
+    submit.addEventListener("click", submitExam);
+    wrap.append(submit);
+
+    async function submitExam() {
+      if (wrap.classList.contains("is-graded")) return;
+      submit.disabled = true;
+      submit.textContent = "Grading…";
+      try {
+        const report = await window.api.post("/exam/grade", {
+          subject: subject,
+          questions: questions,
+          answers: answers,
+          duration_seconds: null,
+          model: null,
+        });
+        renderReport(report);
+      } catch (err) {
+        submit.disabled = false;
+        submit.textContent = "Submit exam";
+        body.after(el(`<div class="cl-exam-err">Could not grade the exam — ${esc((err && err.message) || "please try again")}.</div>`));
+      }
+    }
+
+    function renderReport(report) {
+      if (!isObj(report)) return;
+      wrap.classList.add("is-graded");
+      submit.remove();
+
+      // Mark each question's options correct/wrong; disable inputs.
+      const byId = {};
+      (Array.isArray(report.per_question) ? report.per_question : []).forEach((r) => {
+        if (isObj(r) && r.id != null) byId[String(r.id)] = r;
+      });
+      questions.forEach((q) => {
+        const qEl = body.querySelector(`.cl-exam-q[data-qid="${cssId(q.id)}"]`);
+        if (!qEl) return;
+        const r = byId[String(q.id)] || {};
+        const optBtns = qEl.querySelectorAll(".cl-exam-opt");
+        optBtns.forEach((b, oi) => {
+          b.disabled = true;
+          if (typeof r.answer_index === "number" && oi === r.answer_index) b.classList.add("is-correct");
+          else if (typeof r.user_answer === "number" && oi === r.user_answer) b.classList.add("is-wrong");
+        });
+        const ta = qEl.querySelector(".cl-exam-short");
+        if (ta) ta.disabled = true;
+        const fb = str(r.feedback);
+        if (fb) {
+          const d = el(`<div class="cl-exam-fb"></div>`);
+          d.append(md(fb));
+          qEl.append(d);
+        }
+      });
+
+      const total = Number(report.total_score) || 0;
+      const max = Number(report.max_score) || 0;
+      const pct = max ? Math.round((total / max) * 100) : 0;
+      const rep = el(`<div class="cl-exam-report"></div>`);
+      rep.append(el(`<div class="cl-exam-score">You scored ${total} of ${max} (${pct}%).</div>`));
+
+      const breakdown = Array.isArray(report.topic_breakdown) ? report.topic_breakdown : [];
+      if (breakdown.length) {
+        const tb = el(`<div class="cl-exam-topics"></div>`);
+        tb.append(el(`<strong>By topic</strong>`));
+        breakdown.forEach((t) => {
+          if (!isObj(t)) return;
+          const tn = str(t.topic) || "General";
+          const e = Number(t.earned) || 0;
+          const p = Number(t.possible) || 0;
+          tb.append(el(`<div class="cl-exam-topic-row"><span>${esc(tn)}</span><span>${e} / ${p}</span></div>`));
+        });
+        rep.append(tb);
+      }
+      wrap.append(rep);
+    }
+
+    return true;
+  }
+
+  // Escape an id for use inside a CSS attribute selector value.
+  function cssId(id) { return String(id).replace(/["\\]/g, "\\$&"); }
+
   /* ---------------- flashcards: flip deck ---------------- */
   function renderFlashcards(container, data) {
     const cards = (data && data.cards) || [];
@@ -151,6 +285,7 @@
       face.append(el(`<div>${esc(text)}</div>`));
       face.append(el(`<span class="cl-flip">${flipped ? "back · click to flip" : "front · click to flip"}</span>`));
       card.append(face);
+      card.classList.toggle("cl-flip", flipped);
       pos.textContent = `${index + 1} / ${total}`;
       prev.disabled = index === 0;
       next.disabled = index >= total - 1;
@@ -287,6 +422,7 @@
     try {
       switch (artifact.kind) {
         case "quizzes":     return renderQuiz(container, data);
+        case "exams":       return renderExam(container, data);
         case "flashcards":  return renderFlashcards(container, data);
         case "cheatsheets": return renderDoc(container, data.markdown);
         case "plans":       return renderDoc(container, data.plan);

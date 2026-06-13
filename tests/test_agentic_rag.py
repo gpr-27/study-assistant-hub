@@ -223,6 +223,61 @@ class ChatServiceWiringTests(unittest.TestCase):
         self.assertEqual(retriever.queries, [])  # no retrieval for small talk
 
 
+class RecentArtifactContextTests(unittest.TestCase):
+    """A follow-up (non-tool, non-smalltalk) turn must fold a just-created
+    artifact's text into the model context so the agent can discuss it."""
+
+    def _session(self, retriever, **over):
+        from backend.services import chat
+        base = {
+            "mode": "subject", "retriever": retriever, "llm": object(), "history": [],
+            "label": "L", "topic": None, "subject": "Bio", "owner": "local", "chat_id": None,
+            "autonomous": True,
+        }
+        base.update(over)
+        return chat, chat._register(base)
+
+    def test_agentic_turn_injects_artifact_text_into_persona(self):
+        from backend.services import chat, chat_tools
+        retriever = FakeRetriever({})
+        chat_mod, sid = self._session(retriever)
+        chat_mod._sessions[sid]["recent_artifact"] = {
+            "title": "Quiz · Bio", "kind": "quizzes",
+            "text": "Q3. What is mitosis?\n  A. cell division\nCorrect answer: A. cell division",
+        }
+        captured = {}
+
+        def fake_answer(retr, llm, msg, hist, persona, *a, **k):
+            captured["persona"] = persona
+            return ("ANSWER", [], [])
+
+        with mock.patch.object(chat_mod.config, "AGENTIC_RAG", True), \
+             mock.patch.object(chat_mod, "require_groq_key", lambda: None), \
+             mock.patch.object(chat_tools, "detect_intent", return_value=None), \
+             mock.patch.object(chat_mod.agentic_rag, "answer", side_effect=fake_answer):
+            out = chat_mod.ask(sid, "explain question 3")
+        self.assertEqual(out["answer"], "ANSWER")
+        self.assertIn("The student just created Quiz · Bio", captured["persona"])
+        self.assertIn("What is mitosis?", captured["persona"])
+        self.assertIn("Correct answer: A. cell division", captured["persona"])
+
+    def test_topic_turn_injects_artifact_text_into_system_message(self):
+        from backend.services import chat, chat_tools
+        chat_mod, sid = self._session(None, mode="topic", subject=None, topic="Recursion")
+        chat_mod._sessions[sid]["llm"] = FakeLLM(["ANSWER ABOUT THE CARDS"])
+        chat_mod._sessions[sid]["recent_artifact"] = {
+            "title": "Flashcards · Recursion", "kind": "flashcards",
+            "text": "Front: base case\nBack: stops the recursion",
+        }
+        with mock.patch.object(chat_mod, "require_groq_key", lambda: None), \
+             mock.patch.object(chat_tools, "detect_intent", return_value=None):
+            out = chat_mod.ask(sid, "summarise what these cards teach me")
+        self.assertEqual(out["answer"], "ANSWER ABOUT THE CARDS")
+        system_msg = chat_mod._sessions[sid]["llm"].calls[-1][0].content
+        self.assertIn("The student just created Flashcards · Recursion", system_msg)
+        self.assertIn("stops the recursion", system_msg)
+
+
 class HttpEndToEndTests(unittest.TestCase):
     """Full path: POST /api/chat/start then /api/chat/message, running the REAL agentic
     loop end-to-end with only the LLM and retriever mocked (no network/Groq)."""

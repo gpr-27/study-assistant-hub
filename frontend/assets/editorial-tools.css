@@ -687,6 +687,7 @@
 }
 [data-skin="editorial"] .cl-card .cl-face::before { color: hsl(var(--ink-faint)); }
 [data-skin="editorial"] .cl-card.cl-flip .cl-face::before { color: hsl(var(--ed-coral-h)); }
+[data-skin="editorial"] .cl-flip { color: hsl(var(--ink-faint)); }
 [data-skin="editorial"] .cl-navbtn {
   border: 1px solid var(--ed-hairline);
   background: var(--ed-surface-soft);
@@ -709,7 +710,80 @@
 }
 [data-skin="editorial"] .cl-mm-toggle:hover { background: hsl(var(--ed-coral-h) / .2); }
 [data-skin="editorial"] .cl-mm-label { color: hsl(var(--ink)); }
-[data-skin="editorial"] .cl-mm .cl-mm { border-left: 1px solid hsl(var(--ed-coral-h) / .25); }
+[data-skin="editorial"] .cl-mm-kids { border-left: 1px solid hsl(var(--ed-coral-h) / .25); }
+
+/* — mock exam — classes match artifact-inline.js emitted names exactly:
+   cl-exam-num, cl-exam-prompt, cl-exam-topic (chip), cl-exam-opt.is-chosen,
+   cl-exam-fb, cl-exam-err, cl-exam-score, cl-exam-topics/-topic-row. */
+[data-skin="editorial"] .cl-exam-q,
+[data-skin="editorial"] .cl-exam-topics {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-soft);
+}
+[data-skin="editorial"] .cl-exam-num { color: hsl(var(--ed-coral-h)); }
+[data-skin="editorial"] .cl-exam-prompt { color: hsl(var(--ink)); }
+[data-skin="editorial"] .cl-exam-topic {
+  color: hsl(var(--ink-faint));
+  background: var(--ed-surface-card);
+  border: 1px solid var(--ed-hairline);
+}
+[data-skin="editorial"] .cl-exam-opt {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-card);
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .cl-exam-opt:hover:not(:disabled) {
+  border-color: hsl(var(--ed-coral-h) / .6);
+  background: hsl(var(--ed-coral-h) / .08);
+}
+[data-skin="editorial"] .cl-exam-opt.is-chosen {
+  border-color: hsl(var(--ed-coral-h) / .7);
+  background: hsl(var(--ed-coral-h) / .14);
+  color: hsl(var(--ed-coral-a-h));
+}
+[data-skin="editorial"] .cl-exam-opt.is-correct {
+  border-color: hsl(var(--ed-success-h) / .7);
+  background: hsl(var(--ed-success-h) / .16);
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .cl-exam-opt.is-wrong {
+  border-color: hsl(var(--ed-error-h) / .7);
+  background: hsl(var(--ed-error-h) / .14);
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .cl-exam-short {
+  border: 1px solid var(--ed-hairline);
+  background: var(--ed-surface-card);
+  color: hsl(var(--ink));
+}
+[data-skin="editorial"] .cl-exam-short:focus {
+  border-color: hsl(var(--ed-coral-h) / .7);
+  background: hsl(var(--ed-coral-h) / .06);
+}
+[data-skin="editorial"] .cl-exam-fb {
+  color: hsl(var(--ink-soft));
+  background: var(--ed-surface-soft);
+  border-left: 3px solid hsl(var(--ed-coral-h) / .6);
+}
+[data-skin="editorial"] .cl-exam-fb b { color: hsl(var(--ink)); }
+[data-skin="editorial"] .cl-exam-err {
+  color: hsl(var(--ed-error-h));
+  background: hsl(var(--ed-error-h) / .12);
+  border: 1px solid hsl(var(--ed-error-h) / .4);
+}
+[data-skin="editorial"] .cl-exam-submit {
+  background: var(--ed-coral);
+  box-shadow: var(--ed-shadow);
+}
+[data-skin="editorial"] .cl-exam-submit:hover:not(:disabled) { background: var(--ed-coral-active); box-shadow: var(--ed-shadow); }
+[data-skin="editorial"] .cl-exam-score {
+  color: hsl(var(--ink));
+  background: hsl(var(--ed-coral-h) / .1);
+  border: 1px solid hsl(var(--ed-coral-h) / .3);
+}
+[data-skin="editorial"] .cl-exam-topics > strong { color: hsl(var(--ink)); }
+[data-skin="editorial"] .cl-exam-topic-row { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .cl-exam-topic-row b { color: hsl(var(--ink)); }
 
 /* — predictions — */
 [data-skin="editorial"] .cl-pred-item {
