@@ -598,7 +598,7 @@
   window.Views = window.Views || {};
   window.Views.chat = {
     accent: "chat",
-    title: "Chat Assistant",
+    title: "Apex Agent",
 
     async mount(root) {
       root.append(el(`
