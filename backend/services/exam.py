@@ -66,7 +66,15 @@ def _chat_json(prompt: str, *, system: str, model: str | None, max_tokens: int) 
         data = json.loads(payload or "{}")
     except json.JSONDecodeError as exc:
         raise ExamError(f"The model returned invalid JSON: {exc}") from exc
-    except APIError:
+    except APIError as exc:
+        # Groq JSON mode can 400 ("failed to generate JSON" / json_validate_failed) when the model
+        # overflows max_tokens or emits non-JSON — a CONTENT failure (retry-able), NOT a rate-limit/
+        # auth/transport error. Convert it to a clean ExamError so the chat shows a friendly "try
+        # again" instead of dumping the raw provider error (incl. the giant failed_generation).
+        _code = (getattr(exc, "code", "") or "").lower()
+        _emsg = str(getattr(exc, "message", "") or exc).lower()
+        if _code == "json_validate_failed" or "failed to generate json" in _emsg or "failed_generation" in _emsg:
+            raise ExamError("The model had trouble formatting the exam — please try again.") from exc
         raise  # rate-limit/auth/transport errors are formatted by the global handlers
     except Exception as exc:  # noqa: BLE001 — wrap any other SDK/transport failure
         raise ExamError(f"The exam call failed: {exc}") from exc
@@ -165,17 +173,20 @@ def validate_questions(items: object) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Generation.
 # ---------------------------------------------------------------------------
-def _build_exam_prompt(content: str, num_mcq: int, num_short: int) -> str:
+def _build_exam_prompt(content: str, num_mcq: int, num_short: int, difficulty: str = "medium") -> str:
     return (
-        f"Create a mock exam from the study content below: exactly {num_mcq} multiple "
-        f"choice questions and exactly {num_short} short-answer questions.\n\n"
+        f"Create a mock exam from the study content below at a {difficulty} difficulty level: "
+        f"exactly {num_mcq} multiple choice questions and exactly {num_short} short-answer questions.\n\n"
         "Content:\n"
         f"{content}\n\n"
         "Rules:\n"
+        f"- Produce EXACTLY {num_mcq} MCQ and EXACTLY {num_short} short-answer questions — no more, no fewer.\n"
+        f"- Calibrate the questions to a {difficulty} difficulty level.\n"
         "- Questions must test understanding of the content, not rote memorisation.\n"
         "- Tag every question with a short topic label drawn from the content.\n"
         "- Each MCQ has exactly 4 options and one correct option (answer_index 0-3).\n"
-        "- Each short-answer question lists 2-4 expected_points a good answer covers.\n\n"
+        "- Each short-answer question lists 2-4 expected_points a good answer covers.\n"
+        "- Output ONLY one minified JSON object — no markdown fences, no commentary, nothing after the final brace.\n\n"
         "Return ONLY a JSON object with this exact structure:\n"
         "{\n"
         '  "questions": [\n'
@@ -225,7 +236,7 @@ def _shape_exam_output(data: dict, mcq: int, short: int) -> dict:
 
 
 def generate_exam(content: str, num_mcq: int = DEFAULT_MCQ, num_short: int = DEFAULT_SHORT,
-                  model: str | None = None) -> dict:
+                  difficulty: str = "medium", model: str | None = None) -> dict:
     """Build the exam paper from document text in ONE bounded Groq call.
 
     Returns ``{"questions": [...]}`` with server-validated questions (each given
@@ -240,7 +251,7 @@ def generate_exam(content: str, num_mcq: int = DEFAULT_MCQ, num_short: int = DEF
         raise ExamError("An exam needs at least one question.")
     snippet = clip_to_tokens(content, MAX_CONTENT_TOKENS)
     data = _chat_json(
-        _build_exam_prompt(snippet, mcq, short),
+        _build_exam_prompt(snippet, mcq, short, difficulty),
         system="You are an examiner writing a fair mock exam from course material.",
         model=model_for("exam", model),
         max_tokens=_gen_output_tokens(mcq, short),

@@ -43,7 +43,7 @@ class GateTests(unittest.TestCase):
         intent = chat_tools.detect_intent(llm, "create a quiz with 8 questions on sorting algorithms")
         # detect_intent now returns a LIST of intents (one per requested tool); a legacy
         # single-"tool" reply is tolerated and normalized into a one-element list.
-        self.assertEqual(intent, [{"tool": "quiz", "topic": "sorting algorithms", "count": 8, "days": None}])
+        self.assertEqual(intent, [{"tool": "quiz", "topic": "sorting algorithms", "count": 8, "days": None, "difficulty": None}])
 
     def test_multiple_tools_detected_in_one_message(self):
         llm = FakeLLM(['{"is_request": true, "tools": ['
@@ -62,10 +62,25 @@ class GateTests(unittest.TestCase):
     def test_forced_intents_builds_single_tool_without_llm(self):
         """forced_intents (manual slash pick) skips the gate/LLM and forces the chosen tool."""
         self.assertEqual(chat_tools.forced_intents("quiz"),
-                         [{"tool": "quiz", "topic": None, "count": None, "days": None}])
+                         [{"tool": "quiz", "topic": None, "count": None, "days": None, "difficulty": None}])
         self.assertEqual(chat_tools.forced_intents("teachback")[0]["tool"], "teachback")
         self.assertIsNone(chat_tools.forced_intents("bogus"))
         self.assertIsNone(chat_tools.forced_intents(None))
+
+    def test_forced_intents_parses_count_difficulty_and_days_from_message(self):
+        """The slash path still reads explicit params out of the message (no LLM)."""
+        q = chat_tools.forced_intents("quiz", "start the quiz with 15 hard questions")[0]
+        self.assertEqual(q["count"], 15)
+        self.assertEqual(q["difficulty"], "hard")
+        f = chat_tools.forced_intents("flashcards", "give me 8 easy cards")[0]
+        self.assertEqual((f["count"], f["difficulty"]), (8, "easy"))
+        p = chat_tools.forced_intents("plan", "make a plan, exam in 10 days")[0]
+        self.assertEqual(p["days"], 10)
+
+    def test_detect_intent_extracts_difficulty(self):
+        llm = FakeLLM(['{"is_request": true, "tools": [{"tool": "quiz", "topic": null, "count": 10, "days": null, "difficulty": "hard"}]}'])
+        intent = chat_tools.detect_intent(llm, "make a hard quiz with 10 questions")
+        self.assertEqual((intent[0]["count"], intent[0]["difficulty"]), (10, "hard"))
 
     def test_malformed_llm_output_falls_through(self):
         llm = FakeLLM(["not json at all"])
@@ -306,7 +321,7 @@ class RunToolTests(unittest.TestCase):
              mock.patch.object(chat_tools.db, "save", return_value="x1") as save:
             out = chat_tools.run_tool(_subject_session(), {"tool": "exam", "topic": None, "count": None, "days": None}, "m")
         content.assert_called_once_with("DBMS", "u1")
-        mk.assert_called_once_with("CONTENT", 6, 2)  # default 6 mcq + 2 short
+        mk.assert_called_once_with("CONTENT", 6, 2, difficulty="medium")  # default 6 mcq + 2 short
         save.assert_not_called()  # NOT saved until the graded attempt is submitted
         art = out["artifact"]
         self.assertEqual(art["kind"], "exams")
@@ -326,7 +341,7 @@ class RunToolTests(unittest.TestCase):
                                return_value={"questions": questions}) as mk, \
              mock.patch.object(chat_tools.db, "save") as save:
             chat_tools.run_tool(_subject_session(), {"tool": "exam", "topic": None, "count": 50, "days": None}, "m")
-        mk.assert_called_once_with("CONTENT", 10, 2)  # count capped at ~10
+        mk.assert_called_once_with("CONTENT", 10, 2, difficulty="medium")  # count capped at ~10
         save.assert_not_called()
 
     def test_exam_in_topic_session_gives_readable_failure(self):

@@ -292,7 +292,7 @@ def ask(session_id: str, message: str, tool: str | None = None) -> dict:
     intents = None
     if tool:                                   # manual tool pick (slash) — force it, skip detection
         from backend.services import chat_tools
-        intents = chat_tools.forced_intents(tool)
+        intents = chat_tools.forced_intents(tool, message)
     elif session.get("autonomous"):
         from backend.services import chat_tools
         intents = chat_tools.detect_intent(session["llm"], message)
@@ -438,7 +438,7 @@ def ask_stream(session_id: str, message: str, tool: str | None = None):
     intents = None
     if tool:                                   # manual tool pick (slash) — force it, skip detection
         from backend.services import chat_tools
-        intents = chat_tools.forced_intents(tool)
+        intents = chat_tools.forced_intents(tool, message)
     elif session.get("autonomous"):
         from backend.services import chat_tools
         intents = chat_tools.detect_intent(session["llm"], message)

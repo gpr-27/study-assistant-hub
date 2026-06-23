@@ -138,6 +138,46 @@
 
     const answers = {};          // id -> chosen index (mcq) | text (short)
     const wrap = el(`<div class="cl-exam"></div>`);
+
+    // ── custom countdown timer (optional) — set minutes, Start, auto-submits at 0 ──
+    let timerId = null, startSecs = 0, remainSecs = 0;
+    const fmtClock = (s) => Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+    const stopTimer = () => { if (timerId) { clearInterval(timerId); timerId = null; } };
+    const defMin = Math.max(5, Math.min(120, questions.length || 10));
+    const timerBar = el(`<div class="cl-exam-timer"></div>`);
+    const tMin = el(`<input class="cl-exam-timer-min" type="number" min="1" max="180" value="${defMin}" aria-label="Timer minutes" />`);
+    const tBtn = el(`<button class="cl-exam-timer-btn" type="button">Start timer</button>`);
+    const tClock = el(`<span class="cl-exam-timer-clock"></span>`);
+    timerBar.append(
+      el(`<span class="cl-exam-timer-label">⏱ Timer</span>`), tMin,
+      el(`<span class="cl-exam-timer-unit">min</span>`), tBtn, tClock,
+    );
+    function tickTimer() {
+      if (!tClock.isConnected) { stopTimer(); return; }     // widget gone — stop ticking
+      remainSecs -= 1;
+      tClock.textContent = fmtClock(Math.max(0, remainSecs));
+      if (remainSecs <= 0) {
+        stopTimer();
+        tClock.classList.add("is-up"); tClock.textContent = "Time's up";
+        tMin.disabled = true; tBtn.disabled = true;
+        if (!wrap.classList.contains("is-graded")) submitExam();   // auto-submit when time runs out
+      }
+    }
+    tBtn.addEventListener("click", () => {
+      if (wrap.classList.contains("is-graded")) return;
+      if (timerId) {                                          // running → cancel/reset
+        stopTimer(); tBtn.textContent = "Start timer"; tMin.disabled = false;
+        tClock.textContent = ""; tClock.classList.remove("is-up"); startSecs = 0;
+        return;
+      }
+      const mins = Math.max(1, Math.min(180, parseInt(tMin.value, 10) || 10));
+      startSecs = remainSecs = mins * 60;
+      tClock.textContent = fmtClock(remainSecs);
+      tMin.disabled = true; tBtn.textContent = "Stop";
+      timerId = setInterval(tickTimer, 1000);
+    });
+    wrap.append(timerBar);
+
     const body = el(`<div class="cl-exam-body"></div>`);
     wrap.append(body);
     container.append(wrap);
@@ -180,6 +220,8 @@
 
     async function submitExam() {
       if (wrap.classList.contains("is-graded")) return;
+      stopTimer();
+      const elapsed = startSecs ? (startSecs - Math.max(0, remainSecs)) : null;   // seconds taken, if timer used
       submit.disabled = true;
       submit.textContent = "Grading…";
       try {
@@ -187,7 +229,7 @@
           subject: subject,
           questions: questions,
           answers: answers,
-          duration_seconds: null,
+          duration_seconds: elapsed,
           model: null,
         });
         renderReport(report);

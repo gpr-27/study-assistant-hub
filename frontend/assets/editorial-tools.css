@@ -713,7 +713,7 @@
 [data-skin="editorial"] .cl-face small { color: hsl(var(--ed-coral-h)); opacity: 1; }
 [data-skin="editorial"] .cl-card .cl-face::before { color: hsl(var(--ink-faint)); }
 [data-skin="editorial"] .cl-card.cl-flip .cl-face::before { color: hsl(var(--ed-coral-h)); }
-[data-skin="editorial"] .cl-flip { color: hsl(var(--ink-faint)); }
+[data-skin="editorial"] .cl-face .cl-flip { color: hsl(var(--ink-faint)); }
 [data-skin="editorial"] .cl-navbtn {
   border: 1px solid var(--ed-hairline);
   background: var(--ed-surface-soft);

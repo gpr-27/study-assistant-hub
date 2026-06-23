@@ -79,15 +79,68 @@ _PROGRESS_GATE = re.compile(
 )
 
 
-def forced_intents(tool: str | None) -> list[dict] | None:
+# Difficulty levels the quiz / flashcards / exam tools accept (default "medium").
+_DIFFICULTIES = {"easy", "medium", "hard"}
+
+
+def _norm_difficulty(value: object) -> str | None:
+    """Normalize a difficulty value to easy|medium|hard, or None."""
+    if isinstance(value, str) and value.strip().lower() in _DIFFICULTIES:
+        return value.strip().lower()
+    return None
+
+
+def _difficulty_from_text(text: str) -> str | None:
+    """Pull an explicit difficulty out of free text ("go with hard", "make it easy")."""
+    t = (text or "").lower()
+    if re.search(r"\b(hard|tough|difficult|advanced|challenging)\b", t):
+        return "hard"
+    if re.search(r"\b(easy|simple|basic|beginner|gentle)\b", t):
+        return "easy"
+    if re.search(r"\b(medium|moderate|intermediate)\b", t):
+        return "medium"
+    return None
+
+
+def _count_from_text(text: str) -> int | None:
+    """Pull an explicit item count ("15 questions", "15 hard questions", "10 cards")."""
+    m = re.search(
+        r"(\d{1,3})\s*(?:(?:easy|medium|hard|simple|tough|difficult|new|more|extra)\s+)*"
+        r"(?:questions?|mcqs?|cards?|flash\s?cards?|items?)",
+        text or "", re.IGNORECASE,
+    )
+    return int(m.group(1)) if m else None
+
+
+def _days_from_text(text: str) -> int | None:
+    """Pull an explicit day count ("in 7 days", "2 weeks" not handled) out of free text."""
+    m = re.search(r"(\d{1,3})\s*days?", text or "", re.IGNORECASE)
+    return int(m.group(1)) if m else None
+
+
+def _short_count_from_text(text: str) -> int | None:
+    """Pull an explicit short-answer count ("3 short", "2 short-answer questions") — exam only."""
+    m = re.search(r"(\d{1,2})\s*short(?:[\s-]?answer)?", text or "", re.IGNORECASE)
+    return int(m.group(1)) if m else None
+
+
+def forced_intents(tool: str | None, message: str = "") -> list[dict] | None:
     """Build a one-tool intent list for a MANUAL tool pick (the slash / tool picker), or None.
 
-    Bypasses ``detect_intent`` entirely: the user explicitly chose the tool, so there is no
-    regex gate and no confirming LLM call — we just run it (if it's a known tool).
+    Bypasses the LLM ``detect_intent`` (the user explicitly chose the tool), but still reads
+    explicit parameters straight out of the message — count ("15 questions" / "10 cards"),
+    difficulty ("go with hard"), and days ("in 7 days") — so "/quiz 15 hard questions" honours
+    both. Anything unspecified stays None and the tool falls back to its default.
     """
-    if tool in _TOOL_ROUTES:
-        return [{"tool": tool, "topic": None, "count": None, "days": None}]
-    return None
+    if tool not in _TOOL_ROUTES:
+        return None
+    return [{
+        "tool": tool,
+        "topic": None,
+        "count": _count_from_text(message),
+        "days": _days_from_text(message),
+        "difficulty": _difficulty_from_text(message),
+    }]
 
 
 def _coerce_intent(item: object) -> dict | None:
@@ -104,6 +157,7 @@ def _coerce_intent(item: object) -> dict | None:
         "topic": (item.get("topic") or None),
         "count": int(count) if isinstance(count, (int, float)) and count else None,
         "days": int(days) if isinstance(days, (int, float)) and days else None,
+        "difficulty": _norm_difficulty(item.get("difficulty")),
     }
 
 
@@ -128,7 +182,8 @@ def detect_intent(llm, message: str) -> list[dict] | None:
         '{"tool": "quiz"|"flashcards"|"summary"|"plan"|"mindmap"|"cheatsheet"|"predictor"|"exam"|"teachback", '
         '"topic": "<specific topic mentioned, or null>", '
         '"count": <number of questions/cards if mentioned, else null>, '
-        '"days": <days until target date if mentioned, else null>} ] }'
+        '"days": <days until target date if mentioned, else null>, '
+        '"difficulty": "easy"|"medium"|"hard"|null} ] }'
     )
     try:
         raw = str(llm.invoke([SystemMessage(content=_INTENT_SYSTEM), HumanMessage(content=instruction)]).content)
@@ -343,12 +398,13 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
     try:
         if tool == "quiz":
             n = min(intent.get("count") or 5, 15)
+            difficulty = intent.get("difficulty") or "medium"
             if subject:
                 content, _ = _subject_content(subject, owner)
-                data = quiz_service.make_quiz(content, n, "medium")
+                data = quiz_service.make_quiz(content, n, difficulty)
                 source = subject
             elif topic:
-                data = quiz_service.make_quiz_from_topic(topic, n, "medium")
+                data = quiz_service.make_quiz_from_topic(topic, n, difficulty)
                 source = topic
             else:
                 return None
@@ -357,21 +413,22 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
                 raise _ToolFailure("the model returned no usable questions — try again.")
             title = f"Quiz · {source}"
             saved_id = db.save("quizzes", owner, {
-                "title": title, "source": source, "difficulty": "medium",
+                "title": title, "source": source, "difficulty": difficulty,
                 "model": config.model_for("quiz", None),
                 "num_questions": len(questions), "questions": questions,
             })
-            detail = f"{len(questions)} questions"
+            detail = f"{len(questions)} questions · {difficulty}"
             art_data = {"questions": questions}
 
         elif tool == "flashcards":
             n = min(intent.get("count") or 10, 25)
+            difficulty = intent.get("difficulty") or "medium"
             if subject:
                 content, _ = _subject_content(subject, owner)
-                data = flashcards_service.make_flashcards(content, n, "medium")
+                data = flashcards_service.make_flashcards(content, n, difficulty)
                 source = subject
             elif topic:
-                data = flashcards_service.make_flashcards_from_topic(topic, n, "medium")
+                data = flashcards_service.make_flashcards_from_topic(topic, n, difficulty)
                 source = topic
             else:
                 return None
@@ -381,11 +438,11 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
             cards = [c.model_dump() if hasattr(c, "model_dump") else c for c in cards]
             title = f"Flashcards · {source}"
             saved_id = db.save("flashcards", owner, {
-                "title": title, "source": source, "difficulty": "medium",
+                "title": title, "source": source, "difficulty": difficulty,
                 "model": config.model_for("flashcards", None),
                 "num_cards": len(cards), "cards": cards,
             })
-            detail = f"{len(cards)} cards"
+            detail = f"{len(cards)} cards · {difficulty}"
             art_data = {"cards": cards}
 
         elif tool == "summary":
@@ -512,9 +569,10 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
                     "PDFs to examine you on."
                 )
             num_mcq = min(intent.get("count") or 6, 10)
-            num_short = 2
+            num_short = min(_short_count_from_text(message) or 2, 4)   # "with 3 short answers"
+            difficulty = intent.get("difficulty") or "medium"
             content, _ = _subject_content(subject, owner)
-            data = exam_service.generate_exam(content, num_mcq, num_short)
+            data = exam_service.generate_exam(content, num_mcq, num_short, difficulty=difficulty)
             questions = data.get("questions") or []
             if not questions:
                 raise _ToolFailure("the model returned no usable questions — try again.")
@@ -522,7 +580,7 @@ def run_tool(session: dict, intent: dict, message: str) -> dict | None:
             # (POST /api/exam/grade), so nothing is saved here.
             saved_id = None
             title = f"Mock Exam · {subject}"
-            detail = f"{num_mcq} MCQ + {num_short} short"
+            detail = f"{num_mcq} MCQ + {num_short} short · {difficulty}"
             art_data = {
                 "questions": questions, "subject": subject,
                 "num_mcq": num_mcq, "num_short": num_short,

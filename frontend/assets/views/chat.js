@@ -509,13 +509,26 @@
   function appendThinking(thread) {
     const wrap = el(`<div class="msg ai msg-thinking"></div>`);
     const panel = el(`<div class="reason-live"></div>`);
+    // Immediate animated placeholder so there's visible feedback BEFORE the first trace
+    // step streams in — e.g. while a tool builds (which can take a few seconds) or before
+    // the first agentic-RAG step. Replaced by the first real step; removed on stop.
+    const dots = el(`<div class="thinking-dots"><span class="typing"><i></i><i></i><i></i></span><span class="thinking-label">Working…</span></div>`);
+    panel.append(dots);
     wrap.append(panel);
     thread.append(wrap);
+    let cleared = false;
     return {
       el: wrap,
       panel,
-      step(s) { appendLiveStep(panel, s); thread.scrollTop = thread.scrollHeight; },
-      stop() { panel.querySelectorAll(".reason-step.is-active").forEach((r) => r.classList.remove("is-active")); },
+      step(s) {
+        if (!cleared) { dots.remove(); cleared = true; }   // first real step replaces the placeholder
+        appendLiveStep(panel, s);
+        thread.scrollTop = thread.scrollHeight;
+      },
+      stop() {
+        dots.remove();
+        panel.querySelectorAll(".reason-step.is-active").forEach((r) => r.classList.remove("is-active"));
+      },
     };
   }
 
