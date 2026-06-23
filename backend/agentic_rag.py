@@ -236,7 +236,7 @@ def _generate(llm, persona: str, history_messages: list, question: str, context:
 
 def answer(
     retriever, llm, question: str, history_messages: list, persona: str, *,
-    max_iters: int | None = None, on_step=None,
+    max_iters: int | None = None, on_step=None, cancel=None,
 ) -> tuple[str, list[dict], list[str]]:
     """Run the agentic retrieval loop and return ``(answer, steps, sources)``.
 
@@ -276,6 +276,8 @@ def answer(
     })
 
     for attempt in range(rounds):
+        if cancel is not None and cancel.is_set():
+            break   # client disconnected / pressed Stop → don't burn more rate-limited LLM calls
         round_docs = list(_retrieve(retriever, queries))
         round_new: list = []
         for doc in round_docs:
@@ -353,6 +355,8 @@ def answer(
             f"\n\nQuestion: {question}",
         ),
     })
+    if cancel is not None and cancel.is_set():
+        return "", steps, []   # cancelled before the (most expensive) final generation
     final_answer = _generate(llm, persona, history_messages, question, final_context)
 
     seen_names: set[str] = set()

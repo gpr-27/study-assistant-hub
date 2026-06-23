@@ -258,11 +258,12 @@ def _history_messages(history: list[tuple[str, str]]) -> list:
     return messages
 
 
-def ask(session_id: str, message: str) -> dict:
+def ask(session_id: str, message: str, tool: str | None = None) -> dict:
     """Answer a question within an existing session and record the exchange.
 
     Returns a dict with ``answer``, ``steps`` (agentic trace), and ``sources``
-    (PDF filenames referenced in retrieved passages).
+    (PDF filenames referenced in retrieved passages). When ``tool`` is given (a manual
+    pick from the slash / tool picker) that tool is forced, skipping intent detection.
     """
     session = _sessions.get(session_id)
     if session is None:
@@ -289,7 +290,10 @@ def ask(session_id: str, message: str) -> dict:
     # questions free — anything that isn't a fulfilled tool result falls through to
     # the normal RAG/agentic answer below.
     intents = None
-    if session.get("autonomous"):
+    if tool:                                   # manual tool pick (slash) — force it, skip detection
+        from backend.services import chat_tools
+        intents = chat_tools.forced_intents(tool)
+    elif session.get("autonomous"):
         from backend.services import chat_tools
         intents = chat_tools.detect_intent(session["llm"], message)
     tool_answers: list[str] = []
@@ -401,7 +405,7 @@ def _record_exchange(session: dict, message: str, answer: str, first_turn: bool)
         ).start()
 
 
-def ask_stream(session_id: str, message: str):
+def ask_stream(session_id: str, message: str, tool: str | None = None):
     """Generator twin of :func:`ask` that yields events as the answer is built.
 
     Yields, in order, one ``{"type": "step", "step": {...}}`` event per trace step as
@@ -432,7 +436,10 @@ def ask_stream(session_id: str, message: str):
     # A single message can request several tools ("a quiz AND flashcards"), so
     # detect_intent returns a LIST; run each in turn, streaming its trace + artifact.
     intents = None
-    if session.get("autonomous"):
+    if tool:                                   # manual tool pick (slash) — force it, skip detection
+        from backend.services import chat_tools
+        intents = chat_tools.forced_intents(tool)
+    elif session.get("autonomous"):
         from backend.services import chat_tools
         intents = chat_tools.detect_intent(session["llm"], message)
 
@@ -441,18 +448,14 @@ def ask_stream(session_id: str, message: str):
         tool_answers: list[str] = []
         tool_artifacts: list = []
         for one in intents:
-            # Announce each tool BEFORE its (slow) build so the user sees it start.
-            starting = {
-                "kind": "tool",
-                "tool": one.get("tool"),
-                "title": f"Calling {one.get('tool')}…",
-            }
-            steps.append(starting)
-            yield {"type": "step", "step": starting}
-
             tool_result = chat_tools.run_tool(session, one, message)
             if tool_result is None:
-                continue  # this tool declined (e.g. PDF session with no topic) → skip
+                continue  # this tool declined (e.g. PDF session with no topic) → skip, no phantom row
+            # Announce the tool now that it's actually producing a result — a declined tool
+            # leaves no stray "Calling …" row. The thinking indicator covers the build wait.
+            starting = {"kind": "tool", "tool": one.get("tool"), "title": f"Calling {one.get('tool')}…"}
+            steps.append(starting)
+            yield {"type": "step", "step": starting}
             tool_answers.append(tool_result["answer"])
             if tool_result.get("artifact"):
                 tool_artifacts.append(tool_result["artifact"])
@@ -496,6 +499,7 @@ def ask_stream(session_id: str, message: str):
 
         q: "_queue.Queue" = _queue.Queue()
         result: dict = {}
+        cancel = threading.Event()   # set when the client disconnects / presses Stop, to halt the worker
 
         def _on_step(step: dict) -> None:
             q.put(("step", step))
@@ -504,7 +508,7 @@ def ask_stream(session_id: str, message: str):
             try:
                 ans, stp, src = agentic_rag.answer(
                     retriever, session["llm"], message, _history_messages(history),
-                    agentic_persona, on_step=_on_step,
+                    agentic_persona, on_step=_on_step, cancel=cancel,
                 )
                 result.update(answer=str(ans), steps=stp, sources=src)
                 q.put(("ok", None))
@@ -514,16 +518,21 @@ def ask_stream(session_id: str, message: str):
 
         worker = threading.Thread(target=_run, daemon=True)
         worker.start()
-        while True:
-            kind, payload = q.get()
-            if kind == "step":
-                steps.append(payload)
-                yield {"type": "step", "step": payload}
-            elif kind == "ok":
-                break
-            elif kind == "error":
-                worker.join()
-                raise payload
+        try:
+            while True:
+                kind, payload = q.get()
+                if kind == "step":
+                    steps.append(payload)
+                    yield {"type": "step", "step": payload}
+                elif kind == "ok":
+                    break
+                elif kind == "error":
+                    worker.join()
+                    raise payload
+        finally:
+            # Normal end OR client disconnect/abort (GeneratorExit raised at the yield) → tell the
+            # worker to stop so it stops spending the free-tier Groq budget on a cancelled answer.
+            cancel.set()
         worker.join()
         answer = result["answer"]
         # agentic_rag owns the authoritative steps/sources list; adopt it.

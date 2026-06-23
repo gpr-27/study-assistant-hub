@@ -627,6 +627,20 @@
 [data-skin="editorial"] .md strong { color: hsl(var(--ink)); }
 [data-skin="editorial"] .md hr { border-top: 1px solid var(--ed-hairline); }
 
+/* Code blocks inside any tool doc (cheat sheets/plans/scans/summaries): the glass rules
+   hardcode a dark #0d1117 IDE slab + glass-grey Copy button, which float foreign on cream
+   paper. Recolour to a warm cream code surface with coral accent for editorial parity. */
+[data-skin="editorial"] .codeblock {
+  background: var(--ed-surface-soft); border: 1px solid var(--ed-hairline); box-shadow: var(--ed-shadow-soft);
+}
+[data-skin="editorial"] .cb-head { background: var(--ed-cream-strong); border-bottom: 1px solid var(--ed-hairline); }
+[data-skin="editorial"] .cb-lang { color: hsl(var(--ink-soft)); }
+[data-skin="editorial"] .cb-copy {
+  color: hsl(var(--ed-coral-h)); background: hsl(var(--ed-coral-h) / .08); border: 1px solid hsl(var(--ed-coral-h) / .3);
+}
+[data-skin="editorial"] .cb-copy:hover { background: hsl(var(--ed-coral-h) / .16); color: hsl(var(--ed-coral-a-h)); }
+[data-skin="editorial"] .codeblock code.hljs { color: hsl(var(--ink)); }
+
 /* planner day cards (planner.js appends md into .panel-soft.stack-sm rows) —
    keep them as quiet cream paper too */
 [data-skin="editorial"] .panel-soft.stack-sm .md p,
@@ -685,6 +699,7 @@
   background: var(--ed-cream-strong);
   border-color: hsl(var(--ed-coral-h) / .45);
 }
+[data-skin="editorial"] .cl-face small { color: hsl(var(--ed-coral-h)); opacity: 1; }
 [data-skin="editorial"] .cl-card .cl-face::before { color: hsl(var(--ink-faint)); }
 [data-skin="editorial"] .cl-card.cl-flip .cl-face::before { color: hsl(var(--ed-coral-h)); }
 [data-skin="editorial"] .cl-flip { color: hsl(var(--ink-faint)); }
@@ -911,7 +926,7 @@
   border: 1px solid var(--ed-hairline);
   background: var(--ed-surface-soft);
 }
-[data-skin="editorial"] .cl-prog-weak-row span:last-child { color: hsl(var(--ed-error-h)); }
+[data-skin="editorial"] .cl-prog-weak-row span:last-child:not(:first-child) { color: hsl(var(--ed-error-h)); }
 [data-skin="editorial"] .cl-prog-act-row span:last-child { color: hsl(var(--ink-soft)); }
 [data-skin="editorial"] .cl-prog-rec {
   background: var(--ed-surface-soft);

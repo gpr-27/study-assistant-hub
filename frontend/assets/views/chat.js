@@ -10,6 +10,73 @@
   let source  = "subject";  // "subject" | "topic" | "upload"
   let pdfFile = null;
   let teardownLayout = null; // removes the responsive shell-sizing listeners on unmount
+  let generating = false;    // a response is currently streaming
+  let currentAbort = null;   // AbortController for the in-flight stream (the Stop button)
+  let toolsMenuCleanup = null; // removes the tools-menu document listeners on unmount
+
+  // Tools the Apex Agent can run on demand. Picking one prefixes "/key " into the
+  // composer so the NEXT message forces that tool (ChatGPT-plugin style). key = backend id.
+  const TOOLS = [
+    { key: "quiz",       label: "Quiz",              icon: "❓" },
+    { key: "flashcards", label: "Flashcards",        icon: "🃏" },
+    { key: "summary",    label: "Summarize",         icon: "📝" },
+    { key: "plan",       label: "Study Plan",        icon: "🗓" },
+    { key: "mindmap",    label: "Mind Map",          icon: "🧠" },
+    { key: "cheatsheet", label: "Cheat Sheet",       icon: "📋" },
+    { key: "predictor",  label: "Predict Questions", icon: "🔮" },
+    { key: "exam",       label: "Mock Exam",         icon: "📄" },
+    { key: "teachback",  label: "Teach-back",        icon: "🎙" },
+    { key: "progress",   label: "My Progress",       icon: "📊" },
+  ];
+  const TOOL_KEYS = new Set(TOOLS.map((t) => t.key));
+
+  // Parse a leading "/tool" slash command → { tool, rest } (rest = message minus the token).
+  function parseForcedTool(text) {
+    // whole token up to whitespace/end → tested against TOOL_KEYS, so "/plan2week" is NOT "plan".
+    const m = (text || "").match(/^\/([a-z0-9]+)(?=\s|$)/i);
+    if (m && TOOL_KEYS.has(m[1].toLowerCase())) {
+      return { tool: m[1].toLowerCase(), rest: text.slice(m[0].length).trim() };
+    }
+    return { tool: null, rest: text };
+  }
+
+  // Send button doubles as a Stop control while a response streams.
+  function setStopMode(on) {
+    const btn = document.getElementById("chatSend");
+    if (!btn) return;
+    btn.textContent = on ? "Stop" : "Send";
+    btn.classList.toggle("is-stop", on);
+    btn.disabled = false;
+  }
+  function stopGenerating() {
+    if (currentAbort) { try { currentAbort.abort(); } catch { /* already aborted */ } }
+  }
+
+  // ── On-demand tool picker (slash menu) ─────────────────────
+  function openToolsMenu() {
+    if (!session) { toast("Start a session first, then pick a tool.", "error"); return; }
+    const menu = document.getElementById("chatToolsMenu");
+    if (menu) menu.hidden = false;
+    document.getElementById("chatToolsBtn")?.setAttribute("aria-expanded", "true");
+  }
+  function closeToolsMenu() {
+    const menu = document.getElementById("chatToolsMenu");
+    if (menu) menu.hidden = true;
+    document.getElementById("chatToolsBtn")?.setAttribute("aria-expanded", "false");
+  }
+  function toggleToolsMenu() {
+    const menu = document.getElementById("chatToolsMenu");
+    if (menu && menu.hidden) openToolsMenu(); else closeToolsMenu();
+  }
+  function pickTool(key) {
+    closeToolsMenu();
+    const input = document.querySelector("#chatComposer .input");
+    if (!input) return;
+    const rest = input.value.replace(/^\/[a-z0-9]+\s*/i, "");   // replace any existing /tool prefix
+    input.value = `/${key} ` + rest;
+    input.disabled = false;
+    input.focus();
+  }
 
   // ── Responsive height: size the chat shell to the space actually left below the
   //    nav + view header so the composer always stays pinned on-screen — on any
@@ -24,6 +91,7 @@
   //    so the height is stable and we only need to react to resize (URL bar /
   //    keyboard / orientation), never to scroll.
   function installShellSizing(shell) {
+    if (teardownLayout) teardownLayout();   // self-heal: drop any prior listeners on re-mount
     const vp = window.visualViewport;
     const fit = () => {
       if (!shell.isConnected) return;
@@ -190,21 +258,6 @@
     return n;
   }
 
-  function promptDisclosure(text) {
-    if (!text) return null;
-    const wrap = el(`<div class="trace-prompt-wrap"></div>`);
-    const btn = el(`<button class="trace-prompt-btn" type="button">⌗ View prompt</button>`);
-    const pre = el(`<pre class="trace-prompt" hidden></pre>`);
-    pre.textContent = text;
-    btn.addEventListener("click", () => {
-      pre.hidden = !pre.hidden;
-      btn.textContent = (pre.hidden ? "⌗ View prompt" : "⌗ Hide prompt");
-      btn.classList.toggle("is-open", !pre.hidden);
-    });
-    wrap.append(btn, pre);
-    return wrap;
-  }
-
   function passageCard(p) {
     const card = el(`<div class="trace-pass"></div>`);
     const head = el(`<div class="trace-pass-head"></div>`);
@@ -253,8 +306,6 @@
       const chars = step.context_chars ? " · " + step.context_chars.toLocaleString() + " chars of context" : "";
       d.append(traceNote(n + " passage" + (n === 1 ? "" : "s") + " grounding the answer" + chars));
     }
-    const pd = promptDisclosure(step.prompt);
-    if (pd) d.append(pd);
     return d;
   }
 
@@ -489,6 +540,7 @@
     const thread = document.querySelector("#chatThread");
     const composer = document.querySelector("#chatComposer");
     if (!thread || !composer) return;
+    if (generating) { stopGenerating(); generating = false; currentAbort = null; }  // stop the old stream first
 
     clear(thread);
     thread.append(spinner("Re-opening chat…"));
@@ -592,13 +644,18 @@
 
   // ── Send a message ─────────────────────────────────────────
   async function send() {
-    if (!session) return;
+    if (!session || generating) return;   // one stream at a time; Stop handles the in-flight one
     const thread   = document.querySelector("#chatThread");
     const composer = document.querySelector("#chatComposer");
     const input    = composer.querySelector(".input");
     const sendBtn  = composer.querySelector("#chatSend");
     const text     = input.value.trim();
     if (!text) return;
+
+    // A leading "/tool" (from the picker or typed) forces that tool; strip it from the
+    // message we send (but keep what the user typed in their bubble).
+    const { tool: forcedTool, rest } = parseForcedTool(text);
+    const outgoing = forcedTool ? (rest || `Make a ${forcedTool}.`) : text;
 
     const placeholder = thread.querySelector(".empty");
     if (placeholder) placeholder.remove();
@@ -609,8 +666,16 @@
 
     appendMessage(thread, "user", text);
     input.value = "";
-    input.disabled = true;
-    sendBtn.disabled = true;
+    // NOTE: the input stays ENABLED so the user can type their next question while this
+    // one streams. Only the Send button is repurposed (→ Stop) during generation.
+    generating = true;
+    const controller = new AbortController();
+    currentAbort = controller;
+    setStopMode(true);
+    // A later "+ New"/resume/unmount supersedes this stream by reassigning currentAbort;
+    // isCurrent() lets late callbacks no-op instead of writing into another session's thread.
+    const isCurrent = () => currentAbort === controller;
+    let finished = false;
 
     const thinking = appendThinking(thread);
     thread.scrollTop = thread.scrollHeight;
@@ -623,6 +688,7 @@
     };
 
     const renderDone = (answer, sources, artifacts, steps) => {
+      if (!isCurrent()) return;            // superseded by a new session — don't write stale output
       thinking.stop();
       thinking.el.remove();
       appendMessage(thread, "assistant", answer, {
@@ -647,21 +713,35 @@
     };
 
     const finish = () => {
+      if (finished || !isCurrent()) return;   // run exactly once, and only for the current stream
+      finished = true;
+      generating = false;
+      currentAbort = null;
+      setStopMode(false);                 // Stop → Send
       thread.scrollTop = thread.scrollHeight;
       if (session) {
         input.disabled = false;
         sendBtn.disabled = false;
-        input.focus();
+      } else {
+        sendBtn.disabled = true;
       }
+      // Don't steal focus — the user may already be typing their next question.
     };
 
     // ── Non-stream fallback (the original path) ──────────────
     const sendNonStream = async () => {
       try {
-        const resp = await window.api.post("/chat/message", { session_id: session.id, message: text });
+        const resp = await window.api.post("/chat/message",
+          { session_id: session.id, message: outgoing, tool: forcedTool || undefined },
+          { signal: controller.signal });
         renderDone(resp.answer, resp.sources, resp.artifacts || resp.artifact, resp.steps);
       } catch (e) {
-        onError(e);
+        if (controller.signal.aborted || e.name === "AbortError") {   // Stop pressed during fallback
+          thinking.stop();
+          if (isCurrent()) { thinking.el.remove(); thread.append(el(`<div class="msg ai msg-stopped">⏹ Stopped</div>`)); }
+        } else {
+          onError(e);
+        }
       } finally {
         finish();
       }
@@ -686,7 +766,8 @@
       const res = await fetch(window.AppConfig.apiBase + "/chat/message/stream", {
         method: "POST",
         headers,
-        body: JSON.stringify({ session_id: sid, message: text }),
+        body: JSON.stringify({ session_id: sid, message: outgoing, tool: forcedTool || null }),
+        signal: controller.signal,
       });
       if (!res.ok || !res.body) throw new Error("stream_unavailable_" + (res.status || 0));
 
@@ -695,6 +776,7 @@
       let buf = "";
       // Parse SSE frames separated by a blank line; each frame is "data: <json>".
       while (true) {
+        if (!isCurrent()) { try { await reader.cancel(); } catch { /* ignore */ } return; }
         const { value, done } = await reader.read();
         if (done) break;
         started = true;
@@ -709,23 +791,38 @@
           try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
           if (ev.type === "step" && ev.step) {
             collected.push(ev.step);
-            thinking.step(ev.step);
+            if (isCurrent()) thinking.step(ev.step);
           } else if (ev.type === "done") {
             gotDone = true;
             renderDone(ev.answer, ev.sources, ev.artifacts || ev.artifact, collected);
+            finish();                                 // back to "Send" the instant the answer is complete
+            try { await reader.cancel(); } catch { /* ignore */ }
+            return;
           } else if (ev.type === "error") {
             throw new Error(ev.detail || ev.message || "The assistant hit an error.");
           }
         }
       }
-      if (!gotDone) {
-        // Stream ended without a done frame. If we never processed anything we can
-        // still fall back cleanly; otherwise surface the truncation.
-        if (!started) { await sendNonStream(); return; }
-        throw new Error("Connection dropped mid-answer. Please try again.");
+      // Reader closed without a 'done' frame.
+      if (controller.signal.aborted) {                // Stop fired before any 'done' arrived
+        thinking.stop();
+        if (isCurrent() && !gotDone) thread.append(el(`<div class="msg ai msg-stopped">⏹ Stopped</div>`));
+        finish();
+        return;
       }
-      finish();
+      if (!started) { await sendNonStream(); return; }
+      throw new Error("Connection dropped mid-answer. Please try again.");
     } catch (e) {
+      // User pressed Stop → graceful end (abort), not an error.
+      if (controller.signal.aborted || e.name === "AbortError") {
+        thinking.stop();
+        if (isCurrent()) {
+          thinking.el.remove();
+          if (!gotDone) thread.append(el(`<div class="msg ai msg-stopped">⏹ Stopped</div>`));
+        }
+        finish();
+        return;
+      }
       // Clean fallback only if nothing was streamed yet and the session looks alive
       // — otherwise we'd duplicate a partially-rendered answer.
       if (!started && !gotDone && session && !/expired/i.test(e.message || "")) {
@@ -806,6 +903,8 @@
 
   // ── Reset to new chat state ────────────────────────────────
   function resetChat() {
+    stopGenerating();                          // abort any in-flight stream before tearing down
+    generating = false; currentAbort = null;   // (the superseded stream's callbacks will no-op)
     session = null; source = "subject"; pdfFile = null;
     updateSessionBadge("");
 
@@ -868,6 +967,8 @@
             <div class="composer" id="chatComposer">
               <button id="chatScanBtn" class="chat-scan-btn" type="button" title="Scan handwritten notes from a photo" aria-label="Scan notes from a photo">📷</button>
               <input id="chatScanInput" type="file" accept="image/*" hidden />
+              <button id="chatToolsBtn" class="chat-tools-btn" type="button" title="Tools — run a tool on demand" aria-label="Choose a tool" aria-haspopup="true" aria-expanded="false">☰</button>
+              <div id="chatToolsMenu" class="chat-tools-menu" role="menu" hidden></div>
               <input class="input" type="text" placeholder="Ask a question…" aria-label="Message" disabled />
               <button id="chatSend" class="btn-accent" type="button" disabled>Send</button>
             </div>
@@ -903,12 +1004,40 @@
       document.getElementById("chatOptionsBtn").addEventListener("click", () =>
         setChatSetup(document.getElementById("chatSetup")?.hidden));
 
-      // Wire composer
+      // Wire composer. The Send button doubles as Stop while a response streams.
       const composer = document.getElementById("chatComposer");
-      composer.querySelector("#chatSend").addEventListener("click", send);
-      composer.querySelector(".input").addEventListener("keydown", (e) => {
-        if (e.key === "Enter") { e.preventDefault(); send(); }
+      composer.querySelector("#chatSend").addEventListener("click", () => {
+        if (generating) stopGenerating(); else send();
       });
+      const inputEl = composer.querySelector(".input");
+      inputEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); if (!generating) send(); }
+      });
+      // Typing "/" on an empty composer opens the tool menu (slash-command affordance).
+      inputEl.addEventListener("input", () => { if (inputEl.value === "/") openToolsMenu(); });
+
+      // Manual tool picker: list every tool; picking one prefixes "/key " so the next
+      // message forces that tool (ChatGPT-plugin style).
+      const toolsBtn = composer.querySelector("#chatToolsBtn");
+      const toolsMenu = composer.querySelector("#chatToolsMenu");
+      TOOLS.forEach((t) => {
+        const item = el(`<button class="chat-tool-item" type="button" role="menuitem" data-tool="${t.key}"></button>`);
+        item.innerHTML = `<span class="chat-tool-ic" aria-hidden="true">${t.icon}</span><span class="chat-tool-label">${esc(t.label)}</span><span class="chat-tool-slash">/${t.key}</span>`;
+        item.addEventListener("click", () => pickTool(t.key));
+        toolsMenu.append(item);
+      });
+      toolsBtn.addEventListener("click", (e) => { e.stopPropagation(); toggleToolsMenu(); });
+      const onDocClick = (e) => {
+        if (!toolsMenu.hidden && !toolsMenu.contains(e.target) && e.target !== toolsBtn) closeToolsMenu();
+      };
+      const onDocKey = (e) => { if (e.key === "Escape") closeToolsMenu(); };
+      if (toolsMenuCleanup) toolsMenuCleanup();   // self-heal: drop any prior listeners on re-mount
+      document.addEventListener("click", onDocClick);
+      document.addEventListener("keydown", onDocKey);
+      toolsMenuCleanup = () => {
+        document.removeEventListener("click", onDocClick);
+        document.removeEventListener("keydown", onDocKey);
+      };
 
       // Wire 📷 scan-notes upload (independent of the chat session/streaming path).
       const scanInput = composer.querySelector("#chatScanInput");
@@ -921,8 +1050,11 @@
     },
 
     unmount() {
+      stopGenerating();                 // abort any in-flight stream
+      generating = false; currentAbort = null;
       session = null; source = "subject"; pdfFile = null;
       if (teardownLayout) teardownLayout();
+      if (toolsMenuCleanup) { toolsMenuCleanup(); toolsMenuCleanup = null; }
       document.getElementById("histPopover")?.remove();
       document.getElementById("histPopoverBg")?.remove();
       document.body.classList.remove("hist-scroll-lock");

@@ -79,6 +79,17 @@ _PROGRESS_GATE = re.compile(
 )
 
 
+def forced_intents(tool: str | None) -> list[dict] | None:
+    """Build a one-tool intent list for a MANUAL tool pick (the slash / tool picker), or None.
+
+    Bypasses ``detect_intent`` entirely: the user explicitly chose the tool, so there is no
+    regex gate and no confirming LLM call — we just run it (if it's a known tool).
+    """
+    if tool in _TOOL_ROUTES:
+        return [{"tool": tool, "topic": None, "count": None, "days": None}]
+    return None
+
+
 def _coerce_intent(item: object) -> dict | None:
     """Normalize one raw intent object into {tool, topic, count, days}, or None if invalid."""
     if not isinstance(item, dict):

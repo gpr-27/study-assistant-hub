@@ -85,8 +85,8 @@
   }
   window.api = {
     get: (p) => authHeaders().then((h) => fetch(apiUrl(p), { headers: h }).catch(netFail)).then(handle),
-    post: (p, body) => authHeaders({ "Content-Type": "application/json" }).then((h) =>
-      fetch(apiUrl(p), { method: "POST", headers: h, body: JSON.stringify(body || {}) }).catch(netFail)
+    post: (p, body, opts) => authHeaders({ "Content-Type": "application/json" }).then((h) =>
+      fetch(apiUrl(p), { method: "POST", headers: h, body: JSON.stringify(body || {}), signal: opts && opts.signal }).catch(netFail)
     ).then(handle),
     postForm: (p, formData) => authHeaders().then((h) =>
       fetch(apiUrl(p), { method: "POST", headers: h, body: formData }).catch(netFail)

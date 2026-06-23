@@ -50,6 +50,7 @@ class ChatSessionResponse(BaseModel):
 class ChatMessageRequest(BaseModel):
     session_id: str
     message: str
+    tool: str | None = None   # manual tool pick (slash command): force this tool, skip detection
 
 
 class ChatMessageResponse(BaseModel):

@@ -59,6 +59,14 @@ class GateTests(unittest.TestCase):
         intent = chat_tools.detect_intent(llm, "make a quiz and another quiz")
         self.assertEqual([i["tool"] for i in intent], ["quiz"])
 
+    def test_forced_intents_builds_single_tool_without_llm(self):
+        """forced_intents (manual slash pick) skips the gate/LLM and forces the chosen tool."""
+        self.assertEqual(chat_tools.forced_intents("quiz"),
+                         [{"tool": "quiz", "topic": None, "count": None, "days": None}])
+        self.assertEqual(chat_tools.forced_intents("teachback")[0]["tool"], "teachback")
+        self.assertIsNone(chat_tools.forced_intents("bogus"))
+        self.assertIsNone(chat_tools.forced_intents(None))
+
     def test_malformed_llm_output_falls_through(self):
         llm = FakeLLM(["not json at all"])
         self.assertIsNone(chat_tools.detect_intent(llm, "make me a mind map of recursion"))
@@ -600,6 +608,21 @@ class AskWiringTests(unittest.TestCase):
         self.assertEqual(out["artifact"], art1)            # legacy single field = first artifact
         self.assertEqual(out["answer"], "Quiz done\n\nCards done")
         self.assertEqual(len(out["steps"]), 2)             # each tool's trace is collected
+
+    def test_forced_tool_skips_detection_and_runs_that_tool(self):
+        """A manual tool pick (tool=...) forces that tool and bypasses detect_intent."""
+        from backend.services import chat
+        sid = _agent_session()
+        art = {"kind": "flashcards", "id": "f", "title": "Flashcards · DBMS", "route": "#flashcards", "tool": "Flashcards"}
+        with mock.patch.object(chat, "require_groq_key", lambda: None), \
+             mock.patch.object(chat_tools, "detect_intent") as detect, \
+             mock.patch.object(chat_tools, "run_tool",
+                               return_value={"answer": "Cards made", "steps": [], "artifact": art}) as run:
+            out = chat.ask(sid, "anything", tool="flashcards")
+        detect.assert_not_called()                          # forced → detection skipped entirely
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[1]["tool"], "flashcards")
+        self.assertEqual(out["artifact"], art)
 
     def test_regular_chat_never_invokes_tools(self):
         """A non-autonomous (regular) session must NOT call chat_tools — pure RAG only."""

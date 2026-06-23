@@ -118,7 +118,7 @@ def session_overview(session_id: str, refresh: bool = False) -> ChatOverviewResp
 def send_message(request: ChatMessageRequest) -> ChatMessageResponse:
     """Send a message within an existing session and return the assistant reply."""
     try:
-        result = chat_service.ask(request.session_id, request.message)
+        result = chat_service.ask(request.session_id, request.message, tool=request.tool)
     except chat_service.ChatSessionError as exc:
         raise HTTPException(status_code=404, detail="Session expired, start a new chat.") from exc
 
@@ -146,7 +146,7 @@ def stream_message(request: ChatMessageRequest) -> StreamingResponse:
     """
     def _events():
         try:
-            for event in chat_service.ask_stream(request.session_id, request.message):
+            for event in chat_service.ask_stream(request.session_id, request.message, tool=request.tool):
                 yield f"data: {json.dumps(event)}\n\n"
         except chat_service.ChatSessionError:
             err = {"type": "error", "detail": "Session expired, start a new chat."}
