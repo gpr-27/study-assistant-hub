@@ -79,21 +79,45 @@ _PROGRESS_GATE = re.compile(
 )
 
 
-def detect_intent(llm, message: str) -> dict | None:
-    """Return {"tool", "topic", "count", "days"} if the message asks to create one, else None."""
+def _coerce_intent(item: object) -> dict | None:
+    """Normalize one raw intent object into {tool, topic, count, days}, or None if invalid."""
+    if not isinstance(item, dict):
+        return None
+    tool = item.get("tool")
+    if tool not in _TOOL_ROUTES:
+        return None
+    count = item.get("count")
+    days = item.get("days")
+    return {
+        "tool": tool,
+        "topic": (item.get("topic") or None),
+        "count": int(count) if isinstance(count, (int, float)) and count else None,
+        "days": int(days) if isinstance(days, (int, float)) and days else None,
+    }
+
+
+def detect_intent(llm, message: str) -> list[dict] | None:
+    """Return a LIST of {"tool","topic","count","days"} the message asks to create, else None.
+
+    One message can request several artifacts ("make a quiz AND flashcards on sorting"),
+    so each requested tool becomes its own intent and the chat runs them all in one turn.
+    Returns ``None`` (not ``[]``) when nothing is requested, so callers can ``if intents:``.
+    """
     # Read-only progress/insights ("how am i doing", "my stats") — no creation
     # verb, so it bypasses the creation gate and the confirming LLM call entirely.
     if _PROGRESS_GATE.search(message or ""):
-        return {"tool": "progress", "topic": None, "count": None, "days": None}
+        return [{"tool": "progress", "topic": None, "count": None, "days": None}]
     if not _GATE.search(message or ""):
         return None
     instruction = (
         f"Message: {message}\n\n"
-        'Return ONLY JSON: {"is_request": true|false, '
-        '"tool": "quiz"|"flashcards"|"summary"|"plan"|"mindmap"|"cheatsheet"|"predictor"|"exam"|"teachback"|null, '
+        "The student may ask for SEVERAL artifacts in one message — return one entry per "
+        "distinct tool they ask to create (in the order requested).\n"
+        'Return ONLY JSON: {"is_request": true|false, "tools": [ '
+        '{"tool": "quiz"|"flashcards"|"summary"|"plan"|"mindmap"|"cheatsheet"|"predictor"|"exam"|"teachback", '
         '"topic": "<specific topic mentioned, or null>", '
         '"count": <number of questions/cards if mentioned, else null>, '
-        '"days": <days until target date if mentioned, else null>}'
+        '"days": <days until target date if mentioned, else null>} ] }'
     )
     try:
         raw = str(llm.invoke([SystemMessage(content=_INTENT_SYSTEM), HumanMessage(content=instruction)]).content)
@@ -106,17 +130,18 @@ def detect_intent(llm, message: str) -> dict | None:
         return None
     if not isinstance(data, dict) or not data.get("is_request"):
         return None
-    tool = data.get("tool")
-    if tool not in _TOOL_ROUTES:
-        return None
-    count = data.get("count")
-    days = data.get("days")
-    return {
-        "tool": tool,
-        "topic": (data.get("topic") or None),
-        "count": int(count) if isinstance(count, (int, float)) and count else None,
-        "days": int(days) if isinstance(days, (int, float)) and days else None,
-    }
+    # Prefer the new "tools" array; tolerate a legacy single-"tool" object for back-compat.
+    raw_items = data.get("tools")
+    if not isinstance(raw_items, list):
+        raw_items = [data] if data.get("tool") else []
+    intents: list[dict] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        coerced = _coerce_intent(item)
+        if coerced and coerced["tool"] not in seen:   # de-dupe repeated tools
+            seen.add(coerced["tool"])
+            intents.append(coerced)
+    return intents or None
 
 
 def _subject_content(subject: str, owner: str | None) -> tuple[str, list[str]]:

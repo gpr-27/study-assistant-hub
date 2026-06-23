@@ -354,7 +354,7 @@ class AskStreamTests(unittest.TestCase):
             "artifact": art,
         }
         with mock.patch.object(chat_mod, "require_groq_key", lambda: None), \
-             mock.patch.object(chat_tools, "detect_intent", return_value={"tool": "quiz"}), \
+             mock.patch.object(chat_tools, "detect_intent", return_value=[{"tool": "quiz"}]), \
              mock.patch.object(chat_tools, "run_tool", return_value=tool_result):
             events = list(chat_mod.ask_stream(sid, "create a quiz"))
 
@@ -371,6 +371,7 @@ class AskStreamTests(unittest.TestCase):
         self.assertEqual(done["type"], "done")
         self.assertEqual(done["answer"], "Built your quiz.")
         self.assertEqual(done["artifact"], art)
+        self.assertEqual(done["artifacts"], [art])   # new multi-artifact field carries every build
         # history was recorded for the turn
         self.assertEqual(chat_mod._sessions[sid]["history"][-1], ("create a quiz", "Built your quiz."))
 

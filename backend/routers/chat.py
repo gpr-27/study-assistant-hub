@@ -8,6 +8,19 @@ import json
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from groq import APIError, RateLimitError
+
+# A StreamingResponse sends its 200 status line before the first LLM call, so the
+# global exception handlers in main.py (which turn a Groq 429 into a friendly
+# message) can never run for the SSE path. We mirror that copy here and emit it as
+# an error frame instead. Keep in sync with main._on_rate_limit.
+_RATE_LIMIT_DETAIL = (
+    "Groq rate limit reached — the free-tier daily token limit is used up, or "
+    "requests are coming in too fast. Wait a few minutes and retry, switch to a "
+    "lighter model (set DEFAULT_MODEL — or a per-tool override — to a smaller "
+    "model in .env, then restart), or upgrade your tier at "
+    "https://console.groq.com/settings/billing."
+)
 
 from backend.auth import current_owner
 from backend.schemas import (
@@ -114,6 +127,7 @@ def send_message(request: ChatMessageRequest) -> ChatMessageResponse:
         steps=result.get("steps", []),
         sources=result.get("sources", []),
         artifact=result.get("artifact"),
+        artifacts=result.get("artifacts", []),
     )
 
 
@@ -137,6 +151,13 @@ def stream_message(request: ChatMessageRequest) -> StreamingResponse:
         except chat_service.ChatSessionError:
             err = {"type": "error", "detail": "Session expired, start a new chat."}
             yield f"data: {json.dumps(err)}\n\n"
+        except RateLimitError:
+            # Groq 429 — surface the same actionable message the non-stream path gets
+            # from the global handler (which can't run once streaming has begun).
+            yield f"data: {json.dumps({'type': 'error', 'detail': _RATE_LIMIT_DETAIL})}\n\n"
+        except APIError as exc:  # other Groq errors → the provider message, not raw repr
+            detail = getattr(exc, "message", None) or str(exc) or "The model backend returned an error."
+            yield f"data: {json.dumps({'type': 'error', 'detail': detail})}\n\n"
         except Exception as exc:  # noqa: BLE001 — report mid-stream failures to the client
             err = {"type": "error", "detail": str(exc) or "Something went wrong."}
             yield f"data: {json.dumps(err)}\n\n"

@@ -412,7 +412,12 @@ input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border: 0; bo
 #chatOptionsBtn.is-open { border-color: hsl(var(--accent) / .6); color: hsl(var(--ink)); }
 .chat-src-bar { padding: .75rem 1rem; border-radius: var(--r-md); }
 .chat { display: flex; flex-direction: column; height: clamp(420px, 68vh, 720px); }
-.thread { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: .8rem; padding: 1.2rem; }
+.thread { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: .8rem; padding: 1.2rem; }
+/* The chat-area wrapper (.chat-shell > .panel) is a flex item of the height-bounded
+   .chat-shell. Its default min-height:auto lets it grow to the full message height
+   and overflow the shell, so .thread never scrolls. min-height:0 lets it (and the
+   thread above) shrink into the flex track so .thread's overflow-y:auto engages. */
+.chat-shell > .panel { min-height: 0; }
 .msg { max-width: 78%; padding: .8rem 1.05rem; border-radius: 20px; line-height: 1.5; font-size: .96rem; animation: rise .4s var(--ease-spring) both; word-wrap: break-word; }
 .msg.me { align-self: flex-end; color: #fff; border-bottom-right-radius: 7px; background: linear-gradient(150deg, hsl(var(--accent) / .95), hsl(var(--accent) / .65)); box-shadow: 0 6px 16px hsl(var(--accent) / .35); white-space: pre-wrap; }
 .msg.ai { align-self: flex-start; border-bottom-left-radius: 7px; background: var(--field-bg); border: 1px solid var(--glass-border); }
@@ -1191,7 +1196,13 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
 .chat-live {
   align-self: flex-start; max-width: 78%; width: min(560px, 78%);
   border: 1px solid hsl(var(--accent) / .4); background: var(--field-bg);
-  border-radius: 18px; padding: 1rem 1.1rem; overflow: hidden;
+  border-radius: 18px; padding: 1rem 1.1rem;
+  /* A tall inline artifact (long quiz, flashcard back, deep mind map) gets its own
+     bounded, vertically-scrollable region instead of being clipped by overflow:hidden.
+     overflow-x stays hidden so wide content can't blow out the rounded bubble — wide
+     trees scroll horizontally via .cl-mm's own overflow-x below. */
+  max-height: min(70vh, 540px); overflow-y: auto; overflow-x: hidden;
+  overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
   animation: rise .4s var(--ease-spring) both;
 }
 
@@ -1285,7 +1296,7 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
 .cl-doc-h:first-child { margin-top: 0; }
 
 /* — mind map (collapsible tree) — */
-.cl-mm { font-size: .92rem; }
+.cl-mm { font-size: .92rem; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .cl-mm-row { display: flex; align-items: flex-start; gap: .4rem; padding: .12rem 0; padding-left: calc(var(--mm-depth, 0) * 1.05rem); }
 .cl-mm-label-line { display: flex; align-items: flex-start; gap: .4rem; }
 .cl-mm-toggle {
@@ -1296,7 +1307,7 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
 }
 .cl-mm-toggle:hover { background: hsl(var(--accent) / .2); }
 .cl-mm-toggle.is-leaf { visibility: hidden; }
-.cl-mm-label { line-height: 1.45; color: hsl(var(--ink)); padding-top: .05rem; }
+.cl-mm-label { line-height: 1.45; color: hsl(var(--ink)); padding-top: .05rem; overflow-wrap: anywhere; }
 .cl-mm-kids { margin-left: 1.05rem; border-left: 1px solid hsl(var(--accent) / .22); padding-left: .55rem; }
 
 /* — predictions — */

@@ -56,7 +56,8 @@ class ChatMessageResponse(BaseModel):
     answer: str
     steps: list[dict] = []   # structured agentic-trace events (kind/title/queries/passages/…)
     sources: list[str] = []
-    artifact: dict | None = None   # set when the chat created a tool artifact (kind/id/title/route/tool)
+    artifact: dict | None = None   # first artifact (kept for back-compat with older clients)
+    artifacts: list[dict] = []     # every artifact built this turn (one message can create several)
 
 
 class ChatOverviewResponse(BaseModel):

@@ -130,7 +130,8 @@
   //    a muted "Saved in <tool>" footer with an Open button. Otherwise fall back to
   //    the plain link card below.
   function appendArtifactCard(thread, art) {
-    if (art && art.data && typeof window.renderArtifactInline === "function") {
+    if (!art || typeof art !== "object") return;   // tolerate a missing/empty artifact
+    if (art.data && typeof window.renderArtifactInline === "function") {
       const block = el(`<div class="chat-live"></div>`);
       let ok = false;
       try {
@@ -621,14 +622,17 @@
       setTimeout(() => { if (hp?.refresh) hp.refresh(); }, 3500);
     };
 
-    const renderDone = (answer, sources, artifact, steps) => {
+    const renderDone = (answer, sources, artifacts, steps) => {
       thinking.stop();
       thinking.el.remove();
       appendMessage(thread, "assistant", answer, {
         steps: steps || [],
         sources: sources || [],
       });
-      if (artifact) appendArtifactCard(thread, artifact);
+      // A single turn can now create several artifacts (e.g. "a quiz AND flashcards").
+      // `artifacts` may be a list (new payload) or a single object (legacy) — render each.
+      const list = Array.isArray(artifacts) ? artifacts : (artifacts ? [artifacts] : []);
+      list.forEach((art) => appendArtifactCard(thread, art));
       onFirstTurn();
     };
 
@@ -655,7 +659,7 @@
     const sendNonStream = async () => {
       try {
         const resp = await window.api.post("/chat/message", { session_id: session.id, message: text });
-        renderDone(resp.answer, resp.sources, resp.artifact, resp.steps);
+        renderDone(resp.answer, resp.sources, resp.artifacts || resp.artifact, resp.steps);
       } catch (e) {
         onError(e);
       } finally {
@@ -708,7 +712,7 @@
             thinking.step(ev.step);
           } else if (ev.type === "done") {
             gotDone = true;
-            renderDone(ev.answer, ev.sources, ev.artifact, collected);
+            renderDone(ev.answer, ev.sources, ev.artifacts || ev.artifact, collected);
           } else if (ev.type === "error") {
             throw new Error(ev.detail || ev.message || "The assistant hit an error.");
           }
@@ -857,7 +861,7 @@
           </div>
 
           <!-- Chat area -->
-          <div class="panel" style="flex:1;display:flex;flex-direction:column;padding:0;overflow:hidden">
+          <div class="panel" style="flex:1;min-height:0;display:flex;flex-direction:column;padding:0;overflow:hidden">
             <div class="thread" id="chatThread">
               <div class="empty"><div class="big">✦</div><div>Start a new session or open a saved chat.</div></div>
             </div>

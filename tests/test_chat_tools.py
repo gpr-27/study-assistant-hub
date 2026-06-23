@@ -41,7 +41,23 @@ class GateTests(unittest.TestCase):
     def test_creation_request_detected_with_params(self):
         llm = FakeLLM(['{"is_request": true, "tool": "quiz", "topic": "sorting algorithms", "count": 8, "days": null}'])
         intent = chat_tools.detect_intent(llm, "create a quiz with 8 questions on sorting algorithms")
-        self.assertEqual(intent, {"tool": "quiz", "topic": "sorting algorithms", "count": 8, "days": None})
+        # detect_intent now returns a LIST of intents (one per requested tool); a legacy
+        # single-"tool" reply is tolerated and normalized into a one-element list.
+        self.assertEqual(intent, [{"tool": "quiz", "topic": "sorting algorithms", "count": 8, "days": None}])
+
+    def test_multiple_tools_detected_in_one_message(self):
+        llm = FakeLLM(['{"is_request": true, "tools": ['
+                       '{"tool": "quiz", "topic": "sorting", "count": null, "days": null}, '
+                       '{"tool": "flashcards", "topic": "sorting", "count": null, "days": null}]}'])
+        intent = chat_tools.detect_intent(llm, "make me a quiz and flashcards on sorting")
+        self.assertEqual([i["tool"] for i in intent], ["quiz", "flashcards"])
+
+    def test_duplicate_tools_are_de_duped(self):
+        llm = FakeLLM(['{"is_request": true, "tools": ['
+                       '{"tool": "quiz", "topic": null, "count": null, "days": null}, '
+                       '{"tool": "quiz", "topic": null, "count": null, "days": null}]}'])
+        intent = chat_tools.detect_intent(llm, "make a quiz and another quiz")
+        self.assertEqual([i["tool"] for i in intent], ["quiz"])
 
     def test_malformed_llm_output_falls_through(self):
         llm = FakeLLM(["not json at all"])
@@ -50,13 +66,13 @@ class GateTests(unittest.TestCase):
     def test_cheatsheet_request_detected(self):
         llm = FakeLLM(['{"is_request": true, "tool": "cheatsheet", "topic": null, "count": null, "days": null}'])
         intent = chat_tools.detect_intent(llm, "create a cheat sheet for this subject")
-        self.assertEqual(intent["tool"], "cheatsheet")
+        self.assertEqual(intent[0]["tool"], "cheatsheet")
         self.assertEqual(len(llm.calls), 1)  # gate passed, LLM confirmed
 
     def test_predictor_request_detected(self):
         llm = FakeLLM(['{"is_request": true, "tool": "predictor", "topic": null, "count": null, "days": null}'])
         intent = chat_tools.detect_intent(llm, "predict likely exam questions")
-        self.assertEqual(intent["tool"], "predictor")
+        self.assertEqual(intent[0]["tool"], "predictor")
         self.assertEqual(len(llm.calls), 1)
 
     def test_new_phrasings_pass_the_regex_gate(self):
@@ -88,7 +104,7 @@ class GateTests(unittest.TestCase):
     def test_exam_request_detected(self):
         llm = FakeLLM(['{"is_request": true, "tool": "exam", "topic": null, "count": null, "days": null}'])
         intent = chat_tools.detect_intent(llm, "start a mock exam")
-        self.assertEqual(intent["tool"], "exam")
+        self.assertEqual(intent[0]["tool"], "exam")
         self.assertEqual(len(llm.calls), 1)
 
     def test_plain_question_about_exam_skips_the_llm(self):
@@ -124,7 +140,7 @@ class GateTests(unittest.TestCase):
     def test_teachback_request_detected(self):
         llm = FakeLLM(['{"is_request": true, "tool": "teachback", "topic": null, "count": null, "days": null}'])
         intent = chat_tools.detect_intent(llm, "let's do a teach-back")
-        self.assertEqual(intent["tool"], "teachback")
+        self.assertEqual(intent[0]["tool"], "teachback")
         self.assertEqual(len(llm.calls), 1)
 
     def test_plain_question_about_teachback_skips_the_llm(self):
@@ -146,7 +162,7 @@ class GateTests(unittest.TestCase):
             llm = FakeLLM([])  # must never reach the LLM
             intent = chat_tools.detect_intent(llm, phrase)
             self.assertIsNotNone(intent, f"progress not detected for: {phrase!r}")
-            self.assertEqual(intent["tool"], "progress", f"wrong tool for: {phrase!r}")
+            self.assertEqual(intent[0]["tool"], "progress", f"wrong tool for: {phrase!r}")
             self.assertEqual(llm.calls, [], f"progress must not cost an LLM call: {phrase!r}")
 
     def test_ordinary_message_is_not_progress(self):
@@ -554,14 +570,36 @@ class AskWiringTests(unittest.TestCase):
         sid = _agent_session()
         art = {"kind": "quizzes", "id": "x", "title": "Quiz · DBMS", "route": "#quiz", "tool": "Quiz Generator"}
         with mock.patch.object(chat, "require_groq_key", lambda: None), \
-             mock.patch.object(chat_tools, "detect_intent", return_value={"tool": "quiz"}) as detect, \
+             mock.patch.object(chat_tools, "detect_intent", return_value=[{"tool": "quiz"}]) as detect, \
              mock.patch.object(chat_tools, "run_tool",
                                return_value={"answer": "Done", "steps": [], "artifact": art}) as run:
             out = chat.ask(sid, "create a quiz")
         detect.assert_called_once()
         run.assert_called_once()
         self.assertEqual(out["artifact"], art)
+        self.assertEqual(out["artifacts"], [art])
         self.assertEqual(out["answer"], "Done")
+
+    def test_autonomous_ask_runs_multiple_tools_in_one_turn(self):
+        """A single message asking for two tools builds BOTH artifacts in one turn."""
+        from backend.services import chat
+        sid = _agent_session()
+        art1 = {"kind": "quizzes", "id": "q", "title": "Quiz · DBMS", "route": "#quiz", "tool": "Quiz Generator"}
+        art2 = {"kind": "flashcards", "id": "f", "title": "Flashcards · DBMS", "route": "#flashcards", "tool": "Flashcards"}
+        results = [
+            {"answer": "Quiz done", "steps": [{"kind": "tool", "title": "quiz"}], "artifact": art1},
+            {"answer": "Cards done", "steps": [{"kind": "tool", "title": "cards"}], "artifact": art2},
+        ]
+        with mock.patch.object(chat, "require_groq_key", lambda: None), \
+             mock.patch.object(chat_tools, "detect_intent",
+                               return_value=[{"tool": "quiz"}, {"tool": "flashcards"}]), \
+             mock.patch.object(chat_tools, "run_tool", side_effect=results) as run:
+            out = chat.ask(sid, "make a quiz and flashcards")
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(out["artifacts"], [art1, art2])
+        self.assertEqual(out["artifact"], art1)            # legacy single field = first artifact
+        self.assertEqual(out["answer"], "Quiz done\n\nCards done")
+        self.assertEqual(len(out["steps"]), 2)             # each tool's trace is collected
 
     def test_regular_chat_never_invokes_tools(self):
         """A non-autonomous (regular) session must NOT call chat_tools — pure RAG only."""

@@ -273,27 +273,39 @@ def ask(session_id: str, message: str) -> dict:
     history: list[tuple[str, str]] = session["history"]
     retriever = session["retriever"]
     first_turn = not history
-    steps: list[str] = []
+    steps: list = []
     sources: list[str] = []
     artifact = None
+    artifacts: list = []
 
     persona = session.get("persona") or _SUBJECT_PERSONA_BASE
 
     # Every real chat session is smart (autonomous=True), so we detect "create a
     # cheat sheet / quiz / flashcards / summary / plan / mind map / prediction"
     # requests (cheap regex gate + one small LLM call) and fulfil them via the
-    # matching tool, saving to its history. The regex gate inside chat_tools keeps
-    # ordinary questions free — anything that isn't a fulfilled tool result falls
-    # through to the normal RAG/agentic answer below.
-    tool_result = None
+    # matching tool, saving to its history. A single message can ask for SEVERAL
+    # artifacts ("a quiz AND flashcards"), so detect_intent returns a LIST and we
+    # run each tool in turn. The regex gate inside chat_tools keeps ordinary
+    # questions free — anything that isn't a fulfilled tool result falls through to
+    # the normal RAG/agentic answer below.
+    intents = None
     if session.get("autonomous"):
         from backend.services import chat_tools
-        intent = chat_tools.detect_intent(session["llm"], message)
-        tool_result = chat_tools.run_tool(session, intent, message) if intent else None
-    if tool_result is not None:
-        answer = tool_result["answer"]
-        steps = tool_result["steps"]
-        artifact = tool_result.get("artifact")
+        intents = chat_tools.detect_intent(session["llm"], message)
+    tool_answers: list[str] = []
+    if intents:
+        from backend.services import chat_tools
+        for one in intents:
+            tool_result = chat_tools.run_tool(session, one, message)
+            if tool_result is None:
+                continue  # this tool declined (e.g. wrong session type) → skip it
+            tool_answers.append(tool_result["answer"])
+            steps.extend(tool_result["steps"])
+            if tool_result.get("artifact"):
+                artifacts.append(tool_result["artifact"])
+        artifact = artifacts[0] if artifacts else None  # legacy single-artifact field
+    if tool_answers:
+        answer = "\n\n".join(tool_answers)
     elif _is_smalltalk(message):
         # Greeting / acknowledgement → one fast LLM call, no embedding or retrieval.
         steps = [{"kind": "generate", "title": "Replied directly — no document lookup needed"}]
@@ -366,7 +378,8 @@ def ask(session_id: str, message: str) -> dict:
             threading.Thread(
                 target=_autoname_chat, args=(owner, chat_id, message, answer, session["llm"]), daemon=True
             ).start()
-    return {"answer": answer, "steps": steps, "sources": sources, "artifact": artifact}
+    return {"answer": answer, "steps": steps, "sources": sources,
+            "artifact": artifact, "artifacts": artifacts}
 
 
 def _record_exchange(session: dict, message: str, answer: str, first_turn: bool) -> None:
@@ -415,38 +428,52 @@ def ask_stream(session_id: str, message: str):
     artifact = None
     persona = session.get("persona") or _SUBJECT_PERSONA_BASE
 
-    # --- Autonomous tool gate (build an artifact) -------------------------------
-    intent = None
+    # --- Autonomous tool gate (build one or more artifacts) ---------------------
+    # A single message can request several tools ("a quiz AND flashcards"), so
+    # detect_intent returns a LIST; run each in turn, streaming its trace + artifact.
+    intents = None
     if session.get("autonomous"):
         from backend.services import chat_tools
-        intent = chat_tools.detect_intent(session["llm"], message)
+        intents = chat_tools.detect_intent(session["llm"], message)
 
-    if intent is not None:
+    if intents:
         from backend.services import chat_tools
-        # Announce the tool BEFORE the (slow) build so the user sees it start.
-        starting = {
-            "kind": "tool",
-            "tool": intent.get("tool"),
-            "title": f"Calling {intent.get('tool')}…",
-        }
-        steps.append(starting)
-        yield {"type": "step", "step": starting}
+        tool_answers: list[str] = []
+        tool_artifacts: list = []
+        for one in intents:
+            # Announce each tool BEFORE its (slow) build so the user sees it start.
+            starting = {
+                "kind": "tool",
+                "tool": one.get("tool"),
+                "title": f"Calling {one.get('tool')}…",
+            }
+            steps.append(starting)
+            yield {"type": "step", "step": starting}
 
-        tool_result = chat_tools.run_tool(session, intent, message)
-        if tool_result is not None:
-            answer = tool_result["answer"]
-            artifact = tool_result.get("artifact")
+            tool_result = chat_tools.run_tool(session, one, message)
+            if tool_result is None:
+                continue  # this tool declined (e.g. PDF session with no topic) → skip
+            tool_answers.append(tool_result["answer"])
+            if tool_result.get("artifact"):
+                tool_artifacts.append(tool_result["artifact"])
             for st in tool_result["steps"]:
                 # Tag the tool's own trace rows so the UI rails them as tool steps.
                 row = {**st} if isinstance(st, dict) else {"kind": "tool", "title": str(st)}
                 row.setdefault("kind", "tool")
                 steps.append(row)
                 yield {"type": "step", "step": row}
+
+        if tool_answers:
+            answer = "\n\n".join(tool_answers)
             _record_exchange(session, message, answer, first_turn)
             history.append((message, answer))
-            yield {"type": "done", "answer": answer, "sources": sources, "artifact": artifact}
+            yield {
+                "type": "done", "answer": answer, "sources": sources,
+                "artifact": tool_artifacts[0] if tool_artifacts else None,  # legacy clients
+                "artifacts": tool_artifacts,
+            }
             return
-        # run_tool declined (e.g. PDF session with no topic) → fall through to RAG.
+        # Every requested tool declined → fall through to the normal RAG answer.
 
     # --- Smalltalk short-circuit ------------------------------------------------
     if _is_smalltalk(message):
