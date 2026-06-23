@@ -641,6 +641,17 @@
 [data-skin="editorial"] .cb-copy:hover { background: hsl(var(--ed-coral-h) / .16); color: hsl(var(--ed-coral-a-h)); }
 [data-skin="editorial"] .codeblock code.hljs { color: hsl(var(--ink)); }
 
+/* Markdown tables inside any tool doc (cheat sheets/plans/scans/summaries): the glass
+   rules colour the header with the chat --accent and draw borders with --glass-border
+   (a translucent WHITE hairline) — the accent clashes and the borders vanish on cream
+   paper. Recolour to a warm cream header + a visible hairline grid for editorial parity. */
+[data-skin="editorial"] .table-wrap { border: 1px solid var(--ed-hairline); }
+[data-skin="editorial"] .md-table th,
+[data-skin="editorial"] .md-table td { border-bottom: 1px solid var(--ed-hairline); }
+[data-skin="editorial"] .md-table thead th { background: var(--ed-cream-strong); color: hsl(var(--ink)); }
+[data-skin="editorial"] .md-table tbody tr:nth-child(even) { background: var(--ed-surface-soft); }
+[data-skin="editorial"] .md-table tbody tr:hover { background: hsl(var(--ed-coral-h) / .08); }
+
 /* planner day cards (planner.js appends md into .panel-soft.stack-sm rows) —
    keep them as quiet cream paper too */
 [data-skin="editorial"] .panel-soft.stack-sm .md p,
@@ -907,6 +918,7 @@
 [data-skin="editorial"] .cl-tb-eval-sec li { color: hsl(var(--ink-soft)); }
 [data-skin="editorial"] .cl-tb-eval-sec.is-gap li::marker { color: hsl(var(--ed-error-h)); }
 [data-skin="editorial"] .cl-tb-eval-sec.is-strength li::marker { color: hsl(var(--ed-success-h)); }
+[data-skin="editorial"] .cl-tb-eval-sec.is-review li::marker { color: hsl(var(--ed-coral-h)); }
 [data-skin="editorial"] .cl-tb-err { color: hsl(var(--ed-error-h)); }
 
 /* — Progress (read-only tiles) — */
