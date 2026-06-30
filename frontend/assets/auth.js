@@ -29,6 +29,8 @@ const keywarn = document.getElementById("keywarn");
 
 // Clerk's vanilla SDK, pinned to v5, loaded from a CDN (no bundler in this project).
 const CLERK_CDN = "https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/+esm";
+// Clerk themes CDN, used to load the dark theme.
+const THEMES_CDN = "https://cdn.jsdelivr.net/npm/@clerk/themes@2/+esm";
 // Must match GUEST_KEY in app.js (the API layer reads the same key).
 const GUEST_KEY = "sah-guest-id";
 
@@ -94,11 +96,16 @@ async function boot() {
     return;
   }
 
-  let Clerk;
+  let Clerk, darkTheme;
   try {
-    ({ Clerk } = await import(CLERK_CDN));
+    const [clerkModule, themesModule] = await Promise.all([
+      import(CLERK_CDN),
+      import(THEMES_CDN)
+    ]);
+    Clerk = clerkModule.Clerk;
+    darkTheme = themesModule.default.dark;
   } catch (e) {
-    console.error("Failed to load the Clerk SDK:", e);
+    console.error("Failed to load the Clerk SDK or themes:", e);
     gateMessage("⚠ Couldn’t load the sign-in module. Check your connection and reload.");
     signalAuthReady();
     return;
@@ -109,15 +116,108 @@ async function boot() {
     await clerk.load({
       afterSignOutUrl: window.location.origin,
       appearance: {
+        baseTheme: darkTheme,
         variables: {
-          colorPrimary: "hsl(var(--accent))",
-          colorBackground: "var(--popover-bg)",
-          colorText: "hsl(var(--ink))",
-          colorTextSecondary: "hsl(var(--ink-soft))",
-          colorInputBackground: "var(--field-bg)",
-          colorInputText: "hsl(var(--ink))",
-          colorBorder: "var(--popover-border)",
+          colorPrimary: "#7c3aed", // Vibrant purple accent
+          colorBackground: "#131520", // Dark card background
+          colorText: "#ffffff", // White text
+          colorTextSecondary: "#a7a7d0", // Soft secondary text
+          colorInputBackground: "#1e1e2e", // Dark input background
+          colorInputText: "#ffffff", // White input text
+          colorBorder: "rgba(255, 255, 255, 0.12)", // Subtle border
           colorTextOnPrimaryBackground: "#ffffff",
+        },
+        elements: {
+          card: {
+            background: "#131520 !important",
+            border: "1px solid rgba(255, 255, 255, 0.12) !important",
+            borderRadius: "24px !important",
+            boxShadow: "0 1px 1px rgba(255, 255, 255, 0.05), 0 16px 40px rgba(0, 0, 0, 0.6) !important",
+            padding: "2.5rem !important",
+            overflow: "visible !important", // Prevent clipping of headers
+          },
+          headerTitle: {
+            fontFamily: '"Bricolage Grotesque", "Segoe UI", sans-serif !important',
+            fontWeight: "800 !important",
+            fontSize: "1.8rem !important",
+            letterSpacing: "-0.02em !important",
+            color: "#ffffff !important",
+            marginTop: "0.5rem !important",
+          },
+          headerSubtitle: {
+            fontFamily: '"Figtree", sans-serif !important',
+            color: "#a7a7d0 !important",
+            fontSize: "0.95rem !important",
+          },
+          socialButtonsBlockButton: {
+            background: "rgba(255, 255, 255, 0.04) !important",
+            border: "1px solid rgba(255, 255, 255, 0.1) !important",
+            borderRadius: "12px !important",
+            transition: "transform 0.2s, background 0.2s !important",
+            height: "44px !important",
+          },
+          socialButtonsBlockButton__hover: {
+            background: "rgba(255, 255, 255, 0.08) !important",
+            transform: "translateY(-1px) !important",
+          },
+          socialButtonsBlockButtonText: {
+            color: "#ffffff !important",
+            fontFamily: '"Figtree", sans-serif !important',
+            fontWeight: "600 !important",
+          },
+          dividerLine: {
+            background: "rgba(255, 255, 255, 0.1) !important",
+          },
+          dividerText: {
+            color: "#a7a7d0 !important",
+            fontFamily: '"Figtree", sans-serif !important',
+          },
+          formFieldLabel: {
+            fontFamily: '"Figtree", sans-serif !important',
+            color: "#a7a7d0 !important",
+            fontWeight: "600 !important",
+            fontSize: "0.88rem !important",
+            marginBottom: "0.4rem !important",
+          },
+          formFieldInput: {
+            background: "rgba(255, 255, 255, 0.05) !important",
+            border: "1px solid rgba(255, 255, 255, 0.1) !important",
+            borderRadius: "12px !important",
+            color: "#ffffff !important",
+            fontFamily: '"Figtree", sans-serif !important',
+            padding: "0.75rem 1rem !important",
+            height: "44px !important",
+            transition: "border-color 0.2s, box-shadow 0.2s !important",
+          },
+          formFieldInput__focus: {
+            borderColor: "#7c3aed !important",
+            boxShadow: "0 0 0 3px rgba(124, 58, 237, 0.25) !important",
+          },
+          formButtonPrimary: {
+            background: "linear-gradient(150deg, #7c3aed, #6366f1) !important",
+            borderRadius: "999px !important",
+            fontFamily: '"Bricolage Grotesque", sans-serif !important',
+            fontWeight: "600 !important",
+            fontSize: "0.95rem !important",
+            boxShadow: "0 8px 22px rgba(124, 58, 237, 0.45) !important",
+            border: "0 !important",
+            height: "44px !important",
+            transition: "transform 0.2s, box-shadow 0.2s !important",
+            cursor: "pointer !important",
+          },
+          formButtonPrimary__hover: {
+            transform: "translateY(-1px) !important",
+            boxShadow: "0 12px 28px rgba(124, 58, 237, 0.55) !important",
+          },
+          footerActionLink: {
+            color: "#a78bfa !important",
+            fontWeight: "600 !important",
+            fontFamily: '"Figtree", sans-serif !important',
+          },
+          footerActionText: {
+            fontFamily: '"Figtree", sans-serif !important',
+            color: "#a7a7d0 !important",
+          }
         }
       }
     });
