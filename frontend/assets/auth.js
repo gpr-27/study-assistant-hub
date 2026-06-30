@@ -106,7 +106,21 @@ async function boot() {
 
   const clerk = new Clerk(cfg.clerkPublishableKey);
   try {
-    await clerk.load({ afterSignOutUrl: window.location.origin });
+    await clerk.load({
+      afterSignOutUrl: window.location.origin,
+      appearance: {
+        variables: {
+          colorPrimary: "hsl(var(--accent))",
+          colorBackground: "var(--popover-bg)",
+          colorText: "hsl(var(--ink))",
+          colorTextSecondary: "hsl(var(--ink-soft))",
+          colorInputBackground: "var(--field-bg)",
+          colorInputText: "hsl(var(--ink))",
+          colorBorder: "var(--popover-border)",
+          colorTextOnPrimaryBackground: "#ffffff",
+        }
+      }
+    });
   } catch (e) {
     console.error("Clerk failed to initialize:", e);
     gateMessage("⚠ Sign-in is misconfigured — verify CLERK_PUBLISHABLE_KEY in your .env.");

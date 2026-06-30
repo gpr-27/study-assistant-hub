@@ -1801,3 +1801,135 @@ a.prog-rec:hover { border-color: hsl(var(--accent) / .6); transform: translateY(
   .cl-tb-send:hover, .cl-tb-send:active, .chat-scan-btn:active { transform: none; }
   .chat-scan-status::before { animation: none; }
 }
+
+/* ============================================================
+   Clerk Authentication Custom Styles (Liquid Glass Theme)
+   ============================================================ */
+.cl-card, .cl-signIn-start, .cl-signUp-start, .cl-userButtonPopoverCard {
+  background: var(--popover-bg) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright)) !important;
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright)) !important;
+  box-shadow: var(--shadow-float),
+              inset 0 1px 1px hsl(0 0% 100% / .5),
+              inset 0 0 0 1px hsl(0 0% 100% / .04),
+              inset 0 -22px 46px -26px hsl(230 60% 4% / .55) !important;
+  border: 1px solid var(--popover-border) !important;
+  border-radius: var(--r-card) !important;
+}
+
+[data-theme="light"] .cl-card, [data-theme="light"] .cl-signIn-start, [data-theme="light"] .cl-signUp-start, [data-theme="light"] .cl-userButtonPopoverCard {
+  box-shadow: var(--shadow-float),
+              inset 0 1px 2px hsl(0 0% 100% / .95),
+              inset 0 0 0 1px hsl(0 0% 100% / .35),
+              inset 0 -18px 40px -26px hsl(225 40% 50% / .14) !important;
+}
+
+/* Modal backdrop overlay */
+.cl-modalBackdrop {
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  background-color: hsl(230 24% 50% / .22) !important;
+}
+
+/* Typography, Headers & Subtitles */
+.cl-headerTitle {
+  font-family: var(--font-display) !important;
+  color: hsl(var(--ink)) !important;
+  font-weight: 800 !important;
+  letter-spacing: -.02em !important;
+}
+.cl-headerSubtitle, .cl-dividerText, .cl-footerActionText, .cl-identityPreviewText {
+  font-family: var(--font-body) !important;
+  color: hsl(var(--ink-soft)) !important;
+}
+
+/* Form inputs & fields */
+.cl-formFieldLabel {
+  font-family: var(--font-body) !important;
+  color: hsl(var(--ink-soft)) !important;
+  font-weight: 600 !important;
+  font-size: .88rem !important;
+}
+.cl-formFieldInput {
+  background: var(--field-bg) !important;
+  border: 1px solid var(--glass-border) !important;
+  color: hsl(var(--ink)) !important;
+  border-radius: var(--r-sm) !important;
+  font-family: var(--font-body) !important;
+  padding: .7rem 1rem !important;
+  transition: border-color .3s var(--ease-spring), box-shadow .3s !important;
+}
+.cl-formFieldInput:focus {
+  border-color: hsl(var(--accent)) !important;
+  box-shadow: 0 0 0 3px hsl(var(--accent) / .2) !important;
+}
+
+/* Primary Action Buttons */
+.cl-formButtonPrimary {
+  font-family: var(--font-display) !important;
+  font-weight: 600 !important;
+  font-size: .95rem !important;
+  color: #fff !important;
+  border: 0 !important;
+  border-radius: var(--r-pill) !important;
+  background: linear-gradient(150deg, hsl(var(--accent) / .98), hsl(var(--accent) / .62)) !important;
+  box-shadow: 0 8px 22px hsl(var(--accent) / .45), inset 0 1px 1px hsl(0 0% 100% / .5) !important;
+  transition: transform .3s var(--ease-spring), box-shadow .3s, opacity .2s !important;
+  cursor: pointer !important;
+  padding: .75rem 1.4rem !important;
+}
+.cl-formButtonPrimary:hover:not(:disabled) {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 14px 32px hsl(var(--accent) / .55), inset 0 1px 1px hsl(0 0% 100% / .5) !important;
+}
+.cl-formButtonPrimary:active:not(:disabled) {
+  transform: scale(.97) !important;
+}
+
+/* Social Login Buttons (Google, GitHub) */
+.cl-socialButtonsBlockButton {
+  background: var(--glass-fill) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: var(--r-sm) !important;
+  transition: transform .3s var(--ease-spring), background .3s, box-shadow .3s !important;
+  cursor: pointer !important;
+}
+.cl-socialButtonsBlockButton:hover {
+  transform: translateY(-2px) !important;
+  background: var(--glass-fill-2) !important;
+  box-shadow: 0 4px 12px hsl(0 0% 0% / .08) !important;
+}
+.cl-socialButtonsBlockButtonText {
+  color: hsl(var(--ink)) !important;
+  font-family: var(--font-body) !important;
+  font-weight: 600 !important;
+}
+
+/* Dividers & lines */
+.cl-dividerLine {
+  background-color: var(--glass-border) !important;
+}
+
+/* Links & interactive actions */
+.cl-footerActionLink, .cl-identityPreviewEditButton, .cl-userButtonPopoverActionButtonText {
+  color: hsl(var(--accent)) !important;
+  font-weight: 600 !important;
+  transition: opacity .2s !important;
+}
+.cl-footerActionLink:hover, .cl-identityPreviewEditButton:hover {
+  opacity: .8 !important;
+  text-decoration: underline !important;
+}
+
+/* User Button Popover Action Button */
+.cl-userButtonPopoverActionButton {
+  transition: background .2s !important;
+  border-radius: var(--r-sm) !important;
+}
+.cl-userButtonPopoverActionButton:hover {
+  background: var(--glass-fill) !important;
+}
+.cl-userButtonPopoverFooter {
+  border-top: 1px solid var(--glass-border) !important;
+}
+
