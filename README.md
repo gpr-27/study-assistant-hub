@@ -428,4 +428,4 @@ volumes, scaling/workers, TLS/reverse-proxy, CI/CD, and a security checklist.
 
 ## 👤 Author
 **Gandra Praneeth Reddy** — [LinkedIn](https://www.linkedin.com/in/praneeth-gandra-411ab3309/)
-Built for the hackathon at **IIITT** by **TEAM404**.
+Built for the hackathon at **IIITT**
