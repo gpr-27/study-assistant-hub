@@ -77,11 +77,28 @@ class PrewarmModuleTests(unittest.TestCase):
             th.side_effect = lambda **kw: started.append(kw["name"]) or mock.MagicMock()
             self.assertTrue(prewarm.start())
             self.assertFalse(prewarm.start())
-        self.assertEqual(sorted(started), ["prewarm-clients", "prewarm-mongo"])
+        self.assertEqual(sorted(started), ["prewarm-clients", "prewarm-jwks", "prewarm-mongo"])
 
     def test_pool_keeps_one_connection_warm(self):
         self.assertEqual(db._POOL_KWARGS["minPoolSize"], 1)
         self.assertEqual(db._POOL_KWARGS["maxPoolSize"], 10)
+
+
+class ColdTelemetryTests(unittest.TestCase):
+    def test_server_timing_reported_once(self):
+        with mock.patch.object(prewarm, "INIT_MS", 1234.0), mock.patch.object(prewarm, "_reported", False), \
+                mock.patch.dict(prewarm.SPANS, {"mongo": 900.0, "prewarm-jwks": 150.0}, clear=True):
+            first = prewarm.server_timing_parts()
+            self.assertIn("init;dur=1234", first)
+            self.assertIn("pw_mongo;dur=900", first)
+            self.assertIn("pw_prewarm_jwks;dur=150", first)
+            self.assertEqual(prewarm.server_timing_parts(), "")
+
+    def test_wait_jwks_noop_unless_in_flight(self):
+        t0 = time.perf_counter()
+        with mock.patch.object(prewarm, "_jwks_started", threading.Event()):
+            prewarm.wait_jwks(2.0)
+        self.assertLess(time.perf_counter() - t0, 0.5)
 
 
 if __name__ == "__main__":

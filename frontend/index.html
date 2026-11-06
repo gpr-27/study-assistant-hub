@@ -34,6 +34,10 @@
     } catch (_) {}
     window.__sahCfg = fetch("/api/config", { credentials: "same-origin" });
     window.__sahCfg.catch(function () {});
+    // /api/config is CDN-cached (s-maxage), so it often never reaches the function. This tiny no-store,
+    // low-priority ping always does: a cold instance imports + connects Mongo/JWKS while the visitor reads
+    // the page, so the sign-in / guest click lands on a warm instance. Fire-and-forget.
+    try { fetch("/api/health", { priority: "low", keepalive: true, cache: "no-store" }).catch(function () {}); } catch (_) {}
     // Only a likely-signed-in visitor (Clerk's __client_uat cookie non-zero) needs the SDK at boot;
     // everyone else loads it on demand (auth.js), so no 800 KB preload for anonymous / guest visits.
     var uat = false;

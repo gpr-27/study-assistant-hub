@@ -89,8 +89,35 @@ def _mongo_then_indexes() -> None:
     _step("indexes", vector_store.warm_all_subjects)
 
 
+_jwks_started = threading.Event()
+_jwks_done = threading.Event()
+
+
+def wait_jwks(timeout: float = 3.0) -> None:
+    """A request that needs the JWK set while the prewarm fetch is in flight waits for it instead of
+    issuing a second HTTPS fetch. No-op when prewarm never started / already finished."""
+    if _jwks_started.is_set() and not _jwks_done.is_set():
+        _jwks_done.wait(timeout)
+
+
+def _jwks() -> None:
+    """Clerk JWKS fetch in its OWN thread: a signed-in first request needs it, so it must not queue
+    behind the (GIL-heavy) module imports below."""
+    from backend import auth, config
+
+    if not config.CLERK_PUBLISHABLE_KEY:
+        return
+    _jwks_started.set()
+    try:
+        client = auth._jwks_client()
+        if client is not None:
+            client.get_signing_keys()          # fills the JWK-set cache (one HTTPS fetch)
+    finally:
+        _jwks_done.set()
+
+
 def _network_free_clients() -> None:
-    from backend import auth, config, llm_chain
+    from backend import llm_chain
 
     _step("llm_chain", llm_chain.warm)
 
@@ -101,12 +128,6 @@ def _network_free_clients() -> None:
 
         gemini_embeddings._http()         # requests.Session (imports requests/netrc/charset_normalizer)
     _step("lazy_imports", _lazy_imports)
-    if config.CLERK_PUBLISHABLE_KEY:
-        def _jwks() -> None:
-            client = auth._jwks_client()
-            if client is not None:
-                client.get_signing_keys()          # fills the JWK-set cache (one HTTPS fetch)
-        _step("jwks", _jwks)
 
 
 def start() -> bool:
@@ -118,6 +139,7 @@ def start() -> bool:
         if _started:
             return False
         _started = True
-    for name, fn in (("prewarm-mongo", _mongo_then_indexes), ("prewarm-clients", _network_free_clients)):
+    for name, fn in (("prewarm-mongo", _mongo_then_indexes), ("prewarm-jwks", _jwks),
+                     ("prewarm-clients", _network_free_clients)):
         threading.Thread(target=lambda f=fn, n=name: _step(n, f), daemon=True, name=name).start()
     return True

@@ -159,6 +159,9 @@ def _verify_clerk_token(token: str) -> str | None:
         raise ClerkUnavailable("Clerk JWKS unreachable (backing off)")
     t0 = time.perf_counter()
     try:
+        from backend import prewarm
+
+        prewarm.wait_jwks()                # cold start: reuse the in-flight prefetch, never fetch twice
         signing_key = _signing_key(client, token)
         claims = jwt.decode(
             token,
