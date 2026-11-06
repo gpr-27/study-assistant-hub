@@ -7,7 +7,7 @@
    ============================================================ */
 (() => {
   "use strict";
-  const { el, clear, esc, spinner, toast, md } = window.ui;
+  const { el, clear, esc, spinner, empty, toast, md } = window.ui;
 
   let source = "subject";   // "subject" | "topic" | "upload"
   let pdfFile = null;       // File for upload mode
@@ -69,12 +69,12 @@
     } else {
       const field = el(`
         <div class="field" style="margin:0">
-          <label class="label">PDF</label>
-          <div class="row row-wrap">
-            <label class="btn" for="csPdfFile" style="cursor:pointer">Choose PDF…</label>
-            <span class="muted" id="csPdfName">No file selected</span>
+          <label class="label" for="csPdfFile">PDF</label>
+          <div class="row row-wrap" style="align-items:center">
+            <label class="btn" for="csPdfFile" style="cursor:pointer;flex:none">Choose PDF…</label>
+            <span class="muted" id="csPdfName" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">No file selected</span>
           </div>
-          <input id="csPdfFile" type="file" accept="application/pdf" hidden />
+          <input id="csPdfFile" type="file" accept="application/pdf" hidden aria-label="Upload PDF for cheat sheet" />
           <div class="hint">Upload one PDF and squeeze it onto one page.</div>
         </div>`);
       host.append(field);
@@ -83,23 +83,26 @@
       input.addEventListener("change", () => {
         pdfFile = input.files && input.files[0] ? input.files[0] : null;
         nameSlot.textContent = pdfFile ? pdfFile.name : "No file selected";
+        nameSlot.title = pdfFile ? pdfFile.name : "";
       });
     }
   }
 
   // Render a generated/saved sheet into the result panel with its actions.
-  function showSheet(result, markdown, title) {
+  function showSheet(result, markdown, title, llm, stored) {
     clear(result);
+    const llmLine = window.ui.renderModelLabel(llm, { stored: !!stored });   // "Model: …" under the title
+    const modelText = llmLine ? llmLine.textContent : "";
     const head = el(`
-      <div class="row row-wrap between" style="margin-bottom:1rem">
-        <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em;margin:0">${esc(title || "Cheat sheet")}</h3>
+      <div class="row row-wrap between" style="margin-bottom:1rem;align-items:flex-start">
+        <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em;margin:0;min-width:0;overflow-wrap:anywhere">${esc(title || "Cheat sheet")}</h3>
         <span class="row row-wrap" style="gap:.4rem;flex:none"></span>
       </div>`);
     const actions = head.querySelector("span");
 
-    const dl = el(`<button class="btn-ghost" type="button">Download .md</button>`);
+    const dl = window.ui.iconBtn({ icon: "download", label: "Download as Markdown (.md)", cls: "ib-outline" });
     dl.addEventListener("click", () => {
-      const blob = new Blob([markdown], { type: "text/markdown" });
+      const blob = new Blob([markdown + (modelText ? "\n\n---\n*" + modelText + "*\n" : "")], { type: "text/markdown" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -111,12 +114,14 @@
     const sheet = md(markdown);
     sheet.classList.add("panel", "day");
 
-    const printBtn = el(`<button class="btn" type="button">🖨 Print / PDF</button>`);
+    const printBtn = window.ui.iconBtn({ icon: "print", label: "Print or save as PDF", cls: "ib-outline" });
     printBtn.addEventListener("click", () =>
-      window.ui.printDoc(title || "Cheat sheet", sheet.innerHTML));
+      window.ui.printDoc(title || "Cheat sheet", sheet.innerHTML, modelText));
     actions.append(dl, printBtn);
 
-    result.append(head, sheet);
+    result.append(head);
+    if (llmLine) result.append(llmLine);
+    result.append(sheet);
   }
 
   async function generate(layout) {
@@ -148,13 +153,13 @@
 
     try {
       const resp = await call();
-      showSheet(result, resp.markdown || "", resp.title);
+      showSheet(result, resp.markdown || "", resp.title, resp.llm);
       toast("Cheat sheet ready. Download it or print it.", "ok");
       const __hp = document.querySelector('.history-panel[data-kind="cheatsheets"]');
       if (__hp && __hp.refresh) __hp.refresh();
     } catch (e) {
       clear(result);
-      result.append(el(`<div class="empty"><div class="big">⚠</div><div>${esc(e.message)}</div></div>`));
+      result.append(window.ui.errorBlock(e, e.retryable ? () => goBtn.click() : null));
       toast(e.message, "error");
     } finally {
       goBtn.disabled = false;
@@ -169,15 +174,15 @@
     async mount(root) {
       const layout = el(`
         <div class="stack">
-          <div class="panel stack">
-            <div class="between" style="align-items:flex-start">
-              <div class="stack-sm" style="flex:1">
-                <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em">Generate a cheat sheet</h3>
+          <div class="panel stack" style="max-width:640px;width:100%;margin:0 auto">
+            <div class="between" style="align-items:flex-start;gap:.75rem">
+              <div class="stack-sm" style="flex:1;min-width:0">
+                <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em;overflow-wrap:anywhere">Generate a cheat sheet</h3>
                 <p class="muted">One PDF in, one ultra-dense exam crib sheet out — definitions, formulas, contrasts, pitfalls.</p>
               </div>
-              <button id="cs-hist" class="btn" type="button" style="flex:none;padding:.4rem .8rem;font-size:.85rem">≡ History</button>
+              <button id="cs-hist" class="icon-btn ib-outline" type="button" aria-label="Open cheat sheet history" title="Open cheat sheet history">${window.ui.iconHtml("history")}</button>
             </div>
-            <div class="seg" role="tablist" aria-label="Cheat sheet source">
+            <div class="seg" role="tablist" aria-label="Cheat sheet source" style="flex-wrap:wrap">
               <button type="button" data-src="subject" aria-pressed="true">Subject PDF</button>
               <button type="button" data-src="topic" aria-pressed="false">Topic</button>
               <button type="button" data-src="upload" aria-pressed="false">Upload PDF</button>
@@ -186,15 +191,14 @@
             <div id="csModelCtl"></div>
             <button id="csGo" class="btn-accent btn-lg btn-block" type="button">Generate cheat sheet</button>
           </div>
-          <div class="panel" id="csResult">
-            <div class="empty"><div class="big">✦</div><div>Pick a PDF and generate your one-page crib sheet.</div></div>
-          </div>
+          <div class="panel" id="csResult"></div>
         </div>`);
       root.append(layout);
+      layout.querySelector("#csResult").append(empty("Pick a PDF and generate your one-page crib sheet.", "✦"));
 
       function openSavedSheet(saved) {
         if (!saved || !saved.markdown) return;
-        showSheet(layout.querySelector("#csResult"), saved.markdown, saved.title);
+        showSheet(layout.querySelector("#csResult"), saved.markdown, saved.title, saved.llm, true);
       }
       layout.querySelector("#cs-hist").addEventListener("click", (e) =>
         window.ui.openHistoryDrawer("cheatsheets", { title: "Saved cheat sheets", anchor: e.currentTarget, onOpen: openSavedSheet }));

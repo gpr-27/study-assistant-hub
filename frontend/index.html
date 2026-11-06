@@ -1,28 +1,170 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light" data-skin="glass">
+<html lang="en" data-theme="light" data-skin="editorial">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta name="color-scheme" content="light dark" />
-<!-- no-FOUC skin: apply the saved skin to <html> BEFORE any stylesheet loads -->
-<script>
-  try {
-    document.documentElement.setAttribute("data-skin", localStorage.getItem("sah-skin") || "glass");
-  } catch (_) {}
-</script>
+<!-- no-FOUC skin + theme: apply the saved skin/theme to <html> BEFORE any stylesheet
+     loads. Theme used to only be applied later by app.js, after the CSS had already
+     painted the light-theme default — a visible flash to dark on every load for users
+     who'd chosen dark. Setting it here (mirrors the skin technique) removes the flash;
+     app.js's own `localStorage.getItem("sah-theme")` re-application still runs and is
+     now just a harmless no-op. -->
 <title>Study Assistant Hub</title>
+<meta name="description" content="Study Assistant Hub: chat, quizzes, flashcards, planner, mind maps and mock exams built on your own lecture material." />
+<!-- Build stamp written by scripts/stamp_assets.py; also read by app.js for lazily loaded views. -->
+<meta name="asset-version" content="7b74d84e51" />
+<!-- no-FOUC skin + theme, then the critical-path kick-offs, all before any stylesheet:
+     1. apply saved skin/theme to <html>;
+     2. start GET /api/config NOW (config.js reuses it) instead of after scripts are parsed;
+     3. if the Clerk session cookie says signed-in, preload the Clerk SDK;
+     4. the editorial skin's CSS + fonts are fetched ONLY when that skin is active/picked. -->
+<script>
+  (function () {
+    var d = document, root = d.documentElement, skin = "editorial", cfg = null;
+    try {
+      // "sah-skin-v2": the old "sah-skin" key was auto-written with "glass" for everyone, so it is
+      // ignored; only an explicit pick made after the Editorial-default switch is stored here.
+      skin = localStorage.getItem("sah-skin-v2") || "editorial";
+      root.setAttribute("data-skin", skin);
+      var th = localStorage.getItem("sah-theme");
+      if (th && skin !== "editorial") root.setAttribute("data-theme", th); // Editorial is light-only
+      var raw = localStorage.getItem("sah-cfg-v1");
+      if (raw) cfg = (JSON.parse(raw) || {}).data || null;
+    } catch (_) {}
+    window.__sahCfg = fetch("/api/config", { credentials: "same-origin" });
+    window.__sahCfg.catch(function () {});
+    // Only a likely-signed-in visitor (Clerk's __client_uat cookie non-zero) needs the SDK at boot;
+    // everyone else loads it on demand (auth.js), so no 800 KB preload for anonymous / guest visits.
+    var uat = false;
+    try { var um = document.cookie.match(/(?:^|;\s*)__client_uat(?:_[A-Za-z0-9]+)?=(\d+)/); uat = !!(um && um[1] !== "0"); } catch (_) {}
+    if (uat) {
+      var mp = d.createElement("link");
+      mp.rel = "modulepreload"; mp.href = "https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/+esm"; mp.crossOrigin = "anonymous";
+      d.head.appendChild(mp);
+    }
+    function v(p) { var m = d.querySelector('meta[name="asset-version"]'); return p + (m && m.content ? "?v=" + m.content : ""); }
+    var loaded = {};
+    function css(href) {
+      if (loaded[href]) return loaded[href];
+      return (loaded[href] = new Promise(function (res) {
+        var l = d.createElement("link");
+        l.rel = "stylesheet"; l.href = href; l.onload = l.onerror = function () { res(); };
+        d.head.appendChild(l);
+      }));
+    }
+    // Editorial is the critical path (static <link>s below). Glass-only fonts load lazily, when glass is
+    // active at boot or picked later. Resolves when everything the skin needs is applied.
+    var GLASS_FONTS = "https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500..800&family=Figtree:wght@400..600&family=Instrument+Serif:ital@1&display=swap";
+    window.__sahSkinAssets = function (s) {
+      if (s !== "glass") return Promise.resolve();
+      return css(GLASS_FONTS);
+    };
+    if (skin === "glass") window.__sahSkinAssets("glass");
+    // kept as a no-op for compatibility with older cached markup
+    window.__sahWriteSkin = function () {};
+  })();
+</script>
+<!-- Fonts: Editorial is the default skin, so ITS fonts are on the critical path: connect early, preload
+     the CSS (non-blocking, display=swap) and use metric-matched local fallbacks (size-adjust) so the
+     swap causes no layout shift. Glass-only fonts are fetched lazily by the head script. -->
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Figtree:wght@400;500;600&family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" onload="this.onload=null;this.rel='stylesheet'" />
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" /></noscript>
+<style>
+  @font-face { font-family: "Inter Fallback"; src: local("Arial"), local("Helvetica"); size-adjust: 107.4%; ascent-override: 90.2%; descent-override: 22.5%; line-gap-override: 0%; }
+  @font-face { font-family: "Cormorant Fallback"; src: local("Georgia"), local("Times New Roman"); size-adjust: 90%; ascent-override: 98%; descent-override: 30%; line-gap-override: 0%; }
+</style>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2322d3ee'/%3E%3Cstop offset='.5' stop-color='%23a78bfa'/%3E%3Cstop offset='1' stop-color='%23f59e0b'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3C/svg%3E" />
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<link rel="stylesheet" href="/assets/styles.css" />
-<!-- editorial skin: scoped under [data-skin="editorial"]; loads AFTER styles.css so its tokens win -->
-<link rel="stylesheet" href="/assets/editorial.css" />
-<link rel="stylesheet" href="/assets/editorial-tools.css" />
+<!-- highlight.js is lazy-loaded by app.js the first time a code block is rendered. -->
+<link rel="stylesheet" href="/assets/styles.css?v=7b74d84e51" />
+<!-- Editorial skin: render-blocking on purpose (first paint is already Editorial; scoped by [data-skin], so inert for Glass). -->
+<link rel="stylesheet" href="/assets/editorial.css?v=7b74d84e51" />
+<link rel="stylesheet" href="/assets/editorial-tools.css?v=7b74d84e51" />
+<!-- Scoped, minimal a11y-only styling kept inline (not in the shared stylesheets) so it
+     ships with the skip-link markup it belongs to and never depends on skin/theme load order. -->
+<style>
+  .skip-link {
+    position: absolute; left: 1rem; top: -3rem; z-index: 1000;
+    padding: .6rem 1rem; border-radius: 8px; background: #111; color: #fff;
+    font: 600 .9rem/1 system-ui, sans-serif; text-decoration: none;
+    transition: top .15s ease;
+  }
+  .skip-link:focus { top: 1rem; }
+  /* #keywarn / guest CTA: force body+link contrast above soft ink tokens (light + dark).
+     Kept here (a11y-owned) so skins can keep decorative fills without lowering copy AA. */
+  .keywarn, .keywarn span { color: hsl(var(--ink)); }
+  .keywarn a.cta-upgrade {
+    color: hsl(var(--c-quiz));
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  [data-theme="light"] .keywarn a.cta-upgrade { color: hsl(270 55% 38%); }
+  [data-theme="dark"] .keywarn a.cta-upgrade { color: hsl(270 80% 78%); }
+  [data-skin="editorial"] .keywarn,
+  [data-skin="editorial"] .keywarn span { color: hsl(var(--ink)); }
+</style>
 </head>
 <body>
+
+  <!-- ICON SPRITE: single source for every inline icon (ui.icon / ui.iconBtn in app.js). 24x24, stroke=currentColor. -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+<symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M9 3h6l-1 6 3 4H7l3-4z"/></symbol>
+<symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 12A9 9 0 0 1 18.5 5.8L21 8"/><path d="M21 3v5h-5M3 21v-5h5"/></symbol>
+<symbol id="i-retry" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
+<symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+<symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+<symbol id="i-history" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+<symbol id="i-options" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 20h16"/></symbol>
+<symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 20h16"/></symbol>
+<symbol id="i-print" viewBox="0 0 24 24"><path d="M7 9V3h10v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><rect x="7" y="14" width="10" height="7"/></symbol>
+<symbol id="i-share" viewBox="0 0 24 24"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><path d="M16 7l-4-4-4 4"/><path d="M12 3v13"/></symbol>
+<symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></symbol>
+<symbol id="i-thumb-up" viewBox="0 0 24 24"><path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z"/><path d="M7 11l4-8a2.5 2.5 0 0 1 2.5 2.7L13 9h6a2 2 0 0 1 2 2.3l-1.2 7A2 2 0 0 1 17.8 20H7"/></symbol>
+<symbol id="i-thumb-down" viewBox="0 0 24 24"><path d="M17 13V4h3a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1z"/><path d="M17 13l-4 8a2.5 2.5 0 0 1-2.5-2.7L11 15H5a2 2 0 0 1-2-2.3l1.2-7A2 2 0 0 1 6.2 4H17"/></symbol>
+<symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
+<symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+<symbol id="i-chevron-up" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></symbol>
+<symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h0"/></symbol>
+<symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+<symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></symbol>
+<symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+<symbol id="i-speaker" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></symbol>
+<symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-9 9"/></symbol>
+<symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></symbol>
+<symbol id="i-paperclip" viewBox="0 0 24 24"><path d="M20 11.5l-8.5 8.5a5 5 0 0 1-7-7l9-9a3.4 3.4 0 0 1 5 5l-9 9a1.8 1.8 0 0 1-2.5-2.5l8-8"/></symbol>
+<symbol id="i-tag" viewBox="0 0 24 24"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z"/><circle cx="8" cy="8" r="1.4"/></symbol>
+<symbol id="i-flip" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></symbol>
+<symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20L21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h0M3 12h0M3 18h0"/></symbol>
+<symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></symbol>
+<symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5"/><path d="M8 7h8"/></symbol>
+<symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 1-1 1.7"/><path d="M12 17h0"/></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
+<symbol id="i-network" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/><path d="M12 7.2v4.3M12 11.5L6 17M12 11.5l6 5.5"/></symbol>
+<symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></symbol>
+<symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></symbol>
+<symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
+<symbol id="i-graduation-cap" viewBox="0 0 24 24"><path d="M3 8.5L12 4l9 4.5-9 4.5z"/><path d="M7 11v5c0 1.2 2.2 2.5 5 2.5s5-1.3 5-2.5v-5"/><path d="M21 8.5V14"/></symbol>
+<symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></symbol>
+<symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+<symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.7 7L3 21l2-5.2A8 8 0 1 1 21 12z"/></symbol>
+<symbol id="i-unpin" viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M9 3h6l-1 6 3 4H7l3-4z"/><path d="M4 4l16 16"/></symbol>
+  </svg>
+  <a class="skip-link" href="#mainContent">Skip to content</a>
+
   <!-- ambient layers -->
   <div class="bg"></div>
   <div class="orbs" aria-hidden="true"><div class="orb a"></div><div class="orb b"></div><div class="orb c"></div><div class="orb d"></div></div>
@@ -40,22 +182,22 @@
 
   <!-- AUTH GATE — covers the app on first paint. auth.js hides it when Clerk auth is
        disabled (no key) or once the user is signed in. -->
-  <div class="auth-gate" id="authGate" aria-hidden="false">
+  <div class="auth-gate" id="authGate" aria-hidden="false" role="dialog" aria-modal="true" aria-labelledby="authGateTitle">
     <div class="auth-card glass">
       <span class="auth-mark" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5 12 3l9 3.5-9 3.5z"/><path d="M21 6.5v6"/><path d="M6.5 9v5.2c0 1.3 2.5 2.8 5.5 2.8s5.5-1.5 5.5-2.8V9"/></svg>
       </span>
       <span class="eyebrow"><span class="dot"></span>Your all-in-one learning companion</span>
-      <h1>Study smarter with<br><span class="glow">AI</span> built around <em>you</em>.</h1>
-      <p>Sign in to open your Chat, Quiz, Flashcards, Planner and Mind&nbsp;Map — built on your own lecture material, powered by Groq.</p>
+      <h1 id="authGateTitle">Study smarter with<br><span class="glow">AI</span> built around <em>you</em>.</h1>
+      <p>Sign in to open your Chat, Quiz, Flashcards, Planner and Mind&nbsp;Map — built on your own lecture material, powered by a multi-provider AI chain.</p>
       <div class="auth-actions" id="authActions">
-        <div class="auth-loading"><span class="spinner"></span><span>Loading…</span></div>
+        <div class="auth-loading" role="status"><span class="spinner"></span><span>Loading…</span></div>
       </div>
       <p class="auth-foot" id="authFoot"></p>
     </div>
   </div>
 
-  <div class="shell">
+  <div class="shell" id="appShell" inert>
     <!-- NAV -->
     <nav class="nav glass" aria-label="Primary">
       <a class="brand" href="#home">
@@ -65,19 +207,34 @@
         Study&nbsp;Assistant&nbsp;Hub
       </a>
       <div class="nav-actions">
-        <a class="nav-add" href="#subjects" aria-label="Add a subject" title="Add a subject">
+        <!-- Global "AI model" badge: the model behind the most recent AI answer (app.js keeps it in sync
+             with every per-output "Model: …" label). Click / focus opens the chain-order popover. -->
+        <div class="ai-model" id="aiModel">
+          <button type="button" class="ai-model-btn" id="aiModelBtn" title="AI model" aria-haspopup="dialog"
+                  aria-expanded="false" aria-controls="aiModelPop" aria-label="AI model: Auto · best available model (5-key chain)">
+            <span class="ai-model-dot" aria-hidden="true"></span>
+            <span class="ai-model-k">AI model</span>
+            <span class="ai-model-text" id="aiModelText">Auto · best available model (5-key chain)</span>
+          </button>
+          <div class="ai-model-pop" id="aiModelPop" role="dialog" aria-label="AI model chain" hidden></div>
+        </div>
+        <a class="nav-add" href="#subjects" aria-label="Add subject" title="Add a subject">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
           <span>Add subject</span>
+        </a>
+        <a class="nav-analytics nav-library" href="#library" aria-label="Library" title="Library: your files and activity by subject">
+          <svg class="ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-book"/></svg>
+          <span>Library</span>
         </a>
         <a class="nav-analytics" href="#progress" aria-label="Analytics" title="Progress & analytics">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
           <span>Analytics</span>
         </a>
         <div class="seg skin-switch" id="skinSwitch" role="group" aria-label="Interface design">
-          <button type="button" data-skin-choice="glass" aria-pressed="true">Glass</button>
-          <button type="button" data-skin-choice="editorial" aria-pressed="false">Editorial</button>
+          <button type="button" data-skin-choice="editorial" aria-pressed="true">Editorial</button>
+          <button type="button" data-skin-choice="glass" aria-pressed="false">Glass</button>
         </div>
-        <button class="toggle" id="themeToggle" aria-label="Toggle light and dark theme" title="Toggle theme">
+        <button class="toggle" id="themeToggle" aria-label="Toggle light and dark theme" aria-pressed="false" title="Toggle theme">
           <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2 12h2M20 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
           <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.6 6.6 0 0 0 9.8 9.8z"/></svg>
         </button>
@@ -86,14 +243,18 @@
       </div>
     </nav>
 
-    <div id="keywarn"></div>
+    <div id="keywarn" aria-live="polite"></div>
 
+    <!-- Single stable landmark wrapping whichever route is visible; #home/#view toggle via
+         [hidden] so only one is ever exposed to assistive tech at a time. tabindex="-1" lets
+         the skip-link (and post-navigation focus in app.js) target it directly. -->
+    <div class="main-content" id="mainContent" role="main" tabindex="-1">
     <!-- HOME -->
     <section id="home">
       <header class="hero">
         <span class="eyebrow glass"><span class="dot"></span>Your all-in-one learning companion</span>
-        <h1>Study smarter with<br><span class="glow">AI</span> built around <em>you</em>.</h1>
-        <p>Ten intelligent tools — from grounded chat and mock exams to a Socratic tutor, mind maps and cheat sheets — built on your own lecture material, powered by Groq. A live progress dashboard tracks it all.</p>
+        <h1 tabindex="-1" id="homeHeading">Study smarter with<br><span class="glow">AI</span> built around <em>you</em>.</h1>
+        <p>Ten intelligent tools — from grounded chat and mock exams to a Socratic tutor, mind maps and cheat sheets — built on your own lecture material, powered by a multi-provider AI chain. A live progress dashboard tracks it all.</p>
         <div class="stats">
           <span class="stat glass"><b>10</b> AI tools</span>
           <span class="stat glass"><b id="stat-subjects">·</b> subjects</span>
@@ -103,7 +264,7 @@
 
       <div class="section-head"><h3>Open a tool</h3><span>Everything in one place</span></div>
 
-      <main class="grid">
+      <div class="grid">
         <a class="card glass c1" href="#chat" aria-label="Open Apex Agent">
           <span class="wash"></span><span class="sheen"></span>
           <div class="card-top">
@@ -214,14 +375,16 @@
           <p>Photograph handwritten notes — vision AI transcribes them into clean, searchable markdown.</p>
           <div class="card-foot"><span class="open">Scan notes <span class="arrow" aria-hidden="true">→</span></span><span class="port">OCR</span></div>
         </a>
-      </main>
+      </div>
     </section>
 
     <!-- TOOL VIEW (rendered by app.js) -->
     <section id="view" class="view" hidden></section>
+    </div>
 
     <!-- FOOTER -->
     <footer class="foot glass">
+      <p class="ai-model-foot" id="aiModelFoot" role="status" aria-live="off"><b>AI model</b> · <span id="aiModelFootText">Auto · best available model (5-key chain)</span></p>
       <p><b>Apex Agent</b> · <b>Quiz</b> · <b>Flashcards</b> · <b>Planner</b> · <b>Mind Map</b> · <b>Mock Exam</b> · <b>Teach-back</b> · <b>Predictor</b> · <b>Cheat Sheet</b> · <b>Scan Notes</b></p>
       <p class="by">Crafted by Praneeth Gandra · Made with <span class="heart">♥</span></p>
     </footer>
@@ -229,32 +392,12 @@
 
   <div class="toast-wrap" id="toasts" aria-live="polite"></div>
 
-  <!-- runtime-config FIRST OF ALL: seeds window.__API_BASE__ so the SPA knows where the API is
-       (same-origin "/api" in single-server mode, or the absolute API_BASE_URL when the SPA runs
-       on its own port). Served by whichever server delivered this page. -->
-  <script src="/runtime-config.js"></script>
-  <!-- config: defines window.AppConfig (apiBase, models, provider) and starts loading /api/config -->
-  <script src="/assets/config.js"></script>
-  <!-- runtime: defines window.api / window.ui / window.Views synchronously (reads AppConfig) -->
-  <script src="/assets/app.js"></script>
-  <!-- tool views (each registers window.Views.<name>); render() waits for DOMContentLoaded -->
-  <script src="/assets/views/chat.js"></script>
-  <script src="/assets/views/quiz.js"></script>
-  <script src="/assets/views/flashcards.js"></script>
-  <script src="/assets/views/planner.js"></script>
-  <script src="/assets/views/subjects.js"></script>
-  <script src="/assets/views/mindmap.js"></script>
-  <script src="/assets/views/exam.js"></script>
-  <script src="/assets/views/teachback.js"></script>
-  <script src="/assets/views/predictor.js"></script>
-  <script src="/assets/views/progress.js"></script>
-  <script src="/assets/views/cheatsheet.js"></script>
-  <script src="/assets/views/scannotes.js"></script>
-  <!-- inline artifact renderer: turns chat-built artifacts into live interactive widgets -->
-  <script src="/assets/artifact-inline.js"></script>
-  <!-- voice tutor augments the chat composer (mic + read-aloud); must load after the chat view -->
-  <script src="/assets/voice.js" defer></script>
-  <!-- auth gate LAST (ES module, deferred): reads window.AppConfig + window.ui, loads Clerk only if a key is set -->
-  <script type="module" src="/assets/auth.js"></script>
+  <!-- All scripts are deferred (execute in order after parsing, never block first paint).
+       Tool views, the inline-artifact renderer and the voice tutor are NOT listed here:
+       app.js injects each one on first navigation (see VIEW_DEPS / loadView). -->
+  <script defer src="/assets/perf-motion.js?v=7b74d84e51"></script>
+  <script defer src="/assets/config.js?v=7b74d84e51"></script>
+  <script defer src="/assets/app.js?v=7b74d84e51"></script>
+  <script type="module" src="/assets/auth.js?v=7b74d84e51"></script>
 </body>
 </html>

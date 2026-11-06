@@ -6,17 +6,19 @@
    ============================================================ */
 (() => {
   "use strict";
-  const { el, clear, esc, spinner, toast } = window.ui;
+  const { el, clear, esc, spinner, empty, toast } = window.ui;
   const KEYS = ["A", "B", "C", "D"];
   const DIFFICULTIES = ["easy", "medium", "hard"];
 
   let root = null;
+  let llmLine = null;
   let lastMeta = null; // {subject, topic} of the most recent quiz — for progress recording
+  const GU = () => (window.GradeUI ? Promise.resolve(window.GradeUI) : window.ui.loadScript("/assets/grade-ui.js").then(() => window.GradeUI));
 
   // Open a saved quiz doc (history drawer item or chat-artifact deep-link).
   function openSavedQuiz(saved) {
     lastMeta = { topic: (saved && saved.title) || null };
-    renderRunner((saved && saved.questions) || []);
+    renderRunner((saved && saved.questions) || [], saved && saved.llm, true, saved && saved.id);
   }
 
   /* ---------------- setup screen ---------------- */
@@ -28,17 +30,17 @@
 
     const panel = el(`
       <div class="panel stack" style="max-width:640px;margin:0 auto">
-        <div class="between" style="align-items:flex-start">
-          <div class="stack-sm" style="flex:1">
-            <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em">Build a quiz</h3>
-            <p class="muted">Pick a source, choose how hard and how many — Groq writes the questions.</p>
+        <div class="between" style="align-items:flex-start;gap:.75rem">
+          <div class="stack-sm" style="flex:1;min-width:0">
+            <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em;overflow-wrap:anywhere">Build a quiz</h3>
+            <p class="muted">Pick a source, choose how hard and how many — the AI writes the questions.</p>
           </div>
-          <button id="q-hist" class="btn" type="button" style="flex:none;padding:.4rem .8rem;font-size:.85rem;gap:.35rem">≡ History</button>
+          <button id="q-hist" class="icon-btn ib-outline" type="button" aria-label="Open quiz history" title="Open quiz history">${window.ui.iconHtml("history")}</button>
         </div>
 
         <div class="field">
-          <span class="label">Source</span>
-          <div class="seg" id="q-src" role="tablist" aria-label="Quiz source">
+          <span class="label" id="q-src-label">Source</span>
+          <div class="seg" id="q-src" role="tablist" aria-labelledby="q-src-label" style="flex-wrap:wrap">
             <button type="button" data-src="subject" aria-pressed="true">Subject</button>
             <button type="button" data-src="topic" aria-pressed="false">Topic</button>
             <button type="button" data-src="upload" aria-pressed="false">Upload PDF</button>
@@ -48,19 +50,19 @@
         <div id="q-srcctl"></div>
 
         <div class="field">
-          <span class="label">Difficulty</span>
-          <div class="seg" id="q-diff" role="group" aria-label="Difficulty"></div>
+          <span class="label" id="q-diff-label">Difficulty</span>
+          <div class="seg" id="q-diff" role="group" aria-labelledby="q-diff-label" style="flex-wrap:wrap"></div>
         </div>
 
         <div class="field">
           <div class="between">
             <label class="label" for="q-num" style="margin:0">Number of questions</label>
-            <span class="badge badge-accent count" id="q-num-out">5</span>
+            <span class="badge badge-accent count" id="q-num-out" aria-live="polite">5</span>
           </div>
-          <input id="q-num" type="range" min="5" max="15" step="5" value="5" aria-label="Number of questions">
+          <input id="q-num" type="range" min="5" max="15" step="5" value="5" aria-valuemin="5" aria-valuemax="15" aria-valuenow="5" aria-label="Number of questions">
         </div>
 
-        <button id="q-go" class="btn-accent btn-lg btn-block">Generate quiz</button>
+        <button id="q-go" class="btn-accent btn-lg btn-block" type="button">Generate quiz</button>
       </div>
     `);
     root.append(panel);
@@ -89,7 +91,10 @@
       diffSeg.append(b);
     });
 
-    numInput.addEventListener("input", () => { numOut.textContent = numInput.value; });
+    numInput.addEventListener("input", () => {
+      numOut.textContent = numInput.value;
+      numInput.setAttribute("aria-valuenow", numInput.value);
+    });
 
     // ---- subject mode: load a subject's PDFs into the document select ----
     async function loadPdfs(subject, pdfSel, pdfHint) {
@@ -169,12 +174,12 @@
     function buildUploadMode() {
       const wrap = el(`
         <div class="field" style="margin:0">
-          <label class="label">PDF</label>
-          <div class="row row-wrap">
-            <label class="btn" for="q-file" style="cursor:pointer">Choose PDF…</label>
-            <span class="muted" id="q-file-name">No file selected</span>
+          <label class="label" for="q-file">PDF</label>
+          <div class="row row-wrap" style="align-items:center">
+            <label class="btn" for="q-file" style="cursor:pointer;flex:none">Choose PDF…</label>
+            <span class="muted" id="q-file-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">No file selected</span>
           </div>
-          <input id="q-file" type="file" accept="application/pdf" hidden />
+          <input id="q-file" type="file" accept="application/pdf" hidden aria-label="Upload PDF for quiz" />
           <div class="hint">Upload a PDF and quiz yourself on its contents.</div>
         </div>`);
       srcCtl.append(wrap);
@@ -183,6 +188,7 @@
       input.addEventListener("change", () => {
         pdfFile = input.files && input.files[0] ? input.files[0] : null;
         nameSlot.textContent = pdfFile ? pdfFile.name : "No file selected";
+        nameSlot.title = pdfFile ? pdfFile.name : "";
       });
     }
 
@@ -242,19 +248,22 @@
         const res = await request();
         const questions = (res && res.questions) || [];
         if (!questions.length) throw new Error("No questions came back; try again.");
-        renderRunner(questions);
+        renderRunner(questions, res && res.llm, false, res && res.id);
       } catch (e) {
         toast(e.message, "error");
         goBtn.disabled = false;
         goBtn.textContent = original;
-        load.remove();
+        load.replaceWith(window.ui.errorBlock(e, e.retryable ? () => goBtn.click() : null));
       }
     });
   }
 
   /* ---------------- quiz runner ---------------- */
-  function renderRunner(questions) {
+  function renderRunner(questions, llm, stored, quizId) {
     clear(root);
+    GU().catch(() => {});                              // warm the shared results component while the student answers
+    const attemptId = "qz" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);   // idempotency key for the submit
+    const startedAt = Date.now();
     const total = questions.length;
     let index = 0;
     const answers = new Array(total).fill(null); // selected key per question
@@ -272,6 +281,8 @@
       </div>
     `);
     root.append(panel);
+    llmLine = window.ui.renderModelLabel(llm, { stored: !!stored });   // mandatory "Model: …" line (stored = reopened from history)
+    if (llmLine) panel.append(llmLine);
 
     const countEl = panel.querySelector("#qz-count");
     const scoreEl = panel.querySelector("#qz-score");
@@ -287,13 +298,13 @@
       bar.style.width = `${((index) / total) * 100}%`;
 
       clear(body);
-      body.append(el(`<h3 style="font-family:var(--font-display);font-weight:700;line-height:1.3;letter-spacing:-.01em">${esc(q.question)}</h3>`));
+      body.append(el(`<h3 style="font-family:var(--font-display);font-weight:700;line-height:1.3;letter-spacing:-.01em;overflow-wrap:anywhere">${esc(q.question)}</h3>`));
 
       const opts = el(`<div class="opts" role="group" aria-label="Answer options"></div>`);
       const buttons = {};
       KEYS.forEach((key) => {
         const text = (q.options && q.options[key]) || "";
-        const b = el(`<button class="opt" type="button" data-key="${key}"><span class="key">${key}</span><span>${esc(text)}</span></button>`);
+        const b = el(`<button class="opt" type="button" data-key="${key}" aria-label="Option ${key}: ${esc(text)}"><span class="key">${key}</span><span style="min-width:0;overflow-wrap:anywhere">${esc(text)}</span></button>`);
         b.addEventListener("click", () => lockIn(key, buttons, q));
         buttons[key] = b;
         opts.append(b);
@@ -317,14 +328,14 @@
 
       const verdict = chosen === q.correct ? "Correct" : `Not quite — the answer is ${q.correct}`;
       body.append(el(
-        `<div class="explain"><strong>${esc(verdict)}.</strong> ${esc(q.explanation)}</div>`
+        `<div class="explain" role="status" style="overflow-wrap:anywhere"><strong>${esc(verdict)}.</strong> ${esc(q.explanation || "")}</div>`
       ));
 
       const nextLabel = index < total - 1 ? "Next question →" : "See results →";
       const next = el(`<button class="btn-accent btn-block" type="button">${nextLabel}</button>`);
       next.addEventListener("click", () => {
         if (index < total - 1) { index += 1; paintQuestion(); }
-        else renderResults(questions, answers);
+        else renderResults(questions, answers, { llm, quizId, attemptId, startedAt });
       });
       body.append(next);
       next.focus();
@@ -333,66 +344,35 @@
     paintQuestion();
   }
 
-  /* ---------------- results ---------------- */
-  function renderResults(questions, answers) {
+  /* ---------------- results (marked + recorded by POST /api/grade; same component as the exam and chat widgets) ---------------- */
+  async function renderResults(questions, answers, run) {
     clear(root);
     const total = questions.length;
-    const correct = answers.reduce((n, sel, i) => n + (sel === questions[i].correct ? 1 : 0), 0);
-    const pct = total ? Math.round((correct / total) * 100) : 0;
-
-    // Fire-and-forget progress event — failures must never affect the quiz UI.
-    if (total > 0) {
-      try { window.api.post("/progress/record", Object.assign({ tool: "quiz", correct, total }, lastMeta || {})).catch(() => {}); } catch (_) {}
-    }
-
-    let line;
-    if (pct === 100) line = "Perfect score — outstanding work.";
-    else if (pct >= 80) line = "Great job! A solid understanding.";
-    else if (pct >= 60) line = "Good effort — keep practising.";
-    else line = "Keep studying — you’ll get there.";
-
+    const localCorrect = answers.reduce((n, sel, i) => n + (sel === questions[i].correct ? 1 : 0), 0);
     const panel = el(`
       <div class="panel stack" style="max-width:680px;margin:0 auto">
-        <div class="center stack-sm">
-          <div class="score-ring">${pct}%</div>
-          <p style="font-family:var(--font-display);font-weight:600;font-size:1.1rem">${esc(line)}</p>
-          <p class="muted">You answered ${correct} of ${total} correctly.</p>
-        </div>
-        <div class="stack-sm" id="rv-list"></div>
-        <button id="rv-new" class="btn-accent btn-lg btn-block" type="button">New quiz</button>
+        <div id="rv-local" class="muted" role="status" aria-live="polite" hidden></div>
+        <div id="rv-result"></div>
       </div>
     `);
     root.append(panel);
-
-    const list = panel.querySelector("#rv-list");
-    questions.forEach((q, i) => {
-      const sel = answers[i];
-      const ok = sel === q.correct;
-      const review = el(`
-        <details class="panel-soft">
-          <summary style="cursor:pointer;font-weight:600">
-            <span class="badge ${ok ? "badge-accent" : ""}">${ok ? "✓" : "✗"}</span>
-            Question ${i + 1}
-          </summary>
-          <div class="stack-sm" style="margin-top:.8rem">
-            <p><strong>${esc(q.question)}</strong></p>
-            <div class="opts" style="margin-top:.4rem"></div>
-            <div class="explain">${esc(q.explanation)}</div>
-          </div>
-        </details>
-      `);
-      const opts = review.querySelector(".opts");
-      KEYS.forEach((key) => {
-        const text = (q.options && q.options[key]) || "";
-        const o = el(`<div class="opt" aria-disabled="true"><span class="key">${key}</span><span>${esc(text)}</span></div>`);
-        if (key === q.correct) o.dataset.state = "correct";
-        else if (key === sel) o.dataset.state = "wrong";
-        opts.append(o);
-      });
-      list.append(review);
+    const box = panel.querySelector("#rv-result");
+    const local = panel.querySelector("#rv-local");
+    const meta = lastMeta || {};
+    const ans = {};
+    answers.forEach((sel, i) => { if (sel) ans["q" + (i + 1)] = sel; });
+    let GradeUI;
+    try { GradeUI = await GU(); } catch (e) { box.append(window.ui.errorBlock(e, () => renderResults(questions, answers, run))); return; }
+    GradeUI.gradeInto(box, {
+      kind: "quiz", subject: meta.subject || undefined, topic: meta.topic || undefined,
+      title: "Quiz \u00b7 " + (meta.topic || meta.subject || "practice"),
+      items: questions, answers: ans, attempt_id: run.attemptId, quiz_id: run.quizId || undefined,
+      duration_seconds: Math.round((Date.now() - run.startedAt) / 1000), generated_llm: run.llm || undefined,
+    }, {
+      newLabel: "New quiz", onNew: () => renderSetup(), loading: "Marking and saving your quiz\u2026",
+      onError: () => { local.hidden = false; local.textContent = `You answered ${localCorrect} of ${total} correctly - this result is not saved yet. Use Retry to save it.`; },
+      onResult: () => { local.hidden = true; window.api.invalidate && window.api.invalidate("/progress"); },
     });
-
-    panel.querySelector("#rv-new").addEventListener("click", () => renderSetup());
   }
 
   /* ---------------- view registration ---------------- */

@@ -130,12 +130,52 @@ class AddSubjectStoresToDbTests(unittest.TestCase):
 
     def test_add_subject_calls_store_with_stored_name(self):
         # Stub the embedding build (no model/network) and capture the DB writes.
-        with mock.patch.object(subjects_service.vector_store, "build_subject_index", return_value=7), \
+        # (_PDF_BYTES is a fake body, so PDF validation is stubbed; uploads are always owner-scoped.)
+        with mock.patch.object(subjects_service, "inspect_pdf", return_value=1), \
+             mock.patch.object(subjects_service.vector_store, "build_subject_index", return_value=7), \
+             mock.patch.object(subjects_service.vector_store, "index_status",
+                               return_value={"n_chunks": 7, "n_embedded": 7, "complete": True}), \
              mock.patch.object(db, "store_uploaded_pdf", return_value=True) as store:
-            result = subjects_service.add_subject("Algorithms", [("Lec-1.pdf", _PDF_BYTES)])
+            result = subjects_service.add_subject("Algorithms", [("Lec-1.pdf", _PDF_BYTES)], "u1")
         self.assertEqual(result.chunk_count, 7)
         self.assertEqual(result.saved_pdfs, ["Lec-1.pdf"])
-        store.assert_called_once_with("Algorithms", "Lec-1.pdf", _PDF_BYTES, None)
+        store.assert_called_once_with("Algorithms", "Lec-1.pdf", _PDF_BYTES, "u1")
+        self.assertTrue((self.docs / "user__u1__Algorithms" / "Lec-1.pdf").is_file())
+
+
+class IndexBlobNoPersistenceTests(unittest.TestCase):
+    """Retrieval-index storage is owner-scoped and a safe no-op without MongoDB."""
+
+    def test_all_index_helpers_degrade_gracefully_when_off(self):
+        self.assertFalse(db.store_index_blob("user__u1__N", "u1", "N", "v1", b"zip"))
+        self.assertIsNone(db.load_index_blob("user__u1__N", "u1"))
+        self.assertIsNone(db.get_index_version("user__u1__N", "u1"))
+        self.assertEqual(db.list_user_subjects("u1"), [])
+        self.assertEqual(db.fetch_uploaded_pdfs("u1", "N"), [])
+        self.assertEqual(db.delete_index_blob("user__u1__N", "u1"), 0)
+
+    def test_ownerless_calls_never_touch_storage(self):
+        with mock.patch.object(db, "_index_gridfs") as fs, mock.patch.object(db, "_gridfs") as fs2:
+            self.assertFalse(db.store_index_blob("k", None, "N", "v", b"x"))
+            self.assertIsNone(db.load_index_blob("k", None))
+            self.assertEqual(db.fetch_uploaded_pdfs(None, "N"), [])
+            self.assertEqual(db.list_user_subjects(None), [])
+        fs.assert_not_called()
+        fs2.assert_not_called()
+
+    def test_store_filters_by_owner_and_replaces_old_versions(self):
+        fake = mock.MagicMock()
+        fake.put.return_value = "new-id"
+        old = mock.MagicMock(_id="old-id")
+        fake.find.return_value = [old]
+        with mock.patch.object(db, "_index_gridfs", return_value=fake):
+            self.assertTrue(db.store_index_blob("user__u1__N", "u1", "N", "v2", b"zip"))
+            fake.find.return_value = []
+            fake.find_one.return_value = None
+            db.load_index_blob("user__u1__N", "u2")
+        fake.delete.assert_called_once_with("old-id")
+        self.assertEqual(fake.find.call_args.args[0]["owner"], "u1")
+        self.assertEqual(fake.find_one.call_args.args[0], {"subject_key": "user__u1__N", "owner": "u2"})
 
 
 if __name__ == "__main__":

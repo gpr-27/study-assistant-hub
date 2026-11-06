@@ -17,18 +17,19 @@
 
   let root = null;
   let timerHandle = null;
+  const GU = () => (window.GradeUI ? Promise.resolve(window.GradeUI) : window.ui.loadScript("/assets/grade-ui.js").then(() => window.GradeUI));
 
   function stopTimer() {
     if (timerHandle) { clearInterval(timerHandle); timerHandle = null; }
   }
 
   function histButton(anchorPanel) {
-    const btn = el(`<button class="btn" type="button" style="flex:none;padding:.4rem .8rem;font-size:.85rem">≡ History</button>`);
+    const btn = el(`<button class="icon-btn ib-outline" type="button" aria-label="Open past exams" title="Open past exams">${window.ui.iconHtml("history")}</button>`);
     btn.addEventListener("click", (e) =>
       window.ui.openHistoryDrawer("exams", {
         title: "Past exams",
         anchor: e.currentTarget,
-        onOpen: (saved) => renderReport(saved),
+        onOpen: (saved) => renderReport(saved, true),
       }));
     return btn;
   }
@@ -43,17 +44,17 @@
 
     const panel = el(`
       <div class="panel stack" style="max-width:640px;margin:0 auto">
-        <div class="between" style="align-items:flex-start">
-          <div class="stack-sm" style="flex:1">
-            <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em">Mock exam</h3>
-            <p class="muted">Pick a source — Groq sets a timed paper of MCQs and short answers, then grades it.</p>
+        <div class="between" style="align-items:flex-start;gap:.75rem">
+          <div class="stack-sm" style="flex:1;min-width:0">
+            <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em;overflow-wrap:anywhere">Mock exam</h3>
+            <p class="muted">Pick a source — the AI sets a timed paper of MCQs and short answers, then grades it.</p>
           </div>
-          <span id="ex-hist-slot"></span>
+          <span id="ex-hist-slot" style="flex:none"></span>
         </div>
 
         <div class="field">
-          <span class="label">Source</span>
-          <div class="seg" id="ex-src" role="tablist" aria-label="Exam source">
+          <span class="label" id="ex-src-label">Source</span>
+          <div class="seg" id="ex-src" role="tablist" aria-labelledby="ex-src-label" style="flex-wrap:wrap">
             <button type="button" data-src="subject" aria-pressed="true">Subject</button>
             <button type="button" data-src="topic" aria-pressed="false">Topic</button>
             <button type="button" data-src="upload" aria-pressed="false">Upload PDF</button>
@@ -120,12 +121,12 @@
         clear(pdfList);
         for (const p of pdfs) {
           const row = el(`
-            <label class="row between" style="cursor:pointer;gap:.6rem">
-              <span class="row" style="gap:.55rem">
-                <input type="checkbox" value="${esc(p.name)}" />
-                <span class="soft">${esc(p.name)}</span>
+            <label class="row between" style="cursor:pointer;gap:.6rem;min-width:0">
+              <span class="row" style="gap:.55rem;min-width:0;flex:1">
+                <input type="checkbox" value="${esc(p.name)}" aria-label="${esc(p.name)}" />
+                <span class="soft" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.name)}">${esc(p.name)}</span>
               </span>
-              <span class="badge">${esc(p.pages)} pg</span>
+              <span class="badge" style="flex:none">${esc(p.pages)} pg</span>
             </label>
           `);
           row.querySelector("input").addEventListener("change", refreshCount);
@@ -190,12 +191,12 @@
     function buildUploadMode() {
       const wrap = el(`
         <div class="field" style="margin:0">
-          <label class="label">PDF</label>
-          <div class="row row-wrap">
-            <label class="btn" for="ex-file" style="cursor:pointer">Choose PDF…</label>
-            <span class="muted" id="ex-file-name">No file selected</span>
+          <label class="label" for="ex-file">PDF</label>
+          <div class="row row-wrap" style="align-items:center">
+            <label class="btn" for="ex-file" style="cursor:pointer;flex:none">Choose PDF…</label>
+            <span class="muted" id="ex-file-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">No file selected</span>
           </div>
-          <input id="ex-file" type="file" accept="application/pdf" hidden />
+          <input id="ex-file" type="file" accept="application/pdf" hidden aria-label="Upload PDF for mock exam" />
           <div class="hint">Upload a PDF and sit an exam on its contents.</div>
         </div>`);
       srcCtl.append(wrap);
@@ -204,6 +205,7 @@
       input.addEventListener("change", () => {
         pdfFile = input.files && input.files[0] ? input.files[0] : null;
         nameSlot.textContent = pdfFile ? pdfFile.name : "No file selected";
+        nameSlot.title = pdfFile ? pdfFile.name : "";
       });
     }
 
@@ -271,23 +273,25 @@
         const res = await request();
         const questions = (res && res.questions) || [];
         if (!questions.length) throw new Error("No questions came back; try again.");
-        renderExam(label, questions, minutes, model);
+        renderExam(label, questions, minutes, model, res && res.llm);
       } catch (e) {
         toast(e.message, "error");
         goBtn.disabled = false;
         goBtn.textContent = original;
-        load.remove();
+        load.replaceWith(window.ui.errorBlock(e, e.retryable ? () => goBtn.click() : null));
       }
     });
   }
 
   /* ---------------- exam runner (one-page paper) ---------------- */
-  function renderExam(subject, questions, minutes, model) {
+  function renderExam(subject, questions, minutes, model, llm) {
     stopTimer();
     clear(root);
     const answers = {};   // id -> selected option index (mcq) | text (short)
     const startedAt = Date.now();
+    const attemptId = "ex" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);   // idempotency key: retry / double-click safe
     let submitted = false;
+    GU().catch(() => {});
 
     const panel = el(`
       <div class="panel stack" style="max-width:680px;margin:0 auto">
@@ -300,27 +304,32 @@
       </div>
     `);
     root.append(panel);
+    { const l = window.ui.renderModelLabel(llm); if (l) panel.insertBefore(l, panel.querySelector("#ex-paper")); }   // "Model: …" (exam generator)
 
-    panel.querySelector("#ex-meta").textContent =
-      `${subject} · ${questions.length} question${questions.length === 1 ? "" : "s"}`;
+    const metaEl = panel.querySelector("#ex-meta");
+    metaEl.textContent = `${subject} · ${questions.length} question${questions.length === 1 ? "" : "s"}`;
+    metaEl.title = metaEl.textContent;
+    metaEl.style.cssText = "min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
     const paper = panel.querySelector("#ex-paper");
     const clock = panel.querySelector("#ex-clock");
+    clock.setAttribute("aria-live", "polite");
     const submitBtn = panel.querySelector("#ex-submit");
 
     questions.forEach((q, i) => {
       const card = el(`<article class="panel-soft stack-sm"></article>`);
       card.append(el(`
-        <div class="between">
-          <span class="badge">Q${i + 1}</span>
-          <span class="badge">${q.type === "mcq" ? "1 mark" : "5 marks"} · ${esc(q.topic || "General")}</span>
+        <div class="between" style="gap:.5rem;align-items:flex-start">
+          <span class="badge" style="flex:none">Q${i + 1}</span>
+          <span class="badge" style="min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc((q.type === "mcq" ? "1 mark" : "5 marks") + " · " + (q.topic || "General"))}">${q.type === "mcq" ? "1 mark" : "5 marks"} · ${esc(q.topic || "General")}</span>
         </div>`));
-      card.append(el(`<p style="font-weight:600;line-height:1.45">${esc(q.question)}</p>`));
+      card.append(el(`<p style="font-weight:600;line-height:1.45;overflow-wrap:anywhere">${esc(q.question)}</p>`));
 
       if (q.type === "mcq") {
-        const opts = el(`<div class="opts" role="group" aria-label="Answer options" style="margin-top:.2rem"></div>`);
+        const opts = el(`<div class="opts" role="group" aria-label="Answer options for question ${i + 1}" style="margin-top:.2rem"></div>`);
         const buttons = [];
         (q.options || []).forEach((text, idx) => {
-          const b = el(`<button class="opt" type="button" aria-pressed="false"><span class="key">${String.fromCharCode(65 + idx)}</span><span>${esc(text)}</span></button>`);
+          const key = String.fromCharCode(65 + idx);
+          const b = el(`<button class="opt" type="button" aria-pressed="false" aria-label="Option ${key}: ${esc(text)}"><span class="key">${key}</span><span style="min-width:0;overflow-wrap:anywhere">${esc(text)}</span></button>`);
           b.addEventListener("click", () => {
             answers[q.id] = idx;
             buttons.forEach((other, j) => other.setAttribute("aria-pressed", String(j === idx)));
@@ -330,7 +339,7 @@
         });
         card.append(opts);
       } else {
-        const ta = el(`<textarea class="textarea" rows="4" placeholder="Type your answer…" aria-label="Your answer"></textarea>`);
+        const ta = el(`<textarea class="textarea" rows="4" placeholder="Type your answer…" aria-label="Your answer for question ${i + 1}" style="width:100%;box-sizing:border-box;resize:vertical"></textarea>`);
         ta.addEventListener("input", () => { answers[q.id] = ta.value; });
         card.append(ta);
       }
@@ -346,21 +355,22 @@
       const load = spinner(auto ? "Time’s up — grading your answers…" : "Grading your answers…");
       panel.append(load);
       try {
-        const report = await window.api.post("/exam/grade", {
-          subject,
-          questions,
-          answers,
-          duration_seconds: Math.round((Date.now() - startedAt) / 1000),
-          model,
-        });
-        if (report && report.id) toast("Exam report saved to history.", "ok");
-        renderReport(report);
+        const payload = {
+          kind: "exam", subject, title: "Exam \u00b7 " + subject, items: questions, answers,
+          attempt_id: attemptId, duration_seconds: Math.round((Date.now() - startedAt) / 1000),
+          generated_llm: llm || undefined,       // lets the saved report name who wrote the paper
+        };
+        const GradeUI = await GU();
+        const result = await window.api.post("/grade", payload);
+        if (result && result.saved) toast("Exam report saved to history.", "ok");
+        window.api.invalidate && window.api.invalidate("/progress");
+        renderGraded(result, { payload, items: questions });
       } catch (e) {
         toast("Grading failed: " + e.message, "error");
         submitted = false;
         submitBtn.disabled = false;
         submitBtn.textContent = "Submit exam";
-        load.remove();
+        load.replaceWith(window.ui.errorBlock(e, e.retryable ? () => submit(false) : null));
       }
     }
 
@@ -383,7 +393,25 @@
   }
 
   /* ---------------- report (fresh grade or reopened from history) ---------------- */
-  function renderReport(report) {
+  async function renderGraded(result, extra) {
+    stopTimer();
+    clear(root);
+    const panel = el(`
+      <div class="panel stack" style="max-width:680px;margin:0 auto">
+        <div class="between" style="align-items:flex-start"><span></span><span id="ex-rep-hist"></span></div>
+        <div id="ex-result"></div>
+      </div>`);
+    root.append(panel);
+    panel.querySelector("#ex-rep-hist").append(histButton(panel));
+    const box = panel.querySelector("#ex-result");
+    try {
+      const GradeUI = await GU();
+      GradeUI.renderResult(box, result, Object.assign({ newLabel: "New exam", onNew: () => renderSetup() }, extra || {}));
+    } catch (e) { box.append(window.ui.errorBlock(e, () => renderGraded(result, extra))); }
+  }
+
+  function renderReport(report, fromHistory) {
+    if (report && report.result && Array.isArray(report.result.items)) { renderGraded(report.result, {}); return; }   // unified (new) report
     stopTimer();
     clear(root);
     const per = (report && report.per_question) || [];
@@ -418,6 +446,13 @@
       </div>
     `);
     root.append(panel);
+    {   // "Model: …" for the questions (generator) AND for the marking/feedback (grader), when each ran
+      const anchor = panel.querySelector("#ex-new");
+      const gen = window.ui.renderModelLabel(report && report.generated_llm, { caption: "Questions", stored: !!fromHistory });
+      const gr = window.ui.renderModelLabel(report && report.llm, { caption: "Marking", quiet: !!fromHistory });
+      if (gen) panel.insertBefore(gen, anchor);
+      if (gr) panel.insertBefore(gr, anchor);
+    }
     panel.querySelector("#ex-rep-hist").append(histButton(panel));
 
     const topicsBox = panel.querySelector("#ex-topics");
@@ -427,9 +462,9 @@
         const width = t.possible ? Math.round((t.earned / t.possible) * 100) : 0;
         const row = el(`
           <div class="stack-sm" style="gap:.3rem">
-            <div class="between">
-              <span class="soft">${esc(t.topic)}</span>
-              <span class="badge">${esc(t.earned)} / ${esc(t.possible)}</span>
+            <div class="between" style="gap:.5rem">
+              <span class="soft" style="min-width:0;overflow-wrap:anywhere">${esc(t.topic)}</span>
+              <span class="badge" style="flex:none">${esc(t.earned)} / ${esc(t.possible)}</span>
             </div>
             <div class="progress"><i style="width:${width}%"></i></div>
           </div>`);
@@ -470,6 +505,9 @@
     async mount(node) {
       root = node;
       await renderSetup();
+      // Library deep-link: open the saved exam report instead of leaving Setup showing.
+      const _art = window.ui.takeArtifact(["exams"]);
+      if (_art) window.api.get(`/history/${_art.kind}/${encodeURIComponent(_art.id)}`).then((saved) => renderReport(saved, true)).catch(() => {});
     },
     unmount() {
       stopTimer();

@@ -16,14 +16,17 @@ Design rules enforced here:
   * A few non-environment-specific tuning knobs (log level, token budget) carry safe,
     documented defaults because they are identical across dev and prod.
 
-The app runs entirely on Groq for LLM inference; embeddings run locally via fastembed,
-so the only secret required is ``GROQ_API_KEY``.
+LLM inference goes through the 5-key provider chain in ``backend/llm_chain.py``
+(ANTHROPIC_API_KEY -> GROQ_API_KEY -> GROQ_API_KEY_2 -> GEMINI_API_KEY -> GEMINI_API_KEY_2).
+The app is valid when ANY ONE of those keys is set; the chain picks the model, so
+AVAILABLE_MODELS / DEFAULT_MODEL are now optional UI hints. Embeddings use Gemini REST.
 """
 from __future__ import annotations
 
 import logging
 import os
 import re
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -34,7 +37,8 @@ from dotenv import load_dotenv
 # the current working directory. This is the ONLY entry point through which
 # configuration enters the application.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(_REPO_ROOT / ".env")
+if not (os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV")):   # serverless: real env only
+    load_dotenv(_REPO_ROOT / ".env")
 
 log = logging.getLogger("backend.config")
 
@@ -58,9 +62,24 @@ ENV_DEVELOPMENT: str = "development"
 ENV_PRODUCTION: str = "production"
 VALID_ENVIRONMENTS: tuple[str, ...] = (ENV_DEVELOPMENT, ENV_PRODUCTION)
 
-# Providers the code has an integration for. Only "groq" is wired today; adding a
-# provider here means adding its client, not just an env value.
-SUPPORTED_PROVIDERS: tuple[str, ...] = ("groq",)
+# LLM_PROVIDER values the code understands. "chain" (the default) is the 5-key provider chain in
+# backend/llm_chain.py; the legacy single-provider names are still accepted so an old .env keeps
+# validating, but every one of them is served by the chain now.
+SUPPORTED_PROVIDERS: tuple[str, ...] = ("chain", "groq", "anthropic", "gemini")
+
+# The provider chain's API-key env vars, in strict priority order (step 1 -> 5). This must
+# match backend.llm_chain.STEPS (asserted by tests/test_llm_chain.py). Values are read LIVE
+# from the environment (never cached, never logged, never exposed — only booleans leave here).
+CHAIN_KEY_ENV: tuple[tuple[int, str, str], ...] = (
+    (1, "Anthropic", "ANTHROPIC_API_KEY"),
+    (2, "Groq key 1", "GROQ_API_KEY"),
+    (3, "Groq key 2", "GROQ_API_KEY_2"),
+    (4, "Gemini key 1", "GEMINI_API_KEY"),
+    (5, "Gemini key 2", "GEMINI_API_KEY_2"),
+)
+CHAIN_KEY_VARS: tuple[str, ...] = tuple(e for _, _, e in CHAIN_KEY_ENV)
+# What the UI shows instead of a per-user model picker: the chain chooses the model.
+MODEL_POLICY: str = "auto: best available via chain"
 
 # Per-tool optional model overrides map to these env vars; each, if set, must be
 # one of AVAILABLE_MODELS. Unset tools fall back to DEFAULT_MODEL.
@@ -74,12 +93,26 @@ TOOL_MODEL_ENV: dict[str, str] = {
 }
 
 
+def is_serverless() -> bool:
+    """True when running on Vercel (VERCEL / VERCEL_ENV set). Cheap, read live from the env."""
+    return bool(os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV"))
+
+
+def _relaxed_runtime() -> bool:
+    """Serverless or under pytest: bind/split-origin settings are meaningless, never required."""
+    return is_serverless() or "pytest" in sys.modules
+
+
 class ConfigError(RuntimeError):
     """Raised by ``validate_config()`` when required configuration is missing/invalid."""
 
 
+class SessionSecretMissing(RuntimeError):
+    """SESSION_SECRET is unset on Vercel: chat sessions cannot be signed (fail closed, → 503)."""
+
+
 class MissingApiKeyError(RuntimeError):
-    """Raised when an LLM call is attempted without a Groq API key."""
+    """Raised when an LLM call is attempted with none of the chain's API keys configured."""
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +224,9 @@ def _parse_models(raw_list: list[str]) -> tuple[list[str], dict[str, str]]:
 # Resolved configuration (computed once at import from the environment).
 # ---------------------------------------------------------------------------
 # Runtime
-APP_ENV: str | None = _get("APP_ENV")
+# Serverless (Vercel) has no bind host/port and sets its own VERCEL* variables.
+IS_VERCEL: bool = bool(_get("VERCEL") or _get("VERCEL_ENV"))
+APP_ENV: str | None = _get("APP_ENV") or (ENV_PRODUCTION if IS_VERCEL else None)
 HOST: str | None = _get("HOST")
 PORT, _PORT_OK = _get_int("PORT")
 LOG_LEVEL: str = (_get("LOG_LEVEL") or "INFO").upper()
@@ -217,16 +252,21 @@ SPLIT_ORIGIN: bool = FRONTEND_PORT is not None
 API_BASE_URL: str | None = _get("API_BASE_URL")
 
 # Provider / secret
-LLM_PROVIDER: str | None = _get("LLM_PROVIDER")
+LLM_PROVIDER: str | None = _get("LLM_PROVIDER") or "chain"
+# Chain keys (import-time snapshot kept for backward compatibility; the chain itself and the
+# helpers below read the environment live). NEVER print or expose these.
+ANTHROPIC_API_KEY: str | None = _get("ANTHROPIC_API_KEY")
 GROQ_API_KEY: str | None = _get("GROQ_API_KEY")
+GROQ_API_KEY_2: str | None = _get("GROQ_API_KEY_2")
 # Embeddings: hosted Google Gemini (default) instead of a local fastembed model.
 # Set EMBEDDING_PROVIDER=local to fall back to the keyless on-device model.
 GEMINI_API_KEY: str | None = _get("GEMINI_API_KEY")
-# Optional second Gemini key (a separate Google project = a separate free-tier
-# quota bucket). When the primary key's embedding quota is exhausted, requests
-# transparently retry on this key — SAME model, so vectors stay compatible
-# with the existing FAISS indexes.
-GEMINI_API_KEY_FALLBACK: str | None = _get("GEMINI_API_KEY_FALLBACK")
+# Second Gemini key (a separate Google project = a separate free-tier quota bucket). It is
+# step 5 of the LLM chain AND the embeddings rotation partner: when the primary key's embedding
+# quota is exhausted, requests transparently retry on this key — SAME model, so vectors stay
+# compatible. The legacy name GEMINI_API_KEY_FALLBACK is still honoured as an alias.
+GEMINI_API_KEY_2: str | None = _get("GEMINI_API_KEY_2") or _get("GEMINI_API_KEY_FALLBACK")
+GEMINI_API_KEY_FALLBACK: str | None = GEMINI_API_KEY_2
 
 # Auth (optional, Clerk). CLERK_PUBLISHABLE_KEY is a PUBLIC key (safe to send to the
 # browser — that is its purpose); its presence enables the sign-in gate, its absence
@@ -235,6 +275,10 @@ GEMINI_API_KEY_FALLBACK: str | None = _get("GEMINI_API_KEY_FALLBACK")
 CLERK_PUBLISHABLE_KEY: str | None = _get("CLERK_PUBLISHABLE_KEY")
 CLERK_SECRET_KEY: str | None = _get("CLERK_SECRET_KEY")
 AUTH_ENABLED: bool = bool(CLERK_PUBLISHABLE_KEY)
+# HMAC key that signs generated quiz/exam questions (backend/services/grading.py) so graded attempts can be
+# verified against the server's answer key. Optional: falls back to a secret the deployment already has
+# (CLERK_SECRET_KEY / MONGODB_URI), then to a per-process random key (dev only: signatures die on restart).
+GRADING_SECRET: str | None = _get("GRADING_SECRET")
 
 # Persistence (optional, MongoDB). When MONGODB_URI is set, every generated artifact
 # (chats/quizzes/flashcards/plans/mindmaps) is saved and browsable, scoped per user.
@@ -260,6 +304,98 @@ GUEST_TTL_SECONDS: int = max(GUEST_TTL_DAYS, 1) * 86400
 # with a safe default of one day.
 GUEST_PURGE_INTERVAL_SECONDS: int = (_get_int("GUEST_PURGE_INTERVAL_SECONDS")[0]) or 86400
 
+# ---------------------------------------------------------------------------
+# Abuse / spend control, privacy and size limits (all env-tunable; documented in .env.example)
+# ---------------------------------------------------------------------------
+def _env_num(name: str, default: int) -> int:
+    value, ok = _get_int(name)
+    return default if (value is None or not ok or value < 0) else value
+
+
+# Per-owner, per-instance token buckets on the paid (LLM) endpoints - see backend/ratelimit.py.
+# Signed-in users and guests get separate budgets; 0 disables that window.
+RATE_LIMIT_USER_PER_MIN: int = _env_num("RATE_LIMIT_USER_PER_MIN", 30)
+RATE_LIMIT_USER_PER_HOUR: int = _env_num("RATE_LIMIT_USER_PER_HOUR", 300)
+RATE_LIMIT_GUEST_PER_MIN: int = _env_num("RATE_LIMIT_GUEST_PER_MIN", 10)
+RATE_LIMIT_GUEST_PER_HOUR: int = _env_num("RATE_LIMIT_GUEST_PER_HOUR", 60)
+
+
+# Hard, cross-instance SPEND GUARDS on the paid Anthropic step (backend/spend.py). Read live from the
+# environment. Tokens = prompt + completion. 0 = unlimited. When a budget is used up the chain SKIPS
+# Anthropic and the free Groq/Gemini steps keep the app working.
+DEFAULT_ANTHROPIC_DAILY_TOKEN_BUDGET = 0               # global, per UTC day (0 = unlimited; the owner removed the caps)
+DEFAULT_ANTHROPIC_OWNER_DAILY_TOKENS = 0               # per signed-in user, per UTC day (0 = unlimited)
+DEFAULT_ANTHROPIC_GUEST_DAILY_TOKENS = 0               # per guest, per UTC day (0 = unlimited)
+DEFAULT_ANTHROPIC_MAX_REQUEST_INPUT_TOKENS = 0         # per request (estimated); 0 = no product cap (the 190k provider backstop in llm_chain still applies)
+
+
+def _live_budget(name: str, default: int) -> int:
+    value, ok = _get_int(name)
+    return default if (value is None or not ok or value < 0) else value
+
+
+def anthropic_daily_token_budget() -> int:
+    return _live_budget("ANTHROPIC_DAILY_TOKEN_BUDGET", DEFAULT_ANTHROPIC_DAILY_TOKEN_BUDGET)
+
+
+def anthropic_owner_daily_tokens(guest: bool = False) -> int:
+    if guest:
+        return _live_budget("ANTHROPIC_GUEST_DAILY_TOKENS", DEFAULT_ANTHROPIC_GUEST_DAILY_TOKENS)
+    return _live_budget("ANTHROPIC_OWNER_DAILY_TOKENS", DEFAULT_ANTHROPIC_OWNER_DAILY_TOKENS)
+
+
+def anthropic_max_request_input_tokens() -> int:
+    return _live_budget("ANTHROPIC_MAX_REQUEST_INPUT_TOKENS", DEFAULT_ANTHROPIC_MAX_REQUEST_INPUT_TOKENS)
+
+
+def rate_limit_disabled() -> bool:
+    """``RATE_LIMIT_DISABLED=1`` (load tests / local dev). NEVER honoured on Vercel."""
+    if is_serverless():
+        return False
+    return (_get("RATE_LIMIT_DISABLED") or "").lower() in ("1", "true", "yes", "on")
+
+
+def auth_misconfigured() -> bool:
+    """True on Vercel when Clerk is not configured. Without Clerk every request would resolve to
+    the single shared owner ``"local"`` (everyone sees everyone's data and spends the same
+    quota), so production fails CLOSED instead (see ``backend.auth.current_owner``)."""
+    return is_serverless() and not bool(CLERK_PUBLISHABLE_KEY)
+
+
+def session_secret_missing() -> bool:
+    """True on Vercel when SESSION_SECRET is unset (chat session tokens are signed with it; we
+    refuse to derive a key from provider keys in production)."""
+    return is_serverless() and not _get("SESSION_SECRET")
+
+
+AUTH_MISCONFIGURED_MESSAGE = (
+    "This deployment has no sign-in configured (CLERK_PUBLISHABLE_KEY is missing), so it cannot "
+    "serve user data safely. The site owner must set the Clerk keys in the Vercel project settings."
+)
+
+
+def allow_gemini_for_user_content() -> bool:
+    """``ALLOW_GEMINI_FOR_USER_CONTENT=1``: let the free-tier Gemini steps see user-uploaded
+    content / photos (they may train on prompts). Default OFF -> those flows run ``sensitive``."""
+    return (_get("ALLOW_GEMINI_FOR_USER_CONTENT") or "").lower() in ("1", "true", "yes", "on")
+
+
+def user_content_sensitive() -> bool:
+    """What flows that send user-uploaded content to a model pass as ``sensitive=``."""
+    return not allow_gemini_for_user_content()
+
+
+# Wall-clock budget for ONE request on Vercel (maxDuration is 60 s): chat-tool turns and photo
+# scans share it so they can never run past the platform limit. Unlimited off Vercel.
+REQUEST_BUDGET_S: float = float(_env_num("REQUEST_BUDGET_S", 50))
+# Request bodies above this are refused with a JSON 413 (Vercel itself rejects > 4.5 MB with a
+# non-JSON error, so we stay under it). Applies to photo scans, the predictor and chat-PDF uploads.
+MAX_BODY_BYTES: int = _env_num("MAX_BODY_BYTES", 4_400_000)
+# Add-a-Subject limits (UPLOAD_MAX_*, RAW_KEEP_MB, STORAGE_*) are read in backend/services/subjects.py and
+# backend/services/storage.py; defaults are documented in .env.example and DEPLOYMENT.md.
+# Size cap for the per-instance /tmp caches (study-documents + study-index), MB.
+TMP_CACHE_MAX_MB: int = max(10, _env_num("TMP_CACHE_MAX_MB", 300))
+
 # Models
 AVAILABLE_MODELS, AVAILABLE_MODEL_LABELS = _parse_models(_get_csv("AVAILABLE_MODELS"))
 DEFAULT_MODEL: str | None = _get("DEFAULT_MODEL")
@@ -275,20 +411,18 @@ TOOL_MODEL_OVERRIDES: dict[str, str | None] = {
 # EMBEDDING_MODEL is the model id for the active provider (e.g. "gemini-embedding-2"
 # for gemini, or "BAAI/bge-small-en-v1.5" for local).
 EMBEDDING_PROVIDER: str = (_get("EMBEDDING_PROVIDER") or "gemini").lower()
-EMBEDDING_MODEL: str | None = _get("EMBEDDING_MODEL")
+# Documented defaults (Vercel sets neither): Gemini REST + the model the prebuilt indexes use.
+EMBEDDING_MODEL: str | None = _get("EMBEDDING_MODEL") or (
+    "gemini-embedding-2" if EMBEDDING_PROVIDER == "gemini" else None)
 # Optional: request a smaller embedding dimension (gemini supports Matryoshka
 # truncation; default keeps the model's full, already-normalized output).
 EMBEDDING_DIM: int | None = _get_int("EMBEDDING_DIM")[0]
 
 _SUPPORTED_EMBEDDING_PROVIDERS = ("gemini", "local")
 
-# Generation tuning — not environment-specific (same value dev & prod). Documented
-# default so the app stays usable if the knob is omitted; override in .env to tune.
-# Kept modest (3000) because a provider's per-minute token budget counts the INPUT
-# *and* the reserved output of a single request: on Groq's free tier the smallest
-# model (llama-3.1-8b-instant) allows only 6000 tokens/minute, so the content slice
-# plus the prompt plus the capped completion must all fit under that. A larger value
-# is safe only on higher-tier models/plans.
+# DEPRECATED no-op: callers no longer clip prompt input. llm_chain fits the input per provider
+# (GROQ_MAX_INPUT_TOKENS for Groq's 8k-TPM tier; Anthropic/Gemini get hard-limit backstops only).
+# Kept only so old imports/.env files do not break.
 MAX_CONTENT_TOKENS: int = (_get_int("MAX_CONTENT_TOKENS")[0]) or 3000
 
 # Agentic RAG (chat): when enabled, chat retrieval becomes an LLM-driven loop —
@@ -305,22 +439,56 @@ AGENTIC_RAG_QUERIES: int = max(1, (_get_int("AGENTIC_RAG_QUERIES")[0]) or 2)
 # ---------------------------------------------------------------------------
 # Public helpers used by the rest of the app.
 # ---------------------------------------------------------------------------
+def chain_key_flags() -> dict[str, bool]:
+    """{env var name: is it set?} for the 5 chain keys — booleans only, read live."""
+    return {env: bool(_get(env)) for _, _, env in CHAIN_KEY_ENV}
+
+
+def has_llm_key() -> bool:
+    """True if ANY of the 5 chain keys is configured (the app is usable)."""
+    return any(chain_key_flags().values())
+
+
+def require_llm_key() -> None:
+    """Raise a clear error if none of the chain's keys is configured."""
+    if not has_llm_key():
+        raise MissingApiKeyError(
+            "No LLM API key is set. Set at least one of: " + ", ".join(CHAIN_KEY_VARS)
+            + " (copy .env.example to .env)."
+        )
+
+
 def has_groq_key() -> bool:
-    """Return True if a Groq API key is configured."""
-    return bool(GROQ_API_KEY)
+    """Backward-compatible name: True if ANY chain key is configured (no longer Groq-specific)."""
+    return has_llm_key()
 
 
 def require_groq_key() -> None:
-    """Raise a clear error if the Groq key is missing (call before LLM use)."""
-    if not has_groq_key():
-        raise MissingApiKeyError(
-            "GROQ_API_KEY is not set. Copy .env.example to .env and add your Groq key."
-        )
+    """Backward-compatible name for :func:`require_llm_key` (no longer Groq-specific)."""
+    require_llm_key()
+
+
+def gemini_api_keys() -> list[str]:
+    """Configured Gemini keys in rotation order [GEMINI_API_KEY, GEMINI_API_KEY_2] (live read).
+    Used by the embeddings client; the LLM chain reads the same variables itself."""
+    keys: list[str] = []
+    for env in ("GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_FALLBACK"):
+        v = _get(env)
+        if v and v not in keys:
+            keys.append(v)
+    return keys
 
 
 def has_gemini_key() -> bool:
     """Return True if a Gemini API key is configured (for hosted embeddings)."""
-    return bool(GEMINI_API_KEY)
+    return bool(gemini_api_keys())
+
+
+def chain_status() -> dict:
+    """Live provider-chain status (booleans/seconds only) for /api/health and /api/config.
+    Imported lazily so config stays import-light."""
+    from backend import llm_chain
+    return llm_chain.chain_status()
 
 
 def model_for(tool: str, requested: str | None = None) -> str | None:
@@ -359,14 +527,50 @@ def runtime_api_base() -> str:
     return API_BASE_URL or "/api"
 
 
+def _chain_order() -> list[dict]:
+    """[{step, name, provider, models}] in priority order — static, never contains key material."""
+    try:
+        from backend import llm_chain
+        return [{"step": st.n, "name": st.name, "provider": st.provider, "models": list(st.models)}
+                for st in llm_chain.STEPS]
+    except Exception:  # noqa: BLE001 - the config endpoint must never fail over a cosmetic field
+        return []
+
+
+def _premium_budget_flags() -> dict:
+    try:
+        from backend import spend
+        st = spend.status()
+        return {"nearlyUsed": bool(st["warn"]), "exhausted": bool(st["exhausted"])}
+    except Exception:  # noqa: BLE001 - cosmetic field; the config endpoint must never fail over it
+        return {"nearlyUsed": False, "exhausted": False}
+
+
 def public_config() -> dict:
     """The non-secret configuration the SPA needs to bootstrap itself."""
     return {
         "appEnv": APP_ENV,
-        "llmProvider": LLM_PROVIDER,
-        "defaultModel": DEFAULT_MODEL,
-        "availableModels": available_models_public(),
-        "groqKey": has_groq_key(),
+        # The 5-key chain picks the model per request (see backend/llm_chain.py), so the
+        # legacy single-provider/model-picker fields are neutral: no stale model ids are
+        # advertised to the SPA (the old env-driven AVAILABLE_MODELS list is no longer used).
+        "llmProvider": "chain",
+        "defaultModel": "auto",
+        "availableModels": [],
+        # Legacy flag name kept for the SPA: true when ANY chain key is configured.
+        "groqKey": has_llm_key(),
+        "llmAvailable": has_llm_key(),
+        # Which of the 5 chain steps have a key (booleans only — never key material).
+        "llmChain": {
+            "anthropic": bool(_get("ANTHROPIC_API_KEY")),
+            "groq1": bool(_get("GROQ_API_KEY")),
+            "groq2": bool(_get("GROQ_API_KEY_2")),
+            "gemini1": bool(_get("GEMINI_API_KEY")),
+            "gemini2": bool(_get("GEMINI_API_KEY_2")),
+        },
+        # Static chain order (names + model ids only; no keys) for the UI's "AI model" popover.
+        "llmChainOrder": _chain_order(),
+        # The chain picks the model; the UI should show this instead of a picker.
+        "modelPolicy": MODEL_POLICY,
         # Auth: the publishable key (or null) and whether the sign-in gate is active.
         # Null/false means the SPA runs open (graceful) — no key configured yet.
         "clerkPublishableKey": CLERK_PUBLISHABLE_KEY,
@@ -381,6 +585,8 @@ def public_config() -> dict:
         # API base for the SPA: same-origin "/api" by default, or the absolute API_BASE_URL
         # when the frontend runs on its own port (split-origin mode). Driven by .env.
         "apiBase": runtime_api_base(),
+        # Premium-model (Anthropic) daily budget: booleans only, never counts or owner ids.
+        "premiumBudget": _premium_budget_flags(),
     }
 
 
@@ -400,28 +606,27 @@ def validate_config() -> None:
     elif APP_ENV not in VALID_ENVIRONMENTS:
         errors.append(f"APP_ENV={APP_ENV!r} — must be one of {', '.join(VALID_ENVIRONMENTS)}")
 
-    if not HOST:
-        errors.append("HOST (the network address the server binds to)")
-    if not _PORT_OK:
-        errors.append("PORT (must be an integer)")
-    elif PORT is None:
-        errors.append("PORT (the TCP port to listen on)")
+    relaxed = _relaxed_runtime()
+    if not relaxed:              # serverless / tests have no bind address / port
+        if not HOST:
+            errors.append("HOST (the network address the server binds to)")
+        if not _PORT_OK:
+            errors.append("PORT (must be an integer)")
+        elif PORT is None:
+            errors.append("PORT (the TCP port to listen on)")
 
-    if not LLM_PROVIDER:
-        errors.append("LLM_PROVIDER (one of: " + ", ".join(SUPPORTED_PROVIDERS) + ")")
-    elif LLM_PROVIDER not in SUPPORTED_PROVIDERS:
+    if LLM_PROVIDER and LLM_PROVIDER not in SUPPORTED_PROVIDERS:
         errors.append(
             f"LLM_PROVIDER={LLM_PROVIDER!r} — no integration; supported: {', '.join(SUPPORTED_PROVIDERS)}"
         )
 
-    if LLM_PROVIDER == "groq" and not GROQ_API_KEY:
-        errors.append("GROQ_API_KEY (get one at https://console.groq.com/keys)")
+    # The app is valid when ANY ONE of the 5 chain keys is set.
+    if not has_llm_key():
+        errors.append("at least one LLM API key: " + ", ".join(CHAIN_KEY_VARS))
 
-    if not AVAILABLE_MODELS:
-        errors.append("AVAILABLE_MODELS (comma-separated list of model ids)")
-    if not DEFAULT_MODEL:
-        errors.append("DEFAULT_MODEL (the default model id)")
-    elif AVAILABLE_MODELS and DEFAULT_MODEL not in AVAILABLE_MODEL_LABELS:
+    # AVAILABLE_MODELS / DEFAULT_MODEL are optional now (the chain chooses the model); when
+    # given they must still be consistent.
+    if DEFAULT_MODEL and AVAILABLE_MODELS and DEFAULT_MODEL not in AVAILABLE_MODEL_LABELS:
         errors.append(f"DEFAULT_MODEL={DEFAULT_MODEL!r} is not listed in AVAILABLE_MODELS")
 
     for tool, mid in TOOL_MODEL_OVERRIDES.items():
@@ -435,10 +640,10 @@ def validate_config() -> None:
             f"EMBEDDING_PROVIDER={EMBEDDING_PROVIDER!r} — supported: "
             + ", ".join(_SUPPORTED_EMBEDDING_PROVIDERS)
         )
-    if not EMBEDDING_MODEL:
-        errors.append("EMBEDDING_MODEL (embedding model id, e.g. gemini-embedding-2)")
-    if EMBEDDING_PROVIDER == "gemini" and not GEMINI_API_KEY:
-        errors.append("GEMINI_API_KEY (required when EMBEDDING_PROVIDER=gemini; get one at https://aistudio.google.com/apikey)")
+    if EMBEDDING_PROVIDER == "local" and not EMBEDDING_MODEL:
+        errors.append("EMBEDDING_MODEL (local embedding model id, e.g. BAAI/bge-small-en-v1.5)")
+    if EMBEDDING_PROVIDER == "gemini" and not has_gemini_key():
+        errors.append("GEMINI_API_KEY or GEMINI_API_KEY_2 (required when EMBEDDING_PROVIDER=gemini; get one at https://aistudio.google.com/apikey)")
 
     # Auth is optional, but a misformatted publishable key is almost always a typo.
     if CLERK_PUBLISHABLE_KEY and not CLERK_PUBLISHABLE_KEY.startswith("pk_"):
@@ -450,7 +655,9 @@ def validate_config() -> None:
 
     # Split-origin frontend is optional, but if FRONTEND_PORT is set it must be a valid port
     # AND API_BASE_URL must be set (the SPA can't reach the API cross-origin without it).
-    if not _FRONTEND_PORT_OK:
+    if relaxed:
+        pass                     # split-origin settings are not used on Vercel / in tests
+    elif not _FRONTEND_PORT_OK:
         errors.append("FRONTEND_PORT (must be an integer)")
     elif SPLIT_ORIGIN:
         if not API_BASE_URL:
@@ -472,8 +679,8 @@ def validate_config() -> None:
             + "\n\nSet these in your .env file (copy .env.example) and restart."
         )
 
-    log.info("Configuration validated ✓ (%d models, provider=%s, env=%s).",
-             len(AVAILABLE_MODELS), LLM_PROVIDER, APP_ENV)
+    log.info("Configuration validated ✓ (chain keys: %d/5, provider=%s, env=%s).",
+             sum(chain_key_flags().values()), LLM_PROVIDER, APP_ENV)
 
 
 def startup_diagnostics() -> list[str]:
@@ -490,13 +697,16 @@ def startup_diagnostics() -> list[str]:
         f" RELOAD           {RELOAD}",
         f" LOG_LEVEL        {LOG_LEVEL}",
         f" LLM_PROVIDER     {LLM_PROVIDER}",
-        f" DEFAULT_MODEL    {DEFAULT_MODEL}",
+        f" MODEL POLICY     {MODEL_POLICY}",
+        f" DEFAULT_MODEL    {DEFAULT_MODEL or '(none — chain decides)'}",
         f" AVAILABLE_MODELS {len(AVAILABLE_MODELS)} ({models})",
         f" EMBEDDINGS       {EMBEDDING_PROVIDER} · {EMBEDDING_MODEL}"
         + (f" ({EMBEDDING_DIM}d)" if EMBEDDING_DIM else "")
-        + (" · key ✓" if (EMBEDDING_PROVIDER == 'gemini' and GEMINI_API_KEY) else ""),
+        + (" · key ✓" if (EMBEDDING_PROVIDER == 'gemini' and has_gemini_key()) else ""),
         f" CHAT RETRIEVAL   {('agentic (rewrite→retrieve→grade→correct, ≤' + str(AGENTIC_RAG_MAX_ITERS) + ' rounds)') if AGENTIC_RAG else 'classic single-shot RAG'}",
-        f" GROQ_API_KEY     {'✓ loaded' if has_groq_key() else '✗ MISSING'}",
+        *[f" LLM step {n} {name:<12} {'✓ key set' if _get(env) else '· not set'}  ({env})"
+          for n, name, env in CHAIN_KEY_ENV],
+        f" LLM CHAIN        {'ready' if has_llm_key() else '✗ NO KEYS SET (AI features unavailable)'}",
         f" CORS_ORIGINS     {', '.join(CORS_ORIGINS) if CORS_ORIGINS else '(none — same-origin)'}",
         f" FRONTEND         {('split → SPA on :' + str(FRONTEND_PORT) + ', API at ' + (API_BASE_URL or '?')) if SPLIT_ORIGIN else 'single server (SPA + API same origin)'}",
         f" AUTH (Clerk)     {('enabled — ' + ('API verify on' if CLERK_SECRET_KEY else 'client-side gate')) if AUTH_ENABLED else 'disabled (open app)'}",
@@ -507,11 +717,11 @@ def startup_diagnostics() -> list[str]:
 
 
 def log_startup_diagnostics() -> None:
-    """Log the startup banner + a 'Groq config loaded' marker."""
+    """Log the startup banner + an 'LLM chain ready' marker (never any key material)."""
     for line in startup_diagnostics():
         log.info(line)
-    if has_groq_key():
-        log.info("Groq config loaded ✓ (provider=%s).", LLM_PROVIDER)
+    if has_llm_key():
+        log.info("LLM chain config loaded ✓ (%d/5 keys).", sum(chain_key_flags().values()))
     # In split-origin mode the SPA calls the API cross-origin; without an allowed origin the
     # browser will block every request. Warn loudly (not fatal — a reverse proxy may add it).
     if SPLIT_ORIGIN and not CORS_ORIGINS:

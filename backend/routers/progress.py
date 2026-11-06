@@ -16,12 +16,12 @@ router = APIRouter(prefix="/api/progress", tags=["progress"])
 
 # ---- request/response models (local to this router by design) ----
 class RecordRequest(BaseModel):
-    tool: str = Field(..., description='Which tool produced the attempt: "quiz" or "flashcards".')
-    subject: str | None = None
-    topic: str | None = None
-    correct: int = Field(..., ge=0)
-    total: int = Field(..., ge=1)
-    detail: str | None = None
+    tool: str = Field(..., max_length=32, description='Which tool produced the attempt: "quiz" or "flashcards".')
+    subject: str | None = Field(default=None, max_length=200)
+    topic: str | None = Field(default=None, max_length=200)
+    correct: int = Field(..., ge=0, le=10_000)
+    total: int = Field(..., ge=1, le=10_000)
+    detail: str | None = Field(default=None, max_length=500)
 
 
 class RecordResponse(BaseModel):
@@ -32,6 +32,8 @@ class TopicStats(BaseModel):
     topic: str
     attempts: int
     accuracy: float
+    mastery: float | None = None      # recency-weighted accuracy (half-life 21 days); use for "how am I doing now"
+    questions: int = 0
     last_seen: str | None = None
 
 
@@ -47,6 +49,7 @@ class WeakTopic(BaseModel):
     topic: str
     attempts: int
     accuracy: float
+    mastery: float | None = None
 
 
 class OverallStats(BaseModel):

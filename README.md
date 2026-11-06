@@ -41,7 +41,7 @@ The tools:
 - **🎴 Flashcards** — Active-recall cards you can flip, rate your confidence on, and review (it resurfaces the ones you didn’t know).
 - **📅 Study Planner** — Per-PDF summaries plus a day-by-day markdown study plan paced to your target date (downloadable as `.md`).
 - **🧠 Mind Map** — An interactive, zoomable concept map (central idea → branches → points) from a PDF or a topic.
-- **➕ Add a Subject** — Upload PDFs to create or extend a subject; its FAISS index is built on the spot so every tool can use it immediately.
+- **➕ Add a Subject** — Upload PDFs to create or extend a subject; its FAISS index is built on the spot so every tool can use it immediately. PDFs up to 200 MB each (no per-upload total cap; limits are env-configurable) work even on Vercel's 4.5 MB request limit: big files are sent in small resumable chunks with a progress bar and a cancel button, then assembled on the server.
 
 Plus: a **light/dark theme** toggle (defaults to light; your choice is remembered), fully **responsive** layout (phones → desktops), and a safe in-house markdown renderer (code blocks with copy, tables, lists).
 
@@ -143,7 +143,7 @@ documents/
 
 **Two different content strategies, by design:**
 
-- **Chat uses Agentic RAG.** Each subject’s PDFs are split into chunks, embedded **once** with the local `fastembed` model, and saved to `faiss_index/<Subject>/` (reloaded from disk on later runs; a `manifest.json` fingerprint rebuilds it only when the PDFs or settings change). On each question the system runs an **LLM-driven loop** rather than a single fetch: it **rewrites** the question into focused search queries, **retrieves** and merges chunks, **grades** whether the context is sufficient, and **re-retrieves** with new queries if not — then answers grounded in what it gathered. Toggle with `AGENTIC_RAG` (`false` = classic single-shot RAG).
+- **Chat uses a grounded RAG pipeline.** Each subject’s PDFs are split into chunks, embedded **once** and saved to `faiss_index/<Subject>/` (reloaded on later runs). For each question the pipeline condenses follow-ups, retrieves with hybrid search (embeddings + keyword BM25), reranks, removes near-duplicates and merges adjacent chunks, then answers **only from the notes with numbered citations** (“I couldn’t find this in your notes” when they don’t cover it). It makes no extra LLM call before the answer unless retrieval is weak; the model can run one more search if needed. Source chips show exactly the cited passages. See ARCHITECTURE.md §3a; `scripts/eval_rag.py` measures it. Toggle with `AGENTIC_RAG` (`false` = classic single-shot RAG).
 
 - **Quiz / Flashcards / Planner / Mind Map use pre-computed chunk summaries.** These tools generate from the *whole* document. Instead of re-reading the PDF each time, every PDF is split into chunks **once** and each chunk gets a thorough, faithful summary; the compact summary set (covering the entire document) is cached by content hash (memory + disk + MongoDB) and fed to Groq. Built eagerly when a subject is added and lazily on first use; one-off uploads go through the same pipeline.
 
@@ -329,6 +329,7 @@ All endpoints are under `/api`. The SPA uses them, but they’re also callable d
 | `GET /api/subjects` | — | List subjects |
 | `GET /api/subjects/{subject}/pdfs` | — | List a subject’s PDFs (with page counts) |
 | `POST /api/subjects` | multipart `name`, `files[]` | Add/extend a subject and build its index |
+| `POST /api/subjects/uploads` \| `PUT .../uploads/{id}/chunks/{i}` \| `POST .../uploads/{id}/complete` \| `DELETE .../uploads/{id}` | JSON `{subject, filename, size, sha256?}` \| raw chunk \| – \| – | Chunked upload of one large PDF (same result as the multipart add) |
 | `POST /api/chat/start` | `{mode, subject?, topic?}` | Start a subject/topic chat session |
 | `POST /api/chat/upload` | multipart `file` | Start a chat session from an uploaded PDF |
 | `POST /api/chat/message` | `{session_id, message}` | Send a message; returns the answer |
@@ -347,7 +348,6 @@ All endpoints are under `/api`. The SPA uses them, but they’re also callable d
 | `POST /api/guest` | — | Create an anonymous guest (returns `{guestId, isGuest, …}`). Needs `MONGODB_URI`. |
 | `GET /api/guest/me` | header `X-Guest-Id` | Restore a guest session (404 if expired/migrated) |
 | `POST /api/guest/migrate` | headers `Authorization` + `X-Guest-Id` | Upgrade: move all guest data to the signed-in Clerk user |
-| `GET /runtime-config.js` | — | Tiny script seeding `window.__API_BASE__` (same-origin or absolute in split mode) |
 
 > Identity for every scoped route comes from the `Authorization: Bearer <clerk-jwt>` header, or the `X-Guest-Id: guest_<uuid>` header — Clerk wins when both are present.
 
@@ -368,46 +368,22 @@ It covers document/path-safety, the vector store, chat session errors, mind-map 
 
 ## 🚀 Deploy to production
 
-The app runs in **single-server mode** — one FastAPI process (Gunicorn + Uvicorn
-workers, non-root, pre-baked models, `/api/health` healthcheck) serves the SPA
-**and** the API on one origin, with full RAG (local embeddings + FAISS). It's a
-long-lived process by design (in-memory embedding model, on-disk indexes,
-background warmup), so deploy it to a **container host** — not a serverless
-function.
-
-### Render (one-click) — recommended
-
-The repo ships a [`render.yaml`](render.yaml) Blueprint: a single Render **Web
-Service** builds the Dockerfile and serves the whole app.
-
-1. Push to GitHub, then open <https://dashboard.render.com> → **New + → Blueprint**.
-2. Connect this repo → **Apply**.
-3. Set the prompted secrets — only **`GROQ_API_KEY`** is required; add
-   `CLERK_PUBLISHABLE_KEY` + `MONGODB_URI` for the sign-in gate and saved history.
-4. Render builds the image (~5–10 min) and serves at `https://<name>.onrender.com`.
-
-> Free tier = 512 MB and sleeps after ~15 min idle (cold start ~30–60 s); bump to a
-> 2 GB instance if the embedding model OOMs. For saved history, allow `0.0.0.0/0` in
-> **MongoDB Atlas → Network Access** (cloud hosts use dynamic IPs). The same image
-> runs on **Railway / Fly.io / Cloud Run / a VPS** too.
-
-### Docker (local or any host)
+Production runs on **Vercel**: the SPA is served from the CDN and every `/api/*` request goes to one
+Python serverless function (`api/index.py` -> the FastAPI app), backed by MongoDB Atlas and Clerk.
+There are no background threads or local-disk state, so cold starts stay small and instances scale
+independently.
 
 ```bash
-cp .env.production.example .env     # fill in GROQ_API_KEY (+ optional Mongo/Clerk)
-docker compose up --build -d        # build + run
-# open http://localhost:8000   ·   health: http://localhost:8000/api/health
+vercel link                                   # once
+printf '%s' "$VALUE" | vercel env add NAME production   # per variable (see DEPLOYMENT.md)
+vercel deploy                                 # preview
+vercel deploy --prod                          # production
 ```
 
-Secrets come from `.env` at **run time** (never baked into the image); built FAISS
-indexes (`/app/faiss_index`) and uploaded subjects (`/app/documents`) persist in
-named volumes.
-
-Two GitHub Actions are included: **CI** (tests on every push/PR) and **Docker**
-(builds & publishes the image to GHCR on `main` / version tags).
-
-**👉 Full guide:** [`DEPLOYMENT.md`](DEPLOYMENT.md) — Render + Docker recipes,
-volumes, scaling/workers, TLS/reverse-proxy, CI/CD, and a security checklist.
+Local dev is unchanged: `pip install -r requirements-dev.txt && python run.py`. For Vercel parity use
+`vercel dev`. **Full guide** (env var list, headers/caching strategy, cron, region, limits, rollback):
+[`DEPLOYMENT.md`](DEPLOYMENT.md). The previous Render/Docker setup is retired and archived under
+[`legacy/render/`](legacy/render) (unsupported).
 
 ---
 

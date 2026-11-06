@@ -1,0 +1,10 @@
+{
+  "overview": "This material is a chapter on **matrices**, covering their order, types (square, diagonal, scalar, identity, zero), and operations such as addition, scalar multiplication, and **matrix multiplication**. It also covers the **transpose**, **symmetric and skew symmetric matrices**, and **invertible matrices**, including finding inverses with elementary row operations, and ends with solved examples.",
+  "questions": [
+    "When is the product of two matrices AB defined, and what is the order of the result?",
+    "How can any square matrix be written as the sum of a symmetric and a skew symmetric matrix?",
+    "In Example 8, how is A² = 4A − 7I used to calculate A⁵?"
+  ],
+  "sources": 2,
+  "llm": "Model: anthropic · claude-sonnet-5-5 · step 1 (Anthropic)"
+}

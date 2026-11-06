@@ -1,0 +1,36 @@
+{
+  "built_at": "2026-11-05T16:34:01Z",
+  "chunk_overlap": 150,
+  "chunk_size": 1500,
+  "complete": true,
+  "dim": 768,
+  "doc_format": "g2-prefix",
+  "files": [
+    {
+      "name": "Lec-1.pdf",
+      "sha256": "a216a52802d66750c76d00bfa1300c90eba4e156813d0a8eb4565eed1468e8ea",
+      "size": 1937578
+    },
+    {
+      "name": "Lec-2.pdf",
+      "sha256": "a4e78d8f7dfa9bae9e1b84d3cbbaa3b964eeae8f5012723ed540f7027510140f",
+      "size": 2730809
+    }
+  ],
+  "format": 2,
+  "graph": {
+    "n_communities": 14,
+    "n_concepts": 152,
+    "n_edges": 753,
+    "relations": 0,
+    "sig": "7481c7228a71f6f2b368",
+    "v": 2
+  },
+  "key": "Operating System",
+  "model": "gemini-embedding-2",
+  "n_chunks": 75,
+  "n_embedded": 75,
+  "owner": null,
+  "subject": "Operating System",
+  "version": "170367749b5f42d29455a3ceeed51ae7"
+}

@@ -4,9 +4,7 @@ Single-server mode (the default) is unaffected — backend.main already serves t
 API port. When FRONTEND_PORT is set, run.py ALSO starts THIS tiny server on that port to
 serve the static SPA, while the browser reaches the API cross-origin at config.API_BASE_URL.
 
-It serves three things, nothing more:
-  • GET /runtime-config.js  -> seeds window.__API_BASE__ with the absolute API base, so the
-                               SPA's first request (GET /config) goes to the API server.
+It serves two things, nothing more:
   • /assets/*               -> the static CSS/JS.
   • everything else         -> index.html (SPA entry; deep links / refresh all work).
 
@@ -29,12 +27,6 @@ log = logging.getLogger("frontend.server")
 def build_frontend_app() -> FastAPI:
     """Build the static-SPA FastAPI app (no API routes, no DB, no LLM)."""
     app = FastAPI(title="Study Assistant Hub — SPA", version="2.0.0")
-
-    @app.get("/runtime-config.js")
-    def runtime_config_js() -> Response:
-        # In split mode this is the absolute API_BASE_URL; mirrors backend.main's copy.
-        js = f'window.__API_BASE__ = "{config.runtime_api_base()}";\n'
-        return Response(content=js, media_type="application/javascript")
 
     # Static assets (same path the SPA references: /assets/...).
     app.mount("/assets", StaticFiles(directory=str(config.FRONTEND_DIR / "assets")), name="assets")

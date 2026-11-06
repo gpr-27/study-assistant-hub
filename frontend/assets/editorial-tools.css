@@ -44,8 +44,8 @@
   --ed-dark-elev:     #252320;
   --ed-on-dark:       #faf9f5;
   --ed-on-dark-soft:  #a09d96;
-  --ed-coral:         #cc785c;
-  --ed-coral-active:  #a9583e;
+  --ed-coral:         #a45437;
+  --ed-coral-active:  #86442d;
   --ed-teal:          #5db8a6;
   --ed-amber:         #e8a55a;
   --ed-hairline:      #e6dfd8;
@@ -54,8 +54,8 @@
   --ed-shadow-soft:   0 1px 2px rgba(20, 20, 19, .06);
 
   /* HSL triples (so they can drop into hsl(var(--x)/a) where needed) */
-  --ed-coral-h:   14 51% 58%;
-  --ed-coral-a-h: 16 47% 45%;
+  --ed-coral-h:   16 50% 43%;
+  --ed-coral-a-h: 16 50% 36%;
   --ed-teal-h:    168 36% 54%;
   --ed-amber-h:   33 75% 63%;
   --ed-ink-h:     60 3% 8%;
@@ -89,7 +89,7 @@
 }
 
 /* The conversation area panel — flat canvas so the thread reads as paper */
-[data-skin="editorial"] .chat-shell > .panel { background: var(--ed-canvas); }
+[data-skin="editorial"] .chat-shell > .panel:not(.chat-minibar):not(.chat-src-bar) { background: var(--ed-canvas); }
 
 /* Thread + messages -------------------------------------------------- */
 [data-skin="editorial"] .thread { background: var(--ed-canvas); }
@@ -229,6 +229,11 @@
 [data-skin="editorial"] .trace-node--grade .trace-dot {
   color: hsl(var(--ed-success-h)); border-color: hsl(var(--ed-success-h) / .5); background: hsl(var(--ed-success-h) / .16);
 }
+/* "final" / "sufficient" stay success green — never the warning treatment. */
+[data-skin="editorial"] .trace-node--grade.trace-v--final .trace-dot,
+[data-skin="editorial"] .trace-node--grade.trace-v--sufficient .trace-dot {
+  color: hsl(var(--ed-success-h)); border-color: hsl(var(--ed-success-h) / .5); background: hsl(var(--ed-success-h) / .16);
+}
 [data-skin="editorial"] .trace-node--grade.trace-v--insufficient .trace-dot,
 [data-skin="editorial"] .trace-node--grade.trace-v--limit .trace-dot {
   color: hsl(var(--ed-warning-h)); border-color: hsl(var(--ed-warning-h) / .5); background: hsl(var(--ed-warning-h) / .16);
@@ -262,7 +267,8 @@
 [data-skin="editorial"] .trace-pass-text { color: hsl(var(--ink-faint)); }
 
 /* grading verdict pills */
-[data-skin="editorial"] .trace-verdict--sufficient {
+[data-skin="editorial"] .trace-verdict--sufficient,
+[data-skin="editorial"] .trace-verdict--final {
   color: hsl(var(--ed-success-h)); background: hsl(var(--ed-success-h) / .16); border: 1px solid hsl(var(--ed-success-h) / .42);
 }
 [data-skin="editorial"] .trace-verdict--insufficient,
@@ -969,3 +975,63 @@
   border: 1px solid hsl(0 0% 100% / .35);
   background: hsl(var(--ed-coral-h) / .25);
 }
+
+/* ---- perf: Editorial runs no ambient infinite animations. Status LEDs / eyebrow dots stay as
+   static dots; the (hidden) auth gate spinner is frozen once the gate is dismissed. Real loading
+   spinners elsewhere (.spinner inside a visible view) are intentionally left alone. ---- */
+[data-skin="editorial"] .eyebrow .dot,
+[data-skin="editorial"] .status .led { animation: none; }
+[data-skin="editorial"] .auth-gate.is-hidden .spinner { animation: none; }
+
+
+/* perf: no backdrop blur anywhere in Editorial (popover menus are opaque; Clerk's modal scrim is a flat tint). */
+[data-skin="editorial"] .chat-tools-menu,
+[data-skin="editorial"] .cl-modalBackdrop {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* a11y: Editorial uses ONE coral accent for every tool (per-tool hues like cheat-sheet yellow / predictor
+   pink put white text on light fills at 1.6-3.4:1), and solid coral controls are darkened a touch so the
+   white label reaches >= 4.5:1. */
+[data-skin="editorial"] [data-accent] { --accent: 16 50% 43%; }
+[data-skin="editorial"] .btn-accent,
+[data-skin="editorial"] .seg button[aria-pressed="true"] {
+  background: hsl(16 50% 43%);
+}
+[data-skin="editorial"] .btn-accent:hover { background: hsl(16 50% 35%); }
+
+/* ---- Library view (.library-*): Editorial hairlines, flat surfaces, no blur ---- */
+[data-skin="editorial"] .library-kind,
+[data-skin="editorial"] .library-count,
+[data-skin="editorial"] .library-chip,
+[data-skin="editorial"] .library-event { border-color: var(--ed-hairline); }
+[data-skin="editorial"] .library-event:hover,
+[data-skin="editorial"] .library-chip:hover { border-color: hsl(var(--ed-coral-h) / .65); background: var(--ed-surface-soft); }
+[data-skin="editorial"] .library-chip[aria-pressed="true"] { background: hsl(var(--ed-coral-h) / .14); border-color: hsl(var(--ed-coral-h) / .7); }
+[data-skin="editorial"] .library-bar i,
+[data-skin="editorial"] .library-meter i { background: hsl(var(--ed-coral-h)); }
+[data-skin="editorial"] .library-event-ic { background: hsl(var(--ed-coral-h) / .14); }
+[data-skin="editorial"] .library-tile { background: var(--ed-surface-soft); border: 1px solid var(--ed-hairline); }
+
+/* Editorial is a light-only skin (theme toggle hidden): keep native controls/scrollbars light even when
+   the stored/OS theme is dark. */
+:root[data-skin="editorial"] { color-scheme: light; }
+
+/* results header: it is only a programmatic focus target (tabindex=-1, announced as a status), so no focus
+   ring; and give the large score numeral room so it never kisses a border. */
+[data-skin="editorial"] .gr-head { padding-block: .35rem; }
+[data-skin="editorial"] .gr-head:focus,
+[data-skin="editorial"] .gr-head:focus-visible { outline: none; }
+[data-skin="editorial"] .score-ring { line-height: 1.15; }
+
+/* belt-and-braces: guest-banner CTA link keeps AA contrast on cream whatever data-theme says */
+:root[data-skin="editorial"] .keywarn a.cta-upgrade { color: hsl(270 55% 38%); }
+
+/* Clerk modal: the dialog container receives programmatic focus; Editorial's global :focus-visible ring
+   was drawing a coral rectangle around the whole card. Inner inputs/buttons keep their own focus styles. */
+[data-skin="editorial"] .cl-modalContent:focus,
+[data-skin="editorial"] .cl-modalContent:focus-visible,
+[data-skin="editorial"] .cl-cardBox:focus-visible,
+[data-skin="editorial"] .cl-rootBox:focus-visible,
+[data-skin="editorial"] .cl-modalBackdrop :focus:not(input):not(button):not(a):not(select) { outline: none; }

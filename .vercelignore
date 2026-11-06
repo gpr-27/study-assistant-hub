@@ -1,0 +1,26 @@
+# Files NOT uploaded to Vercel. Keep frontend/ and scripts/ (the build needs them); the Python
+# function bundle is trimmed separately via vercel.json "functions.excludeFiles".
+.git
+.venv
+venv
+.env
+.env.*
+!.env.example
+.claude
+.playwright-mcp
+.pytest_cache
+__pycache__
+*.pyc
+.DS_Store
+.screens
+node_modules
+dist
+interview
+GPR
+tests
+.github
+# Per-user private data never ships
+documents/user__*
+faiss_index/user__*
+# Retired Render/Docker deployment (kept for reference only)
+legacy

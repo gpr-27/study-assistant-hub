@@ -1,7 +1,6 @@
-"""Past-paper question prediction service — Groq JSON mode.
+"""Past-paper question prediction service — provider-chain JSON mode.
 
-Takes ONE bounded slice of the combined past-paper text (config.MAX_CONTENT_TOKENS,
-clipped by the router before calling in) and makes a single Groq call that
+Takes the FULL combined past-paper text (llm_chain trims per provider) and makes a single ``llm_chain`` call that
 identifies recurring topics/patterns across the papers and predicts likely
 next-exam questions. The model output is validated against a strict shape:
 
@@ -13,20 +12,18 @@ next-exam questions. The model output is validated against a strict shape:
 Malformed items are dropped (never raised on); predictions are capped at
 ``_MAX_PREDICTIONS`` and likelihoods normalised to high|medium|low.
 """
-import json
-
-from groq import APIError, Groq
-
-from backend.config import model_for, require_groq_key
+from backend import deadline, llm_chain, privacy
+from backend.config import require_llm_key
+from backend.llm_chain import LLMChainError
+from backend.services.llm_json import extract_json
 
 _VALID_LIKELIHOODS: tuple[str, str, str] = ("high", "medium", "low")
 _MAX_PATTERNS: int = 10
 _MAX_PREDICTIONS: int = 12
 
-# Output (completion) cap. The model's per-minute token budget counts the reserved
-# output too: ~10 patterns + ~12 predictions with reasoning fit comfortably in JSON
-# under this cap, so we never let Groq reserve its much larger default.
-_MAX_OUTPUT_TOKENS: int = 2048
+# Output (completion) cap (>= 2048: reasoning models spend output tokens thinking). ~10 patterns +
+# ~12 predictions with reasoning fit comfortably in JSON under this cap.
+_MAX_OUTPUT_TOKENS: int = 3072
 
 
 class PredictorError(Exception):
@@ -34,7 +31,7 @@ class PredictorError(Exception):
 
 
 def _build_prompt(corpus: str, subject_hint: str | None) -> str:
-    """Build the user prompt; the word JSON is present so Groq JSON mode is happy."""
+    """Build the user prompt; the word JSON is present so every provider's JSON mode is happy."""
     hint = f"The papers are for the subject: {subject_hint.strip()}.\n" if subject_hint and subject_hint.strip() else ""
     return (
         "You are given the combined text of several past exam papers (separated by "
@@ -105,40 +102,24 @@ def _normalise_prediction(raw: object) -> dict | None:
 
 
 def predict_questions(corpus: str, subject_hint: str | None = None, model: str | None = None) -> dict:
-    """Analyze a combined past-paper corpus in ONE Groq call and return validated
-    {"patterns": [...], "predicted_questions": [...]}.
+    """Analyze a combined past-paper corpus in ONE chain call and return validated
+    {"patterns": [...], "predicted_questions": [...], "llm": {...}}.
 
-    The caller is responsible for clipping ``corpus`` to MAX_CONTENT_TOKENS so the
-    request stays inside the provider's per-minute token budget.
+    ``llm`` is ``ChatResult.to_public()`` of the model that answered. ``model`` is accepted for
+    back-compat and ignored. ``corpus`` is the full text; llm_chain trims it for Groq only. ``LLMChainError`` propagates (→ 503).
     """
     if not corpus or not corpus.strip():
         raise PredictorError("No past-paper text was supplied to analyze.")
-    require_groq_key()
-    resolved = model_for("predictor", model)
-    client = Groq()
-    try:
-        response = client.chat.completions.create(
-            model=resolved,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an expert exam analyst who spots patterns in past papers and predicts likely future questions.",
-                },
-                {"role": "user", "content": _build_prompt(corpus, subject_hint)},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.4,
-            max_tokens=_MAX_OUTPUT_TOKENS,
-        )
-        payload = response.choices[0].message.content
-        data = json.loads(payload or "{}")
-    except json.JSONDecodeError as exc:
-        raise PredictorError(f"The model returned invalid JSON: {exc}") from exc
-    except APIError:
-        raise  # Groq errors (rate limit, auth, …) are formatted by the global handlers
-    except Exception as exc:  # noqa: BLE001 — wrap any other transport/SDK failure
-        raise PredictorError(f"Question prediction failed: {exc}") from exc
-
+    require_llm_key()
+    result = llm_chain.chat(
+        "You are an expert exam analyst who spots patterns in past papers and predicts likely future questions.",
+        [{"role": "user", "content": _build_prompt(corpus, subject_hint)}],
+        max_tokens=_MAX_OUTPUT_TOKENS, temperature=0.4, json_mode=True,
+        sensitive=privacy.current(), deadline_s=deadline.clamp(llm_chain.CHAIN_DEADLINE_S),
+    )
+    data = extract_json(result.text)
+    if data is None:
+        raise PredictorError("The model returned invalid JSON; try again.")
     if not isinstance(data, dict):
         raise PredictorError("The model returned an unexpected payload shape.")
     raw_patterns = data.get("patterns")
@@ -149,4 +130,4 @@ def predict_questions(corpus: str, subject_hint: str | None = None, model: str |
                    if (p := _normalise_prediction(item)) is not None][:_MAX_PREDICTIONS]
     if not predictions:
         raise PredictorError("The model returned no usable predicted questions; try again.")
-    return {"patterns": patterns, "predicted_questions": predictions}
+    return {"patterns": patterns, "predicted_questions": predictions, "llm": result.to_public()}

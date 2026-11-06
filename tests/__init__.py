@@ -23,6 +23,9 @@ _TEST_DEFAULTS = {
     "CLERK_PUBLISHABLE_KEY": "",
     "CLERK_SECRET_KEY": "",
     "MONGODB_URI": "",
+    # The per-owner limiter would trip the many repeated calls of one test owner (tests that
+    # exercise it patch the module directly). Honoured only when VERCEL is unset.
+    "RATE_LIMIT_DISABLED": "1",
 }
 for _key, _value in _TEST_DEFAULTS.items():
     os.environ.setdefault(_key, _value)

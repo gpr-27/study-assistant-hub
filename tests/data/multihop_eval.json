@@ -1,0 +1,369 @@
+{
+ "_doc": "Multi-hop / comparison / global retrieval eval over the bundled Mathematics and Operating System PDFs. Each question has SEVERAL gold anchors that live in DIFFERENT chunks (a retrieved chunk covers an anchor when its normalised text contains it); metrics: hit@k (any anchor), multi-recall@k (share of anchors covered). split dev/test: knobs are tuned on dev only, test is reported untouched. Questions derived by reading the chunks.",
+ "queries": [
+  {
+   "subject": "Mathematics",
+   "type": "compare",
+   "q": "How does a symmetric matrix differ from a skew symmetric matrix?",
+   "gold": [
+    "is said to be symmetric if",
+    "skew symmetric matrix if AT = –A"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Mathematics",
+   "type": "multihop",
+   "q": "How can any square matrix be written using a symmetric and a skew symmetric matrix, and what is the transpose of a product?",
+   "gold": [
+    "Theorem 1: For any square matrix A",
+    "(AB)T = BT AT"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Mathematics",
+   "type": "multihop",
+   "q": "Define a square matrix and explain how its inverse is found with elementary row operations.",
+   "gold": [
+    "square matrix if m = n",
+    "I = BA"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Mathematics",
+   "type": "multihop",
+   "q": "How does Bayes' theorem build on conditional probability and the multiplication theorem?",
+   "gold": [
+    "13.1.7 Bayes",
+    "conditional probability of the event E under the condition"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Mathematics",
+   "type": "multihop",
+   "q": "How are independent events defined and how does the multiplication theorem simplify P(E and F) for them?",
+   "gold": [
+    "13.1.4 Independent Events",
+    "13.1.3 Multiplication Theorem"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Mathematics",
+   "type": "compare",
+   "q": "What is the difference between the mean and the standard deviation of a random variable, and what distribution do Bernoulli trials give?",
+   "gold": [
+    "expected value of X denoted by E (X)",
+    "Standard deviation of the random variable X"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Mathematics",
+   "type": "multihop",
+   "q": "What conditions must Bernoulli trials satisfy and how do they lead to the binomial distribution?",
+   "gold": [
+    "Trials of a random experiment are called Bernoulli trials",
+    "Find the probability that in 10 throws of a fair die"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Mathematics",
+   "type": "multihop",
+   "q": "What is a partition of a sample space and how is it used in Bayes' theorem?",
+   "gold": [
+    "13.1.5 Partition of a Sample Space",
+    "mutually exclusive and exhaustive events"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Mathematics",
+   "type": "multihop",
+   "q": "How do you multiply a matrix by a scalar versus multiplying two matrices?",
+   "gold": [
+    "Multiplication of Matrix by a Scalar",
+    "To get the (i, k)th element"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Operating System",
+   "type": "compare",
+   "q": "Compare monolithic, layered and microkernel operating system structures.",
+   "gold": [
+    "Monolithic Structure",
+    "Layered Approach",
+    "Moves as much from the kernel into user space"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Operating System",
+   "type": "compare",
+   "q": "Compare client-server and peer-to-peer computing.",
+   "gold": [
+    "Client-Server Computing",
+    "P2P does not distinguish clients and servers"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Operating System",
+   "type": "compare",
+   "q": "What is the difference between symmetric multiprocessing and clustered systems?",
+   "gold": [
+    "Multiprocessors systems growing in use",
+    "Like multiprocessor systems, but multiple systems working together"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Operating System",
+   "type": "multihop",
+   "q": "How do interrupts and direct memory access work together to make I/O efficient?",
+   "gold": [
+    "Interrupt transfers control to the interrupt service routine",
+    "Direct Memory Access Structure"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Operating System",
+   "type": "multihop",
+   "q": "How does a trap relate to system calls, and what does the system call interface do?",
+   "gold": [
+    "A trap or e",
+    "System-call interface maintains a table indexed"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Operating System",
+   "type": "multihop",
+   "q": "How do dual-mode operation and the protection services of the operating system work together?",
+   "gold": [
+    "Dual-mode operation allows OS to protect itself",
+    "Protection and Security"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Operating System",
+   "type": "multihop",
+   "q": "How do the storage hierarchy, caching and the I/O subsystem fit together?",
+   "gold": [
+    "Storage systems organized in hierarchy",
+    "Faster storage (cache) checked first",
+    "I/O Subsystem"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Operating System",
+   "type": "multihop",
+   "q": "How does virtualization relate to cloud computing?",
+   "gold": [
+    "Allows operating systems to run applications within other OSes",
+    "Logical extension of virtualization"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Operating System",
+   "type": "multihop",
+   "q": "What do the process, memory, file-system and mass-storage management parts of the OS each do?",
+   "gold": [
+    "Process Management Activities",
+    "Memory Management",
+    "File-system Management",
+    "Mass-Storage Management"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Operating System",
+   "type": "multihop",
+   "q": "How do system calls, parameter passing and the standard API relate?",
+   "gold": [
+    "Typically, a number is associated with each system call",
+    "Three general methods used to pass parameters"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Operating System",
+   "type": "multihop",
+   "q": "How are the kernel, system programs and the system-call interface arranged in UNIX and Linux?",
+   "gold": [
+    "The UNIX OS consists of two separable parts",
+    "Linux System Structure Monolithic plus modular design"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Operating System",
+   "type": "multihop",
+   "q": "What is the relationship between a bootstrap loader, the kernel and the process of building and booting Linux?",
+   "gold": [
+    "bootstrap loader",
+    "Compile the kernel using"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Operating System",
+   "type": "compare",
+   "q": "How do the different types of system services and system calls differ?",
+   "gold": [
+    "Types of System Calls",
+    "System Services (Cont.)"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Operating System",
+   "type": "multihop",
+   "q": "How do multiprogramming and timers keep the CPU busy and protect the system?",
+   "gold": [
+    "Multiprogramming organizes jobs",
+    "Timer to prevent infinite loop"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Operating System",
+   "type": "multihop",
+   "q": "How does the OS handle both Android's design and Linux kernel modifications, and how does it relate to loadable kernel modules?",
+   "gold": [
+    "Based on Linux kernel but modified",
+    "Many modern operating systems implement loadable kernel modules"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Mathematics",
+   "type": "global",
+   "q": "Give an overview of everything the Mathematics notes cover.",
+   "gold": [
+    "ordered rectangular array || column matrix if it has only one column || Multiplication of Matrix by a Scalar",
+    "is said to be symmetric if || skew symmetric matrix if AT = –A || (AB)T = BT AT",
+    "I = BA || Inverse of a Matrix using Elementary",
+    "conditional probability of the event E under the condition || 13.1.3 Multiplication Theorem || 13.1.4 Independent Events",
+    "13.1.7 Bayes || 13.1.5 Partition",
+    "13.1.8 Random || Trials of a random experiment are called Bernoulli trials || 13.1.11 Binomial Distribution"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Mathematics",
+   "type": "global",
+   "q": "What are the main topics across the Mathematics lectures?",
+   "gold": [
+    "ordered rectangular array || column matrix if it has only one column || Multiplication of Matrix by a Scalar",
+    "is said to be symmetric if || skew symmetric matrix if AT = –A || (AB)T = BT AT",
+    "I = BA || Inverse of a Matrix using Elementary",
+    "conditional probability of the event E under the condition || 13.1.3 Multiplication Theorem || 13.1.4 Independent Events",
+    "13.1.7 Bayes || 13.1.5 Partition",
+    "13.1.8 Random || Trials of a random experiment are called Bernoulli trials || 13.1.11 Binomial Distribution"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Mathematics",
+   "type": "global",
+   "q": "Summarise the whole Mathematics subject for me.",
+   "gold": [
+    "ordered rectangular array || column matrix if it has only one column || Multiplication of Matrix by a Scalar",
+    "is said to be symmetric if || skew symmetric matrix if AT = –A || (AB)T = BT AT",
+    "I = BA || Inverse of a Matrix using Elementary",
+    "conditional probability of the event E under the condition || 13.1.3 Multiplication Theorem || 13.1.4 Independent Events",
+    "13.1.7 Bayes || 13.1.5 Partition",
+    "13.1.8 Random || Trials of a random experiment are called Bernoulli trials || 13.1.11 Binomial Distribution"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Mathematics",
+   "type": "global",
+   "q": "What are the key themes of my Mathematics notes?",
+   "gold": [
+    "ordered rectangular array || column matrix if it has only one column || Multiplication of Matrix by a Scalar",
+    "is said to be symmetric if || skew symmetric matrix if AT = –A || (AB)T = BT AT",
+    "I = BA || Inverse of a Matrix using Elementary",
+    "conditional probability of the event E under the condition || 13.1.3 Multiplication Theorem || 13.1.4 Independent Events",
+    "13.1.7 Bayes || 13.1.5 Partition",
+    "13.1.8 Random || Trials of a random experiment are called Bernoulli trials || 13.1.11 Binomial Distribution"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Operating System",
+   "type": "global",
+   "q": "Summarise the main topics covered in the Operating System notes.",
+   "gold": [
+    "Interrupt transfers control to the interrupt service routine || Direct Memory Access Structure || I/O Structure",
+    "Storage systems organized in hierarchy || Main memory – only large storage || Caching – copying information",
+    "Dual-mode operation allows OS to protect itself || Timer to prevent infinite loop || Protection and Security",
+    "Process Management Activities || Memory Management || File-system Management",
+    "Cloud Computing || Peer-to-Peer || Virtualization",
+    "Operating System Services || Types of System Calls || System Call Parameter Passing",
+    "Monolithic Structure || Layered Approach || Microkernels",
+    "System Boot || Operating-System Debugging || Building and Booting Linux"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Operating System",
+   "type": "global",
+   "q": "What are the key themes across the operating system lectures?",
+   "gold": [
+    "Interrupt transfers control to the interrupt service routine || Direct Memory Access Structure || I/O Structure",
+    "Storage systems organized in hierarchy || Main memory – only large storage || Caching – copying information",
+    "Dual-mode operation allows OS to protect itself || Timer to prevent infinite loop || Protection and Security",
+    "Process Management Activities || Memory Management || File-system Management",
+    "Cloud Computing || Peer-to-Peer || Virtualization",
+    "Operating System Services || Types of System Calls || System Call Parameter Passing",
+    "Monolithic Structure || Layered Approach || Microkernels",
+    "System Boot || Operating-System Debugging || Building and Booting Linux"
+   ],
+   "split": "test"
+  },
+  {
+   "subject": "Operating System",
+   "type": "global",
+   "q": "Give me the big picture of what the OS course material covers.",
+   "gold": [
+    "Interrupt transfers control to the interrupt service routine || Direct Memory Access Structure || I/O Structure",
+    "Storage systems organized in hierarchy || Main memory – only large storage || Caching – copying information",
+    "Dual-mode operation allows OS to protect itself || Timer to prevent infinite loop || Protection and Security",
+    "Process Management Activities || Memory Management || File-system Management",
+    "Cloud Computing || Peer-to-Peer || Virtualization",
+    "Operating System Services || Types of System Calls || System Call Parameter Passing",
+    "Monolithic Structure || Layered Approach || Microkernels",
+    "System Boot || Operating-System Debugging || Building and Booting Linux"
+   ],
+   "split": "dev"
+  },
+  {
+   "subject": "Operating System",
+   "type": "global",
+   "q": "What does this operating system course cover overall?",
+   "gold": [
+    "Interrupt transfers control to the interrupt service routine || Direct Memory Access Structure || I/O Structure",
+    "Storage systems organized in hierarchy || Main memory – only large storage || Caching – copying information",
+    "Dual-mode operation allows OS to protect itself || Timer to prevent infinite loop || Protection and Security",
+    "Process Management Activities || Memory Management || File-system Management",
+    "Cloud Computing || Peer-to-Peer || Virtualization",
+    "Operating System Services || Types of System Calls || System Call Parameter Passing",
+    "Monolithic Structure || Layered Approach || Microkernels",
+    "System Boot || Operating-System Debugging || Building and Booting Linux"
+   ],
+   "split": "test"
+  }
+ ]
+}

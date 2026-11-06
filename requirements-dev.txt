@@ -1,7 +1,9 @@
-# Development / test dependencies. Installs the runtime deps too, plus the test
-# runner (kept out of requirements.txt so the production image stays lean).
+# Development / test dependencies. Installs the runtime deps too, plus the local ASGI
+# server (run.py) and the test runner. Kept OUT of requirements.txt so the Vercel function
+# bundle stays small and cold starts stay fast.
 #
 #   pip install -r requirements-dev.txt
 #   python -m pytest -q
 -r requirements.txt
+uvicorn[standard]>=0.27,<1.0
 pytest>=8.0

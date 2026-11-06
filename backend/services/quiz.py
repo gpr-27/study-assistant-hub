@@ -1,44 +1,30 @@
-"""Quiz generation service — Groq JSON mode, ported from the old QuizMaker.
+"""Quiz generation service — one bounded call through the provider chain (JSON mode).
 
-Takes a single bounded slice of the document text (config.MAX_CONTENT_TOKENS)
-and generates the quiz in ONE Groq call, then validates every question against
-the QuizQuestion contract. Bounding the input keeps each request under the
-model's per-minute token limit instead of fanning out into many chunk calls.
+Takes the full document text and generates the quiz in ONE chain call (llm_chain trims per
+provider where needed), then validates every question against the QuizQuestion contract. Malformed model JSON
+is repaired (locally, then once via the LLM) before a clean QuizError is raised.
 """
-import json
 import logging
 
-from groq import APIError, Groq
-
-from backend.config import MAX_CONTENT_TOKENS, model_for, require_groq_key
-from backend.documents import clip_to_tokens
 from backend.schemas import QuizQuestion
+from backend.services import _gen
 
 _VALID_KEYS: tuple[str, str, str, str] = ("A", "B", "C", "D")
 _VALID_DIFFICULTIES: tuple[str, str, str] = ("easy", "medium", "hard")
 
-# Output (completion) cap. The model's per-minute token budget counts the reserved
-# output too, so cap it to the actual quiz size (~150 tokens for a question with four
-# options + explanation in JSON) rather than letting Groq reserve its full default.
-_TOKENS_PER_QUESTION: int = 160
-_MIN_OUTPUT_TOKENS: int = 512
-_MAX_OUTPUT_TOKENS: int = 2048
+MAX_QUESTIONS: int = 20
+_TOKENS_PER_QUESTION: int = 200
+_MIN_OUTPUT_TOKENS: int = 2048
+_MAX_OUTPUT_TOKENS: int = 4096
+
+_SYSTEM = "You are a helpful teacher creating quiz questions. Reply with strictly valid JSON only."
+
+log = logging.getLogger(__name__)
 
 
 def _output_tokens(num_questions: int) -> int:
     """Completion-token cap sized to the requested number of questions."""
-    return max(_MIN_OUTPUT_TOKENS, min(_MAX_OUTPUT_TOKENS, num_questions * _TOKENS_PER_QUESTION + 256))
-
-
-log = logging.getLogger(__name__)
-
-_JSON_RETRIES = 3
-
-
-def _is_json_validate_failed(exc: Exception) -> bool:
-    """Groq's JSON mode 400s with code 'json_validate_failed' when the model emits
-    malformed JSON. Small models do this intermittently; a fresh sample usually fixes it."""
-    return "json_validate_failed" in str(exc).lower()
+    return max(_MIN_OUTPUT_TOKENS, min(_MAX_OUTPUT_TOKENS, num_questions * _TOKENS_PER_QUESTION + 512))
 
 
 class QuizError(Exception):
@@ -52,7 +38,7 @@ def _normalise_difficulty(difficulty: str) -> str:
 
 
 def _build_prompt(content: str, num_questions: int, difficulty: str) -> str:
-    """Build the user prompt; the word JSON is present so Groq JSON mode is happy."""
+    """Build the user prompt; the word JSON is present so provider JSON modes are happy."""
     return (
         f"Create exactly {num_questions} multiple choice questions from the content below.\n"
         f"Difficulty level: {difficulty}.\n\n"
@@ -93,11 +79,15 @@ def _normalise_question(raw: object) -> QuizQuestion | None:
         return None
     if not isinstance(explanation, str) or not explanation.strip():
         return None
+    if isinstance(options, list) and len(options) == len(_VALID_KEYS):
+        options = dict(zip(_VALID_KEYS, options))      # a bare list of four -> A..D
     if not isinstance(options, dict):
         return None
 
     normalised: dict[str, str] = {}
     for key, value in options.items():
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            value = str(value)
         if not isinstance(key, str) or not isinstance(value, str):
             return None
         upper = key.strip().upper()
@@ -129,7 +119,7 @@ def _normalise_question(raw: object) -> QuizQuestion | None:
 
 def _build_topic_prompt(topic: str, num_questions: int, difficulty: str) -> str:
     """Build a quiz prompt for a free topic (no document — uses the model's own
-    knowledge); the word JSON keeps Groq JSON mode happy."""
+    knowledge); the word JSON keeps provider JSON modes happy."""
     return (
         f"Create exactly {num_questions} multiple choice questions that test understanding "
         f'of the topic: "{topic}".\n'
@@ -151,89 +141,45 @@ def _build_topic_prompt(topic: str, num_questions: int, difficulty: str) -> str:
     )
 
 
-def _generate_from_prompt(prompt: str, model, max_tokens: int) -> list[QuizQuestion]:
-    """Call Groq with JSON mode and return validated questions.
+def _shape(data: object) -> list[QuizQuestion]:
+    items = data.get("questions") if isinstance(data, dict) else data if isinstance(data, list) else None
+    if not isinstance(items, list):
+        return []
+    return [q for item in items if (q := _normalise_question(item)) is not None]
 
-    Retries when the model emits malformed JSON: Groq's JSON mode rejects invalid
-    output with a 400 ``json_validate_failed`` (and a stray bad token from a small
-    model can also fail json.loads). A fresh sample almost always validates, so we
-    retry a few times before surfacing a friendly error — never the raw 400.
-    """
-    require_groq_key()
-    client = Groq()
-    last_err: Exception | None = None
-    for attempt in range(_JSON_RETRIES):
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system",
-                     "content": "You are a helpful teacher creating quiz questions. Reply with strictly valid JSON only."},
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.5,
-                max_tokens=max_tokens,
-            )
-            payload = response.choices[0].message.content
-            data = json.loads(payload or "{}")
-        except json.JSONDecodeError as exc:
-            last_err = exc
-            log.warning("Quiz JSON parse failed (attempt %d/%d); retrying.", attempt + 1, _JSON_RETRIES)
-            continue
-        except APIError as exc:
-            # Retry the model's malformed-JSON 400; real Groq errors (rate limit, auth)
-            # still propagate to the global handlers.
-            if _is_json_validate_failed(exc):
-                last_err = exc
-                log.warning("Groq json_validate_failed (attempt %d/%d); retrying.", attempt + 1, _JSON_RETRIES)
-                continue
-            raise
-        except Exception as exc:  # noqa: BLE001 — wrap any other transport/SDK failure
-            raise QuizError(f"Quiz generation failed: {exc}") from exc
 
-        items = data.get("questions") if isinstance(data, dict) else None
-        questions = ([q for item in items if (q := _normalise_question(item)) is not None]
-                     if isinstance(items, list) else [])
-        if questions:
-            return questions
-        last_err = QuizError("the model returned no usable questions")
+def _generate_from_prompt(prompt: str, max_tokens: int):
+    """One chain call (JSON mode) -> (validated questions, ChatResult)."""
+    return _gen.generate_json(_SYSTEM, prompt, shape=_shape, max_tokens=max_tokens,
+                              error_cls=QuizError, what="quiz", temperature=0.5)
 
-    raise QuizError("Couldn't generate a valid quiz after a few tries — please try again.")
+
+def _count(num_questions: int) -> int:
+    return max(1, min(MAX_QUESTIONS, int(num_questions)))
 
 
 def make_quiz(content: str, num_questions: int, difficulty: str, model: str | None = None) -> dict:
-    """Create a quiz from the document text in a single bounded Groq call.
+    """Create a quiz from the document text in a single bounded chain call.
 
-    The text is sent in full when it fits within MAX_CONTENT_TOKENS; a longer
-    document is capped to its first MAX_CONTENT_TOKENS so the request stays under
-    the model's per-minute token limit. Returns {"questions": [...]} matching the
-    QuizQuestion schema; malformed items are dropped, never raised on.
+    Returns {"questions": [...], "llm": {...}} (questions match the QuizQuestion schema; malformed
+    items are dropped, never raised on). ``model`` is accepted for back-compat and ignored: the
+    provider chain chooses the model.
     """
     if not content or not content.strip():
         raise QuizError("No content was supplied to build a quiz from.")
-    wanted = max(1, int(num_questions))
+    wanted = _count(num_questions)
     level = _normalise_difficulty(difficulty)
-    snippet = clip_to_tokens(content, MAX_CONTENT_TOKENS)
-    resolved = model_for("quiz", model)
-    questions = _generate_from_prompt(_build_prompt(snippet, wanted, level), resolved, _output_tokens(wanted))
-    return {"questions": [q.model_dump() for q in questions[:wanted]]}
+    snippet = content
+    questions, res = _generate_from_prompt(_build_prompt(snippet, wanted, level), _output_tokens(wanted))
+    return {"questions": [q.model_dump() for q in questions[:wanted]], "llm": _gen.public(res)}
 
 
 def make_quiz_from_topic(topic: str, num_questions: int, difficulty: str, model: str | None = None) -> dict:
-    """Create a quiz about a free topic, using the model's own knowledge.
-
-    Returns {"questions": [...]} like make_quiz. One Groq call is enough since
-    there is no document to chunk.
-    """
-    if not topic or not topic.strip():
+    """Create a quiz about a free topic, using the model's own knowledge. Same shape as make_quiz."""
+    topic = _gen.clean_topic(topic)
+    if not topic:
         raise QuizError("No topic was supplied to build a quiz from.")
-    wanted = max(1, int(num_questions))
+    wanted = _count(num_questions)
     level = _normalise_difficulty(difficulty)
-    prompt = _build_topic_prompt(topic.strip(), wanted, level)
-    resolved = model_for("quiz", model)
-    budget = _output_tokens(wanted)
-    # Single Groq call here, so one malformed roll = total failure. Retry once
-    # before giving up (the global handler still surfaces a clear 502 if both fail).
-    questions = _generate_from_prompt(prompt, resolved, budget) or _generate_from_prompt(prompt, resolved, budget)
-    return {"questions": [q.model_dump() for q in questions[:wanted]]}
+    questions, res = _generate_from_prompt(_build_topic_prompt(topic, wanted, level), _output_tokens(wanted))
+    return {"questions": [q.model_dump() for q in questions[:wanted]], "llm": _gen.public(res)}

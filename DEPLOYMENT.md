@@ -1,303 +1,250 @@
-# 🚀 Production deployment
+# Deploying to Vercel
 
-This guide covers running **Study Assistant Hub** in production with Docker. The
-app is a single FastAPI server that serves both the vanilla‑JS SPA and the
-`/api/*` routes on one origin, talks to **Groq** for inference, embeds locally
-with **fastembed** (no API key), and optionally persists per‑user history in
-**MongoDB**.
+Study Assistant Hub = a static SPA (`frontend/` -> CDN) + **one** Python serverless function
+(`api/index.py`, the FastAPI `app`) + MongoDB Atlas + Clerk. The old Render/Docker setup is
+retired (kept under `legacy/render/` for reference, unsupported).
 
-> **TL;DR — Render (recommended):** push to GitHub → Render dashboard → **New +
-> → Blueprint** → connect the repo → set `GROQ_API_KEY` → done. One Web Service
-> serves the SPA **and** the API.
->
-> **TL;DR — local Docker:**
-> ```bash
-> cp .env.production.example .env     # fill in GROQ_API_KEY (+ optional Mongo/Clerk)
-> docker compose up --build -d        # build + run
-> # open http://localhost:8000  ·  health: http://localhost:8000/api/health
-> ```
+```
+browser --> Vercel CDN --- /, /assets/* ---> dist/ (built from frontend/)
+                      \--- /api/*  --rewrite--> api/index.py (FastAPI, Python 3.12, bom1)
+                                                   |-- MongoDB Atlas (AWS ap-south-1, pooled client)
+                                                   |-- Clerk JWKS (cached 1 h)
+                                                   `-- LLM chain (Anthropic -> Groq x2 -> Gemini x2)
+```
 
----
-
-## Table of contents
-
-- [Deploy to Render (one-click Blueprint)](#deploy-to-render-one-click-blueprint)
-- [Why a container (and not serverless / Vercel)](#why-a-container-and-not-serverless--vercel)
-- [What the image contains](#what-the-image-contains)
-- [Configuration & secrets](#configuration--secrets)
-- [Run with Docker Compose](#run-with-docker-compose-recommended)
-- [Run with plain Docker](#run-with-plain-docker)
-- [Data & persistence (volumes)](#data--persistence-volumes)
-- [Scaling, workers & resources](#scaling-workers--resources)
-- [Health checks](#health-checks)
-- [TLS / reverse proxy](#tls--reverse-proxy)
-- [Deploying to a managed platform](#deploying-to-a-managed-platform)
-- [CI/CD & the published image](#cicd--the-published-image)
-- [Security checklist](#security-checklist)
-- [Troubleshooting](#troubleshooting)
-
----
-
-## Deploy to Render (one-click Blueprint)
-
-The repo ships a [`render.yaml`](render.yaml) Blueprint that provisions a single
-Render **Web Service** building the production `Dockerfile`. One service serves the
-SPA and the `/api/*` routes on one origin, with full RAG (local embeddings + FAISS).
-
-1. Push the repo to GitHub.
-2. Open <https://dashboard.render.com> → **New + → Blueprint** and connect the repo.
-3. Render reads `render.yaml` and shows the service → **Apply**.
-4. Set the env vars it marks as required-at-deploy (`sync: false`): **`GROQ_API_KEY`**
-   is the only required one. Add `CLERK_PUBLISHABLE_KEY` (+ optional `CLERK_SECRET_KEY`)
-   to enable the sign-in gate, and `MONGODB_URI` to enable saved history.
-5. Render builds the image (~5–10 min — it installs FAISS/fastembed and pre-bakes the
-   embedding model) and serves at `https://<service-name>.onrender.com`. The health
-   check hits `/api/health`.
-
-**Notes & gotchas:**
-
-- **Memory.** The `free` instance is **512 MB**; the embedding model loads per worker
-  (`WEB_CONCURRENCY=1` in the blueprint keeps that to one copy). If the first chat OOMs
-  or the service restarts, change `plan: free` → `plan: standard` (2 GB) in `render.yaml`
-  or the dashboard.
-- **Cold starts.** Free services sleep after ~15 min idle and take ~30–60 s to wake.
-- **FAISS indexes** rebuild from the bundled PDFs on each start (free tier has no
-  persistent disk). Uncomment the `disk:` block in `render.yaml` (paid plans) to cache
-  them at `/app/faiss_index` across restarts.
-- **History/MongoDB.** Add `0.0.0.0/0` to **Atlas → Network Access** so Render's dynamic
-  egress IPs can connect (RAG chat itself works without Mongo).
-- **`PORT`.** Render injects `PORT`; the app binds `0.0.0.0:$PORT` automatically — only
-  `HOST=0.0.0.0` is set in the blueprint.
-
-The same image runs on **Railway / Fly.io / Cloud Run / a VPS** — see
-[Deploying to a managed platform](#deploying-to-a-managed-platform).
-
-## Why a container (and not serverless / Vercel)
-
-This backend is a poor fit for serverless platforms (Vercel Functions, Lambda,
-etc.) and a great fit for a long‑lived container, because it:
-
-- **Bundles heavy native dependencies** — `onnxruntime`, `faiss-cpu`, `numpy`,
-  the full LangChain stack. The installed footprint (~hundreds of MB) blows past
-  typical serverless bundle limits.
-- **Loads a local embedding model into memory** and keeps **per‑subject FAISS
-  indexes** cached in‑process. Serverless functions are ephemeral and would
-  rebuild/reload this on every cold start.
-- **Runs background threads** — a startup warmup (embeddings + indexes) and a
-  guest‑cleanup janitor — that need a process that stays alive.
-- **Holds a persistent MongoDB connection** and writes to disk (built indexes,
-  uploaded PDFs), which wants a writable, persistent filesystem.
-
-So: deploy the Docker image to any container host — **Render, Railway, Fly.io,
-Google Cloud Run, AWS App Runner/ECS, a plain VPS**, etc.
-
-## What the image contains
-
-- **Multi‑stage build** on `python:3.12-slim`: dependencies are installed into a
-  virtualenv in a builder stage and copied into a lean runtime stage.
-- **Pre‑baked models**: the fastembed embedding model **and** the tiktoken
-  encoding are downloaded at build time into `/opt/cache`, so the **first
-  request needs no network** and isn't slow. (If a download is unavailable at
-  build time the cache self‑heals on first use at runtime.)
-- **Non‑root user** (`app`, uid 10001) and **tini** as PID 1 for clean signals.
-- **Gunicorn + Uvicorn workers** (`gunicorn.conf.py`), all tunable via env.
-- A **`/api/health`** Docker `HEALTHCHECK`.
-- Secrets are **never** baked in — they're injected at run time.
-
-## Configuration & secrets
-
-Every value the app needs is documented in [`.env.example`](.env.example);
-[`.env.production.example`](.env.production.example) is the same set with
-production defaults. **Required** in production:
-
-| Variable | Notes |
+## What `vercel.json` does
+| Setting | Value / reason |
 |---|---|
-| `GROQ_API_KEY` | **Required.** Your Groq key (`gsk_…`). |
-| `LLM_PROVIDER` | `groq`. |
-| `AVAILABLE_MODELS`, `DEFAULT_MODEL` | The model list + default (validated at startup). |
-| `EMBEDDING_MODEL` | Local fastembed model — **pre‑baked into the image** (see below). |
+| `buildCommand` | `python3 scripts/build_frontend.py --out dist` copies `frontend/` to `dist/`, stamps every `/assets/...` URL with a content hash (`?v=`, via `scripts/stamp_assets.py`) (one build step; `frontend/` sources are never modified). |
+| `outputDirectory` | `dist` (static files; nothing else is served from the filesystem). |
+| `rewrites` | `/api/:path*` -> `/api/index` (the single FastAPI function; original path is preserved). |
+| `headers` | `/assets/*?v=...` -> `public, max-age=31536000, immutable`; assets requested without `?v` and `/` -> `max-age=0, must-revalidate`; security headers + a `Content-Security-Policy` on non-API paths (allows jsDelivr, cdnjs, Google Fonts, Clerk `*.clerk.accounts.dev` / `*.clerk.com`, Cloudflare Turnstile). **If you switch Clerk to a production instance with a custom domain (`clerk.<yourdomain>`), add that host to `script-src`, `connect-src` and `frame-src` in `vercel.json`.** All API responses (including `/api/config`) get `Cache-Control: no-store` from the app. |
+| `functions.api/index.py` | `maxDuration: 60`; `excludeFiles` keeps tests, `frontend/`, `scripts/`, `legacy/`, per-user data and docs out of the bundle. |
+| `regions` | `["bom1"]` (Mumbai) - the Atlas `Cluster0` is AWS `ap-south-1`; the DB is hit several times per request, the LLM once, so co-locate with the DB. Change it if you move the cluster. |
+| `crons` | `17 3 * * *` -> `GET /api/cron/janitor` (reaps data of TTL-expired guests, ensures Mongo indexes). Hobby plans allow daily crons only. |
+| `.python-version` | `3.12`. |
 
-**Optional** (the app runs fully without them):
+**Memory/CPU**: with Fluid Compute (default for new projects) memory is set in the dashboard, not
+`vercel.json`: *Project -> Settings -> Functions -> Memory* = **Standard (1 GB / 1 vCPU)** is plenty.
+Bundle: runtime deps resolve to ~125 MB unzipped (limit 250 MB; Vercel docs quote 500 MB).
 
-| Variable | Notes |
-|---|---|
-| `MONGODB_URI` | Enables per‑user history (and guests). Use Atlas or the bundled `mongo` service. SECRET. |
-| `CLERK_PUBLISHABLE_KEY` | Enables the sign‑in gate. Use a `pk_live_…` key in production. PUBLIC. |
-| `CLERK_SECRET_KEY` | **Set this in production if you use Clerk** — it makes the API verify session JWTs server‑side. Without it the gate is client‑side only and the API is open. SECRET. |
+## Environment variables
+Set for **Production** (and Preview if you want previews to work). Never commit values; the repo's
+`.env` is git-ignored and `.env.example` holds blanks.
 
-`APP_ENV`, `HOST`, `PORT`, and `WEB_CONCURRENCY` are set to production values
-automatically by `docker-compose.yml` and by the image defaults, so you mostly
-provide the secrets above.
-
-> **Never commit a filled‑in `.env`.** It's gitignored. On a managed platform,
-> set these as the platform's environment variables / secret store instead of
-> shipping a file.
-
-## Run with Docker Compose (recommended)
-
-```bash
-cp .env.production.example .env        # then edit: at minimum set GROQ_API_KEY
-docker compose up --build -d           # build image + start in the background
-docker compose logs -f app             # follow logs
-docker compose ps                      # check health
-```
-
-- App: <http://localhost:8000> · Health: <http://localhost:8000/api/health>
-- Remap the host port with `APP_PORT=9000 docker compose up` (container stays 8000).
-- Stop: `docker compose down` (add `-v` to also delete the data volumes).
-
-**With a local MongoDB** (instead of Atlas):
-
-```bash
-# in .env:  MONGODB_URI=mongodb://mongo:27017
-docker compose --profile with-mongo up --build -d
-```
-
-## Run with plain Docker
-
-```bash
-# Build (optionally pin the embedding model to match your .env)
-docker build -t study-assistant-hub:latest \
-  --build-arg EMBEDDING_MODEL=BAAI/bge-small-en-v1.5 .
-
-# Run — inject secrets via --env-file, force production runtime, persist data
-docker run -d --name study-assistant-hub \
-  --env-file .env \
-  -e APP_ENV=production -e HOST=0.0.0.0 -e PORT=8000 \
-  -p 8000:8000 \
-  -v sah_faiss:/app/faiss_index \
-  -v sah_documents:/app/documents \
-  --restart unless-stopped \
-  study-assistant-hub:latest
-```
-
-## Data & persistence (volumes)
-
-The app writes to two directories; mount volumes so they survive restarts:
-
-| Path | Contents | Notes |
+| Variable | Required | Notes |
 |---|---|---|
-| `/app/faiss_index` | Built per‑subject vector indexes | Pure cache — safe to delete; rebuilt automatically from the PDFs on next chat. |
-| `/app/documents` | Subject PDFs (bundled **and** uploaded) | The bundled subjects are seeded into this dir on start (without clobbering), so uploads in a mounted volume persist. |
+| `ANTHROPIC_API_KEY` | chain step 1 | `claude-sonnet-5-5` only |
+| `GROQ_API_KEY`, `GROQ_API_KEY_2` | chain steps 2, 3 | any empty step is skipped |
+| `GEMINI_API_KEY`, `GEMINI_API_KEY_2` | chain steps 4, 5 + embeddings | keys must be restricted "auth keys" |
+| `MONGODB_URI` | yes (history, uploads, guests) | Atlas -> Network Access must allow Vercel (`0.0.0.0/0`, or use Vercel's Secure Compute / Atlas Vercel integration) |
+| `MONGODB_DB_NAME` | optional | default `study_assistant_hub` |
+| `CLERK_PUBLISHABLE_KEY` | yes (auth) | public key; JWKS host is derived from it. **On Vercel the app fails closed without it**: every authenticated route answers `503` ("no sign-in configured") and `/api/health/deep` reports `checks.auth.ok=false`; it never falls back to the shared `local` owner (that fallback exists for local dev only) |
+| `CLERK_SECRET_KEY` | recommended | reserved for server-side verification |
+| `SESSION_SECRET` | **yes (prod)** | random 32+ bytes (`openssl rand -hex 32`); chat session tokens are HMAC-signed with it. **On Vercel the app fails closed without it** (chat answers 503 + `/api/health/deep` warns); it no longer derives a key from provider keys. Tokens expire after 24 h (re-minted automatically while a chat is active) |
+| `RATE_LIMIT_USER_PER_MIN` / `_PER_HOUR`, `RATE_LIMIT_GUEST_PER_MIN` / `_PER_HOUR` | optional | per-owner limits on paid endpoints, defaults 30/300 (signed in) and 10/60 (guest); see "Abuse and spend control" below |
+| `ANTHROPIC_DAILY_TOKEN_BUDGET`, `ANTHROPIC_OWNER_DAILY_TOKENS`, `ANTHROPIC_GUEST_DAILY_TOKENS`, `ANTHROPIC_MAX_REQUEST_INPUT_TOKENS` | optional | spend guards on the paid Anthropic step; defaults 2,000,000 / 400,000 / 100,000 tokens per UTC day and 120,000 estimated tokens per request; `0` = unlimited (see "Abuse and spend control") |
+| `ALLOW_GEMINI_FOR_USER_CONTENT` | optional | default `0`; see "Privacy decision" below |
+| `REQUEST_BUDGET_S`, `MAX_BODY_BYTES`, `TMP_CACHE_MAX_MB` | optional | per-request time budget (50 s), upload body cap (4.4 MB), `/tmp` cache cap (300 MB) |
+| `CRON_SECRET` | yes | any long random string; Vercel sends it as `Authorization: Bearer ...` to cron routes. Without it `/api/cron/janitor` always answers 401 |
+| `CORS_ORIGINS` | optional | comma-separated; leave empty (same-origin) unless the SPA is hosted elsewhere |
+| `GUEST_TTL_DAYS`, `LOG_LEVEL`, `AGENTIC_RAG`, `EMBED_RPM_PER_KEY`, `INDEX_BUDGET_S` | optional | tuning knobs, see `.env.example` |
 
-`MongoDB` (history, if enabled) is **separate** from these — it lives in your
-Atlas cluster or the `mongo` volume, not in the app's filesystem.
+`VERCEL` / `VERCEL_ENV` are set by the platform (the app uses `VERCEL` to disable local static
+serving and the `/docs` schema browser). `HOST`, `PORT`, `APP_ENV` are NOT needed on Vercel.
 
-> First chat for a subject builds its index (a few seconds, in a background
-> thread) and caches it to `/app/faiss_index`. With the volume mounted this
-> happens once, not on every restart.
-
-## Scaling, workers & resources
-
-**Worker count & memory:**
-
-- Tune workers with **`WEB_CONCURRENCY`** (default `2`). **Each worker loads its
-  own copy of the embedding model**, so memory scales with worker count.
-- **Per-worker breakdown:**
-  - Python runtime + libraries: ~80 MB
-  - fastembed embedding model (`BAAI/bge-small-en-v1.5`): ~150 MB
-  - In-process FAISS indexes (all subjects): ~5–10 MB
-  - Per-request transient (vector operations, text chunks in flight): ~5–30 MB
-  - **Total per worker: ~250–350 MB** (min–max across states)
-- **Example capacity:**
-  - **Free tier (512 MB, 1 worker):** 512 − 300 = 212 MB for headroom. Tight but works; no concurrent users if a request is in flight.
-  - **Standard plan (2 GB, 2 workers):** 2000 − 700 = 1300 MB headroom. Comfortably handles 3–4 concurrent users.
-  - **Rule of thumb:** RAM ≈ 200 MB + (WEB_CONCURRENCY × 250 MB).
-- The app is **I/O‑bound** (waiting on Groq/MongoDB) and each worker already serves sync
-  routes from a threadpool, so **1–2 workers** suits most deployments. Bump RAM before adding workers.
-- Other gunicorn knobs (timeout, max‑requests recycling, keep‑alive) are env‑
-  driven — see [`gunicorn.conf.py`](gunicorn.conf.py).
-- Mind **Groq rate limits** (free tier has low tokens‑per‑minute); the app
-  surfaces a clear 429 with remediation. Pick a model whose TPM exceeds
-  `MAX_CONTENT_TOKENS` + prompt + output.
-
-## Health checks
-
-- Endpoint: **`GET /api/health`** → `{"status":"ok","groq_key":true|false}`.
-- The image declares a Docker `HEALTHCHECK` against it (40s start period).
-- Point your platform's liveness/readiness probe at `/api/health`.
-
-## TLS / reverse proxy
-
-The container speaks plain HTTP on `:8000`. In production, terminate TLS in
-front of it:
-
-- **Managed platforms** (Render/Railway/Fly/Cloud Run) provide HTTPS + a domain
-  automatically — just expose port `8000`.
-- **Self‑hosted**: put **Nginx / Caddy / Traefik** in front. Forward to the
-  container and pass `X-Forwarded-*` headers. Example Caddyfile:
-  ```
-  app.example.com {
-      reverse_proxy 127.0.0.1:8000
-  }
-  ```
-
-If you ever serve the SPA from a **different origin** than the API, set
-`CORS_ORIGINS` to that origin (comma‑separated). In the default single‑server
-setup no CORS is needed.
-
-## Deploying to a managed platform
-
-All of these consume the same image / repo. Set the env vars from
-[Configuration & secrets](#configuration--secrets), expose port `8000`, point
-the health check at `/api/health`, and attach a disk for `/app/faiss_index`
-(+`/app/documents` if you allow uploads).
-
-- **Render** — *New → Web Service → Docker*. Add env vars; add a Disk mounted at
-  `/app/faiss_index`. Health check path `/api/health`.
-- **Railway** — deploy from the repo (Dockerfile detected). Add env vars and a
-  volume for `/app/faiss_index`.
-- **Fly.io** — `fly launch` (uses the Dockerfile), `fly secrets set GROQ_API_KEY=…`,
-  add a volume mounted at `/app/faiss_index`; set the internal port to `8000`.
-- **Google Cloud Run** — push the image, deploy with container port `8000`. Note
-  Cloud Run has an ephemeral filesystem and scales to zero, so prefer Atlas for
-  history and accept that indexes rebuild on cold start (or keep min‑instances ≥ 1).
-- **VPS** — install Docker, `git clone`, create `.env`, `docker compose up -d`,
-  put Caddy/Nginx in front for TLS.
-
-## CI/CD & the published image
-
-Two GitHub Actions workflows are included:
-
-- **[`ci.yml`](.github/workflows/ci.yml)** — runs the test suite on Python 3.13
-  for every push to `main` and every PR. Hermetic (no secrets needed).
-- **[`docker.yml`](.github/workflows/docker.yml)** — builds the image and pushes
-  it to **`ghcr.io/<owner>/<repo>`** on pushes to `main` and on `v*` tags. Tags:
-  branch name, semver (from `v*` tags), and the commit SHA.
-
-Pull and run the published image (after the workflow has run once):
-
+## First deploy (run these yourself - nothing here deploys automatically)
 ```bash
-docker pull ghcr.io/<owner>/study-assistant-hub:main
-docker run -d --env-file .env -e APP_ENV=production -e HOST=0.0.0.0 \
-  -p 8000:8000 -v sah_faiss:/app/faiss_index \
-  ghcr.io/<owner>/study-assistant-hub:main
+npm i -g vercel                 # once
+vercel login
+vercel link                     # create/link the project (framework preset: Other)
+
+# Env vars: pipe the value on stdin so it never appears in shell history or logs.
+printf '%s' "$ANTHROPIC_API_KEY" | vercel env add ANTHROPIC_API_KEY production
+#   ...repeat for GROQ_API_KEY GROQ_API_KEY_2 GEMINI_API_KEY GEMINI_API_KEY_2 MONGODB_URI \
+#      CLERK_PUBLISHABLE_KEY CLERK_SECRET_KEY, and:
+openssl rand -hex 32 | vercel env add CRON_SECRET production
+openssl rand -hex 32 | vercel env add SESSION_SECRET production
+# Easiest bulk path: read each value from your local .env without echoing it:
+#   for k in ANTHROPIC_API_KEY GROQ_API_KEY ...; do grep "^$k=" .env | cut -d= -f2- | tr -d '\n' | vercel env add $k production; done
+
+vercel deploy                   # preview deployment -> URL printed
+curl -s https://<preview-url>/api/health          # {"status":"ok"}
+curl -s https://<preview-url>/api/health/deep     # Mongo ping + chain configuration (booleans only)
+vercel deploy --prod            # or: vercel promote <preview-url>
 ```
+After the first production deploy: Clerk dashboard -> add the Vercel domain to allowed origins/redirect
+URLs; Atlas -> allow Vercel egress IPs; verify `vercel crons ls`.
 
-> The package may default to private. Make it public in the repo's *Packages*
-> settings, or `docker login ghcr.io` with a token that has `read:packages`.
+Rollback: `vercel rollback` (or promote a previous deployment in the dashboard).
 
-## Security checklist
+## Running locally
+* **Plain dev server** (single process serves SPA + API, auto-reload):
+  ```bash
+  python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+  cp .env.example .env            # fill in keys
+  .venv/bin/python run.py         # http://127.0.0.1:8000
+  ```
+* **Vercel parity** (`vercel dev` builds `dist/`, runs `api/index.py` through the Python runtime):
+  ```bash
+  vercel link && vercel env pull .env.local     # pulls dev env into a git-ignored file
+  python3 scripts/build_frontend.py             # vercel dev serves dist/, so build it first
+vercel dev                                     # http://localhost:3000
+  ```
+* **Cold-start / import cost**: `.venv/bin/python scripts/measure_cold_start.py` (fresh interpreters, prints
+  `-X importtime` offenders).
+* Tests: `.venv/bin/python -m pytest -q`.
 
-- [ ] **Rotate any credentials** that were ever in a local `.env` before going
-      live (Groq key, MongoDB user/password). Use the platform's secret store.
-- [ ] If using Clerk, set **`CLERK_SECRET_KEY`** so the API verifies JWTs — the
-      publishable key alone only gates the UI client‑side.
-- [ ] Use a **dedicated MongoDB user** with least privilege and a strong password;
-      restrict network access (Atlas IP allow‑list) to your platform.
-- [ ] Serve over **HTTPS** (managed platform or reverse proxy).
-- [ ] Keep `.env` out of git (it already is) and out of the image (it is — see
-      `.dockerignore`).
-- [ ] Set `CORS_ORIGINS` only to origins you control (leave empty for single‑origin).
+## Abuse and spend control
+Every paid endpoint spends real LLM money, so there are three layers:
 
-## Troubleshooting
+1. **In-app limiter** (`backend/ratelimit.py`): per-owner token buckets, in memory, per instance. Defaults:
+   signed-in **30 req/min and 300/hour**, guests **10 req/min and 60/hour** (`RATE_LIMIT_*` env vars; `0` disables a
+   window). Applied to chat, quiz, flashcards, exam, cheatsheet, mindmap, planner, predictor, teach-back,
+   scan-notes, insights and chat overview. Over the limit: `429 {"detail": ...}` with `Retry-After` (no `llm`
+   block, no model was involved). Serverless instances do not share memory, so the real ceiling is
+   "limit x live instances" - that is why layer 2 exists. `RATE_LIMIT_DISABLED=1` switches it off for load
+   tests (`scripts/loadtest.py` sets it for its own server) and is **ignored whenever `VERCEL` is set**.
+2. **Vercel Firewall rate limits** (edge, shared by all instances). Recommended rules (*Project -> Firewall ->
+   Configure -> Custom Rules*, action **Rate Limit**, key **IP**, window = fixed/sliding as offered):
 
-| Symptom | Cause & fix |
+   | Rule | Match | Limit | Then |
+   |---|---|---|---|
+   | AI endpoints | Request Path matches `^/api/(chat\|quiz\|flashcards\|exam\|cheatsheet\|mindmap\|planner\|predictor\|teachback\|scannotes\|insights\|grade)` and Method is `POST` (or `GET` for insights) | 60 requests / 1 min per IP | 429 for 1 min |
+   | Uploads | Request Path is one of `/api/scannotes/extract`, `/api/predictor/analyze`, `/api/chat/upload`, `/api/subjects`, `/api/subjects/uploads` and Method `POST` | 10 requests / 1 min per IP | 429 for 5 min |
+   | Guest creation | Request Path is `/api/guest` and Method `POST` | 5 requests / 10 min per IP | 429 for 30 min |
+   | Everything else | Request Path starts with `/api/` | 300 requests / 1 min per IP | 429 for 1 min |
+
+   Also turn on **Bot Protection** (Challenge) and, if you see a flood, **Attack Challenge Mode**. Set a
+   **spend limit / alert** on every provider key (Anthropic, Groq, Google) - the app cannot cap provider-side spend.
+3. **Premium-model spend guards** (`backend/spend.py`, shared across instances, no Redis needed). Anthropic is the
+   only paid step, so its tokens (prompt + completion, from the provider's actual `usage`, streaming included) are
+   counted per UTC day in the Mongo collection `usage_daily` (TTL 3 days; Redis `INCRBY` instead when
+   `CACHE_BACKEND` is shared). Env, `0` = unlimited: `ANTHROPIC_DAILY_TOKEN_BUDGET` (global, default 0 = unlimited),
+   `ANTHROPIC_OWNER_DAILY_TOKENS` (signed-in, default 0), `ANTHROPIC_GUEST_DAILY_TOKENS` (guests, default 0) and
+   `ANTHROPIC_MAX_REQUEST_INPUT_TOKENS` (per request, estimated chars/3.6, default 0). **All four default to 0 (no budget caps) at the owner's request; set them to enable spend guards**. Exhausted budget or oversize
+   prompt: the chain skips Anthropic (`skipped: ["anthropic budget"]` / `["anthropic too-large"]`) and Groq/Gemini
+   answer; if no other model may take an oversize prompt (e.g. only Anthropic + Gemini keys and uploaded content)
+   the API returns **413** "This request is too large for the available models; use fewer or smaller files".
+   Observability: `/api/health/deep` -> `checks.budgets` (`global_used`, `global_limit`, `pct`, `owners_tracked`,
+   `anthropic_skipped_today`; no owner ids) and one INFO log line when a budget first trips each day; at 80% a
+   warning is logged and the model badge popover shows "Premium model budget nearly used today" (`/api/config`
+   `premiumBudget` booleans). Usage is flushed every ~20 s (or at 5% of a budget), so concurrent instances can
+   overshoot by roughly one flush window of tokens; a Mongo/Redis outage fails open to per-instance counters.
+   Still set a provider-side spend limit on the Anthropic key.
+4. **Fail closed**: on Vercel a missing `CLERK_PUBLISHABLE_KEY` or `SESSION_SECRET` is refused with a clear 503
+   (see the table above) instead of serving everyone as one shared owner.
+
+## Privacy decision (the lead's call)
+Gemini's free tier may train on prompts. **Decision:** content a *user uploaded* is never sent to Gemini unless the
+operator opts in. Concretely, with `ALLOW_GEMINI_FOR_USER_CONTENT=0` (the default) these flows call the provider
+chain with `sensitive=True`, which skips both Gemini steps:
+
+* scan-notes (every photo);
+* chat, quiz, flashcards, exam (generate + grading), cheat sheet, mind map, planner (+ summaries), predictor and
+  teach-back over a **user-uploaded subject** or an **uploaded PDF**, and every PDF chat (`chat_pdfs`);
+* the chat overview card of a user subject.
+
+Bundled subjects (the public sample PDFs) and generic topic-only requests stay non-sensitive and may use Gemini.
+If only Gemini keys are configured, a sensitive request answers `503` with *"This request uses content you uploaded,
+which is never sent to Google's free-tier Gemini models ... add an Anthropic or Groq key"* and the model label
+`Model: none (private content - Gemini disabled)`. Set `ALLOW_GEMINI_FOR_USER_CONTENT=1` to lift the restriction.
+Known gap: retrieval **embeddings** of uploaded PDFs (and of chat queries over them) still go to the Gemini
+embeddings API, because there is no other embedding backend; the restriction covers generation only.
+
+## Time and size budgets
+* One shared per-request deadline (`REQUEST_BUDGET_S`, default 50 s of Vercel's 60 s; `backend/deadline.py`): a chat
+  tool turn (intent detection + generation) and a photo scan (up to two rounds of vision calls) draw from the same
+  budget; when it is spent the API answers a clean `503` with the `llm` label (a scan returns the pages it already
+  transcribed, failed pages are marked in the Markdown and listed in `failed_pages`). `generate_json` defaults to a
+  40 s budget on Vercel.
+* Request bodies for scan-notes, predictor, chat-PDF upload and the other single-PDF upload routes are capped at
+  **~4.4 MB total** (`MAX_BODY_BYTES`), answered as JSON `413` *before* parsing (Vercel's own 4.5 MB rejection is not
+  JSON). The SPA shrinks photos in the browser (long edge 1600 px, JPEG q0.8, <= ~900 KB each), sends at most 3 per
+  request and chains requests for more; oversize PDFs are refused client-side with a message.
+* `/tmp` caches (`study-documents`, `study-index`) are capped at `TMP_CACHE_MAX_MB` (300) with LRU eviction; an entry
+  used in the last 3 minutes or held by an upload / delete is never evicted. A `/tmp` index is revalidated against
+  MongoDB (2-minute window) before it is trusted, also after it was evicted from RAM.
+* The janitor cron shares one 50 s budget across index ensure, the artifact sweep and the uploads sweep; both sweeps
+  are resumable (`partial: true` in the response means the next run continues).
+
+## Operational notes
+* **No background work**: there are no threads at startup and no warm-ups. The Mongo client is created
+  lazily, once per instance (pool <= 10, 3 s server-selection timeout); indexes are ensured by a one-shot
+  background call guarded by a version marker (`_meta` collection) and by the daily cron.
+* **Health**: `/api/health` is liveness only (no DB/LLM). `/api/health/deep` returns 503 if Mongo is down.
+* **Observability**: every response carries `X-Request-ID` and `Server-Timing` (`auth`, `db`, `total`); one
+  access-log line per request (`vercel logs`, dashboard -> Logs).
+* **Errors**: LLM chain exhausted -> HTTP 503 `{detail, llm:{label:"Model: none (all providers failed)"}}`;
+  MongoDB unreachable -> 503; anything else -> JSON 500 with a `request_id` (no tracebacks to clients).
+* **Limits / large PDFs**: function request/response bodies are capped at 4.5 MB on Vercel, so the SPA sends
+  selections up to ~4 MB as one multipart `POST /api/subjects` and anything bigger as a **resumable chunked
+  upload** assembled server-side: `POST /api/subjects/uploads` (validates name/size/type, caps: 5 open uploads and
+  80 MB pending per user) -> `PUT /api/subjects/uploads/{id}/chunks/{i}` (raw <= 3 MB, idempotent) ->
+  `POST /api/subjects/uploads/{id}/complete` (same pipeline + response as the multipart add; idempotent, safe
+  against concurrent calls) ; `GET` shows stored chunks, `DELETE` aborts. Chunks live in MongoDB
+  (`upload_sessions` / `upload_chunks`, TTL 1 h after the last chunk, so abandoned uploads vanish by themselves);
+  **MONGODB_URI is required on Vercel for this** (instances do not share `/tmp`; without it the endpoints return
+  503). Locally without MongoDB a bounded OS-temp-dir store is used. Limits (all env, defaults shown; the SPA text
+  is generated from them via `GET /api/subjects` -> `limits`, so copy never drifts): `UPLOAD_MAX_FILE_MB=200`,
+  `UPLOAD_MAX_TOTAL_MB=0` (0 = **no per-upload total cap**), `UPLOAD_MAX_FILES=50`, `UPLOAD_MAX_PDFS_PER_SUBJECT=100`,
+  `UPLOAD_MAX_SUBJECTS_PER_OWNER=100`, `UPLOAD_MAX_PAGES_PER_PDF=2000`, `UPLOAD_MAX_PAGES_PER_REQUEST=0` (unlimited),
+  `UPLOAD_MAX_OPEN=8` open chunked uploads and `UPLOAD_MAX_PENDING_MB=1024` in flight per owner,
+  `UPLOAD_CHUNK_BYTES=3000000` (max 3.5 MB; the SPA keeps 3 pieces in flight). Big PDFs are READ in page ranges
+  across calls (`continue-index` drives it, ~35 s each; progress "Reading pages 400/1500", then "Embedding x/y chunks");
+  the read text is kept next to the index (`texts.json.gz` inside the stored index zip).
+* **Storage on Atlas M0 (512 MB, shared with everything)**: originals up to `RAW_KEEP_MB=25` stay in GridFS; a bigger
+  PDF is dropped once fully read and only its compressed text + chunks + vectors remain ("text index only"; local dev
+  without MongoDB keeps every file). `STORAGE_CAP_MB=512` / `STORAGE_REFUSE_PCT=90` make uploads answer HTTP 507
+  with a clear message when the cluster is nearly full (`dbStats`, cached `STORAGE_CACHE_S=300`; fails open if unreadable).
+  Per-owner usage is shown in the subject panel. Truly unlimited raw storage needs Atlas M10+ or object storage
+  (Vercel Blob / S3) for the originals; the index stays in MongoDB.
+* **Editing subjects**: `PATCH /api/subjects/{name}` renames (files, index zip re-keyed without re-embedding, history
+  `subject` labels relabelled with one `update_many` per collection), `DELETE /api/subjects/{name}/pdfs/{file}`,
+  `POST /api/subjects/{name}/reindex`, `GET /api/subjects/{name}/files`. Standard subjects can be hidden per account:
+  `POST /api/subjects/{name}/hide|restore`, `POST /api/subjects/restore-standard` (collection `owner_prefs`, read
+  through a 60 s cache + the shared L2 cache; shared files and history are never touched).
+* **Guests/Clerk**: Clerk JWKS is fetched once per instance (3 s timeout, 1 h cache, 30 s back-off on failure).
+
+## Shared cache (optional, free): Upstash Redis
+
+`backend/cache.py` is a small cache/state layer with a pluggable backend. With **no configuration the app behaves
+exactly as before** (everything stays in per-process memory). Setting the two variables below turns on a *shared*
+Redis (any Redis exposing the Upstash-style HTTPS REST API; plain `httpx`, no client library) so that serverless
+instances share state and the database is hit far less often.
+
+| variable | meaning |
 |---|---|
-| Container exits immediately, logs show `❌ Missing/invalid configuration: …` | A required env var is missing/invalid (e.g. `GROQ_API_KEY`, `DEFAULT_MODEL` not in `AVAILABLE_MODELS`). Fix it in `.env` and restart — the app fails fast by design. |
-| `HEALTHCHECK` stuck `starting` then `unhealthy` | App didn't bind. Check logs (`docker compose logs app`); verify `PORT=8000` and that nothing else uses the host port. |
-| First chat slow / build pulls the model | The embedding model wasn't pre‑baked (build‑time download failed). It downloads once at runtime into the cache; rebuild with network access to bake it. |
-| History not saving | `MONGODB_URI` unset or unreachable. Logs print `MongoDB init failed; persistence disabled for this run`. Check the URI/credentials and network/IP allow‑list. |
-| Indexes rebuild on every restart | `/app/faiss_index` isn't on a persistent volume. Mount one (see [Data & persistence](#data--persistence-volumes)). |
-| Uploaded subjects disappear on restart | `/app/documents` isn't on a persistent volume. Either mount one (paid disk), or set `MONGODB_URI` — uploaded PDFs are then stored in MongoDB and re‑hydrated on each start, which persists them across restarts even on Render's free (diskless) tier. Bundled subjects always persist (baked into the image). |
-| 429 from AI tools | Groq rate limit. Use a higher‑TPM model or lower `MAX_CONTENT_TOKENS`. |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | enable it (the Vercel Marketplace aliases `KV_REST_API_URL` / `KV_REST_API_TOKEN` also work) |
+| `CACHE_BACKEND` | `auto` (default: use Redis when both vars are set), `memory` (force off), `upstash` |
+| `CACHE_TIMEOUT_MS` | per-call budget, default 120, capped at 150 |
+
+What moves into it (all keys `sah:v1:<namespace>:<sha256(owner)[:24]>:...`, small JSON, always with a TTL, never the raw
+owner/guest id):
+
+* the per-owner snapshot behind the history lists and the progress dashboard, the progress summary and the daily insights
+  card, each validated by a per-owner **epoch** that every write (on any instance) bumps, so a stale entry is never served
+  after a write;
+* the per-owner rate-limit buckets (one atomic Lua call; the limit then holds across instances);
+* the "guest was just validated/touched" marker (a cold instance skips the Mongo write), the 120 s chat-state cache, the
+  user's uploaded-subjects list, the verified-token verdict (only read while Clerk's JWKS is unreachable) and the LLM
+  chain's "quota exhausted" / "dead key" memory (read from a background-refreshed snapshot, never on the request path).
+
+Safety: every call has a hard timeout and falls back to the in-process path; 3 consecutive failures open a 20 s circuit
+breaker on the cache itself, so a Redis outage costs nothing but the old behaviour. The cache is never a source of truth.
+Privacy note: chat context (the last few turns, <= 48 KB) and progress aggregates are stored in the Redis you choose; leave
+the variables unset if that is not acceptable.
+
+Enable it (free): Vercel dashboard -> Storage / Marketplace -> **Upstash for Redis** -> plan **Free** (500K commands/month,
+no payment method; accept Upstash's terms once), connect to this project. Then `vercel env ls` must show
+`KV_REST_API_URL` / `KV_REST_API_TOKEN` (or add `UPSTASH_REDIS_REST_URL` / `_TOKEN`) and redeploy. CLI equivalent once the
+terms were accepted: `vercel integration add upstash/upstash-kv --plan free`. Budget: roughly 3-6 commands per session, so
+the free 500K/month covers on the order of 100K sessions; if exceeded the breaker simply opens and the app keeps working.
+
+## Privacy decision: embeddings of uploaded content (owner's call, 2026-11-06)
+
+Chat, quizzes, flashcards, exams and every other generation over user-uploaded content skip Gemini
+(`backend/privacy.py`, toggle `ALLOW_GEMINI_FOR_USER_CONTENT`, default off). **Embeddings are the one exception, by the owner's
+explicit choice:** the text of uploaded PDFs is sent to Google's `gemini-embedding-2` to build the search index, because it gives much
+better retrieval than keyword-only search. On the Gemini free tier Google may use prompts to improve its products. To change this,
+make `vector_store` skip the embedding step for user subjects (they then fall back to BM25 keyword search automatically).

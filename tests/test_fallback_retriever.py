@@ -1,80 +1,110 @@
-"""Quota-fallback retrieval: when the primary embedding model's quota is spent,
-the SAME query is searched against the fallback-model index (query vector and
-index switch together — a cross-model query would silently return garbage)."""
+"""Retrieval must NEVER hard-fail: when embeddings are unavailable (quota, auth, network,
+no keys) the retriever answers from BM25 over the stored chunks, quickly, and recovers
+once embeddings come back. Mocked HTTP only."""
+import time
 import unittest
 from unittest import mock
 
-from backend import vector_store
-from backend.gemini_embeddings import GeminiQuotaError
+import numpy as np
+
+from backend import gemini_embeddings as ge
+from backend import vector_store as vs
+from tests.test_vector_store import CHUNKS, DIM, _embed_text, _index
 
 
-class _Store:
-    def __init__(self, docs=None, raise_quota=False):
-        self.docs = docs or []
-        self.raise_quota = raise_quota
-        self.queries = []
-
-    def similarity_search(self, query, k):
-        self.queries.append((query, k))
-        if self.raise_quota:
-            raise GeminiQuotaError("quota")
-        return self.docs
+def _resp(status, payload=None):
+    r = mock.MagicMock()
+    r.status_code = status
+    r.json.return_value = payload or {}
+    r.text = str(payload or "")
+    return r
 
 
-class QuotaFallbackRetrieverTests(unittest.TestCase):
+class LexicalFallbackTests(unittest.TestCase):
     def setUp(self):
-        vector_store._primary_quota_until = 0.0    # reset the cooldowns between tests
-        vector_store._fallback_quota_until = 0.0
+        ge.reset_state()
+        self.addCleanup(ge.reset_state)
 
-    def test_primary_success_never_loads_fallback(self):
-        primary = _Store(docs=["d1"])
-        r = vector_store._QuotaFallbackRetriever("Math", primary, k=4)
-        with mock.patch.object(vector_store, "_load_fallback_store",
-                               side_effect=AssertionError("must not be called")):
-            self.assertEqual(r.invoke("q"), ["d1"])
-        self.assertEqual(primary.queries, [("q", 4)])
+    def _patch_http(self, handler):
+        sess = mock.MagicMock()
+        sess.post.side_effect = handler
+        for p in (mock.patch.object(ge, "_http", lambda: sess),
+                  mock.patch.object(ge, "load_keys", lambda: ["key-A", "key-B"]),
+                  mock.patch.object(ge.time, "sleep")):
+            p.start()
+            self.addCleanup(p.stop)
+        return sess
 
-    def test_quota_switches_to_fallback_index(self):
-        primary = _Store(raise_quota=True)
-        fallback = _Store(docs=["fb-doc"])
-        r = vector_store._QuotaFallbackRetriever("Math", primary, k=3)
-        with mock.patch.object(vector_store, "_load_fallback_store", return_value=fallback):
-            self.assertEqual(r.invoke("q"), ["fb-doc"])
-        self.assertEqual(fallback.queries, [("q", 3)])
+    def test_quota_on_every_key_still_returns_relevant_chunks_quickly(self):
+        self._patch_http(lambda *a, **k: _resp(429, {"error": {"message": "quota"}}))
+        r = _index().as_retriever(search_kwargs={"k": 2})
+        t = time.monotonic()
+        docs = r.invoke("what is a deadlock between processes")
+        self.assertLess(time.monotonic() - t, ge.QUERY_DEADLINE_S + 1.0)
+        self.assertEqual(docs[0].page_content, CHUNKS[0]["text"])
+        self.assertEqual(docs[0].metadata["retrieval"], "lexical")
 
-    def test_cooldown_skips_primary_after_quota_failure(self):
-        primary = _Store(raise_quota=True)
-        fallback = _Store(docs=["fb"])
-        r = vector_store._QuotaFallbackRetriever("Math", primary, k=2)
-        with mock.patch.object(vector_store, "_load_fallback_store", return_value=fallback):
-            r.invoke("q1")            # primary probed once, quota -> cooldown set
-            r.invoke("q2")            # within cooldown: straight to fallback
-            r.invoke("q3")
-        self.assertEqual(len(primary.queries), 1)    # primary probed exactly once
-        self.assertEqual(len(fallback.queries), 3)
+    def test_auth_failure_and_network_errors_fall_back_too(self):
+        for handler in (lambda *a, **k: _resp(401, {"error": {"message": "x"}}),
+                        mock.Mock(side_effect=ConnectionError("down"))):
+            ge.reset_state()
+            sess = mock.MagicMock()
+            sess.post.side_effect = handler
+            with mock.patch.object(ge, "_http", lambda: sess), \
+                 mock.patch.object(ge, "load_keys", lambda: ["key-A"]), \
+                 mock.patch.object(ge.time, "sleep"):
+                docs = _index().search("bayes theorem conditional probabilities", 1)
+            self.assertEqual(docs[0].page_content, CHUNKS[3]["text"])
 
-    def test_no_fallback_degrades_to_empty(self):
-        # No fallback index for this (user-uploaded) subject: a live chat must not
-        # stall or 502 on quota — retrieval degrades to no context (empty result),
-        # and the primary cooldown is armed so later queries skip the dead primary.
-        primary = _Store(raise_quota=True)
-        r = vector_store._QuotaFallbackRetriever("UserSubj", primary, k=3)
-        with mock.patch.object(vector_store, "_load_fallback_store", return_value=None):
-            self.assertEqual(r.invoke("q"), [])
-        self.assertGreater(vector_store._primary_quota_until, 0.0)
+    def test_no_keys_configured_means_lexical_not_error(self):
+        with mock.patch.object(ge, "load_keys", lambda: []):
+            docs = _index().search("paging frames memory", 1)
+        self.assertEqual(docs[0].page_content, CHUNKS[1]["text"])
 
-    def test_both_dead_skips_embedding_entirely(self):
-        # Primary AND fallback both throttled → both cooldowns armed → subsequent
-        # queries return [] WITHOUT touching either store (no embedding, no wait).
-        primary = _Store(raise_quota=True)
-        fallback = _Store(raise_quota=True)
-        r = vector_store._QuotaFallbackRetriever("Math", primary, k=2)
-        with mock.patch.object(vector_store, "_load_fallback_store", return_value=fallback):
-            self.assertEqual(r.invoke("q1"), [])   # primary + fallback probed once each
-            self.assertEqual(r.invoke("q2"), [])   # both in cooldown → skipped
-            self.assertEqual(r.invoke("q3"), [])
-        self.assertEqual(len(primary.queries), 1)    # primary probed exactly once
-        self.assertEqual(len(fallback.queries), 1)   # fallback probed exactly once
+    def test_recovers_to_hybrid_when_embeddings_return(self):
+        state = {"ok": False}
+
+        def handler(url, json=None, headers=None, timeout=None):
+            if not state["ok"]:
+                return _resp(500)
+            return _resp(200, {"embedding": {"values": _embed_text("matrix rows columns").tolist()}})
+        self._patch_http(handler)
+        idx = _index()
+        self.assertEqual(idx.search("matrix rows columns", 1)[0].metadata["retrieval"], "lexical")
+        state["ok"] = True
+        ge.reset_state()                       # clear the short circuit-breaker
+        self.assertEqual(idx.search("matrix rows columns", 1)[0].metadata["retrieval"], "hybrid")
+
+    def test_retriever_swallows_load_errors(self):
+        r = vs.Retriever(key="user__u__Gone", owner="u", k=3, subject="Gone")
+        with mock.patch.object(vs, "_get_index", side_effect=RuntimeError("mongo down")):
+            self.assertEqual(r.invoke("anything"), [])
+
+    def test_query_embedding_is_cached_between_agentic_rounds(self):
+        sess = self._patch_http(lambda *a, **k: _resp(200, {"embedding": {"values": _embed_text("paging").tolist()}}))
+        idx = _index()
+        idx.search("paging", 1)
+        idx.search("paging", 2)
+        self.assertEqual(sess.post.call_count, 1)
+
+    def test_invoke_lexical_never_embeds(self):
+        r = _index().as_retriever(search_kwargs={"k": 2})
+        with mock.patch.object(ge, "embed_query", side_effect=AssertionError("must not embed")):
+            docs = r.invoke_lexical("what is a deadlock")
+        self.assertEqual(docs[0].page_content, CHUNKS[0]["text"])
+        self.assertEqual(docs[0].metadata["retrieval"], "lexical")
+
+    def test_invoke_timeout_bounds_the_embedding_step(self):
+        seen = {}
+
+        def spy(text, *, model=None, dim=None, deadline_s=None):
+            seen["deadline"] = deadline_s
+            raise ge.GeminiEmbeddingError("slow")
+        r = _index().as_retriever(search_kwargs={"k": 1})
+        with mock.patch.object(ge, "embed_query", spy):
+            docs = r.invoke("paging frames memory", timeout_s=0.8)
+        self.assertEqual(seen["deadline"], 0.8)
+        self.assertEqual(docs[0].metadata["retrieval"], "lexical")
 
 
 if __name__ == "__main__":

@@ -1,43 +1,32 @@
-"""Scan Handwritten Notes service — Gemini vision OCR over the plain REST API.
+"""Scan Handwritten Notes service — vision OCR through the provider chain.
 
-Mirrors ``backend/gemini_embeddings.py``: a thin ``requests`` wrapper over the
-Generative Language REST endpoint base, reusing the same key, timeout, and
-retry conventions (429 retryDelay honored, transient 5xx retried with backoff)
-— deliberately avoiding the heavy google-generativeai dependency tree.
+Each photo is sent (as image input) to ``backend.llm_chain.achat`` and transcribed faithfully into
+clean Markdown. Only vision-capable models can serve this (Claude, ``qwen/qwen3.8-27b`` on Groq and
+the Gemini models); the chain is responsible for restricting the candidate list when ``images`` is
+given. Pages are transcribed with bounded concurrency so a 6-photo scan costs ~2 calls of latency,
+not 6, and nothing blocks the event loop.
 
-Each photo is sent as a base64 ``inline_data`` part to ``generateContent`` and
-transcribed faithfully into clean Markdown. The vision model id is read from
-the GEMINI_VISION_MODEL env var here (config.py is frozen for this feature);
-it defaults to "gemini-2.5-flash" (2.0-flash is retired on the free tier:
-its quota is 0, so every call 429s).
+If the installed ``llm_chain`` has no ``images=`` support yet, the scan fails with a clear 503
+(``ScanUnavailableError``) instead of silently talking to a provider directly.
 """
 from __future__ import annotations
 
-import base64
+import asyncio
+import inspect
 import logging
-import os
-import re
-import time
+from dataclasses import dataclass, field
 
-import requests
-
-from backend import config
+from backend import config, deadline, llm_chain
+from backend.llm_chain import LLMChainError
 
 log = logging.getLogger("backend.services.scannotes")
 
-_API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
-_DEFAULT_VISION_MODEL = "gemini-2.5-flash"
-_VISION_MODEL_ENV = "GEMINI_VISION_MODEL"
-_TIMEOUT = 60
-_MAX_RETRIES = 4
-_MAX_BACKOFF = 65          # cap a single wait at ~one quota window + margin
-_RETRYABLE_STATUS = {500, 502, 503, 504}
-# Conservative completion cap per image — a dense handwritten page transcribes
-# to well under this, and capping keeps every call's cost bounded.
 _MAX_OUTPUT_TOKENS = 4096
+_CONCURRENCY = 3
+_PAGE_DEADLINE_S = 40.0
 
-_PROMPT = (
-    "Transcribe these handwritten study notes faithfully into clean Markdown.\n"
+_SYSTEM = (
+    "You transcribe photos of handwritten study notes faithfully into clean Markdown.\n"
     "- Use headings (#, ##) where the notes have titles or section breaks.\n"
     "- Use bullet or numbered lists where the notes use them.\n"
     "- Write math as plain LaTeX-style text (e.g. x^2 + y^2 = r^2), not images or code fences.\n"
@@ -45,140 +34,128 @@ _PROMPT = (
     "- Do not add commentary, summaries, or content that is not in the image.\n"
     "Return ONLY the Markdown transcription."
 )
+_USER = "Transcribe the attached page of handwritten notes."
 
 
 class ScanNotesError(Exception):
-    """Raised when the Gemini vision API cannot be reached or returns an error."""
+    """Raised when the vision transcription fails (→ 502)."""
 
 
-class MissingGeminiKeyError(ScanNotesError):
-    """Raised when a scan is attempted without a Gemini API key configured."""
+class ScanUnavailableError(ScanNotesError):
+    """No vision-capable provider is configured / image input isn't enabled (→ 503)."""
 
 
-def vision_model() -> str:
-    """The Gemini vision model id (env-overridable; config.py stays untouched)."""
-    return (os.getenv(_VISION_MODEL_ENV) or "").strip() or _DEFAULT_VISION_MODEL
+MissingGeminiKeyError = ScanUnavailableError      # back-compat name
 
 
-def require_gemini_key() -> None:
-    """Raise a clear error if the Gemini key is missing (mirrors require_groq_key)."""
-    if not config.GEMINI_API_KEY:
-        raise MissingGeminiKeyError(
-            "GEMINI_API_KEY is not set. Add your Gemini key to .env "
-            "(get one at https://aistudio.google.com/apikey) to scan handwritten notes."
-        )
+def supports_images() -> bool:
+    try:
+        return "images" in inspect.signature(llm_chain.achat).parameters
+    except (TypeError, ValueError):
+        return False
 
 
-def _retry_after_seconds(body: dict) -> float | None:
-    """Extract the server-requested retry delay (seconds) from a 429 response."""
-    err = body.get("error", {}) if isinstance(body, dict) else {}
-    for detail in err.get("details", []) or []:
-        if str(detail.get("@type", "")).endswith("RetryInfo"):
-            m = re.match(r"([0-9.]+)s", str(detail.get("retryDelay", "")))
-            if m:
-                return float(m.group(1))
-    m = re.search(r"retry in ([0-9.]+)s", str(err.get("message", "")))
-    return float(m.group(1)) if m else None
+def require_vision() -> None:
+    """Fail fast (503) when no provider key is set or the chain can't take image input."""
+    if not llm_chain.has_any_key():
+        raise ScanUnavailableError(
+            "No AI provider key is configured. Set at least one of the provider API keys to scan notes.")
+    if not supports_images():
+        raise ScanUnavailableError("Image input is not enabled in the model chain yet; scanning is unavailable.")
 
 
-def _post_with_retries(url: str, payload: dict) -> dict:
-    """POST to Gemini, honoring 429 retryDelay and retrying transient failures.
+# Back-compat alias used by the router/tests.
+require_gemini_key = require_vision
 
-    Any terminal failure raises ScanNotesError with a readable message (the
-    router maps it to a 502).
+
+async def transcribe_image(image_bytes: bytes, mime_type: str) -> tuple[str, dict | None]:
+    """Transcribe ONE photo -> (markdown, public llm). ``LLMChainError`` propagates (→ 503).
+
+    Photos are user-uploaded content: unless ``ALLOW_GEMINI_FOR_USER_CONTENT=1`` the call is
+    ``sensitive`` and never reaches the free-tier Gemini models.
     """
-    last_err: Exception | None = None
-    for attempt in range(_MAX_RETRIES):
-        try:
-            resp = requests.post(url, json=payload, timeout=_TIMEOUT)
-        except requests.RequestException as exc:  # network blip → retry
-            last_err = exc
-            log.debug("Gemini vision network error (attempt %d): %s", attempt + 1, exc)
-            time.sleep(min(2 ** attempt, 8))
-            continue
-
-        if resp.status_code == 200:
-            return resp.json()
-        if resp.status_code in (401, 403):
-            raise ScanNotesError(
-                f"Gemini vision auth failed ({resp.status_code}). "
-                f"Check GEMINI_API_KEY. Body: {resp.text[:200]}"
-            )
-        if resp.status_code == 429:
-            # Free-tier per-minute quota exhausted: wait the server-stated delay.
-            last_err = ScanNotesError(f"Gemini quota exhausted: {resp.text[:200]}")
-            try:
-                delay = _retry_after_seconds(resp.json())
-            except ValueError:
-                delay = None
-            wait = min((delay or 2 ** attempt) + 1, _MAX_BACKOFF)
-            log.info("Gemini vision quota hit; waiting %.0fs (attempt %d/%d).",
-                     wait, attempt + 1, _MAX_RETRIES)
-            time.sleep(wait)
-            continue
-        if resp.status_code in _RETRYABLE_STATUS:
-            last_err = ScanNotesError(f"{resp.status_code}: {resp.text[:200]}")
-            log.debug("Gemini vision retryable %s (attempt %d).", resp.status_code, attempt + 1)
-            time.sleep(min(2 ** attempt, 8))
-            continue
-        raise ScanNotesError(f"Gemini vision error {resp.status_code}: {resp.text[:300]}")
-
-    raise ScanNotesError(
-        f"Gemini vision request failed after {_MAX_RETRIES} attempts: {last_err}"
+    require_vision()
+    res = await llm_chain.achat(
+        _SYSTEM, [{"role": "user", "content": _USER}],
+        max_tokens=_MAX_OUTPUT_TOKENS, temperature=0.1,
+        deadline_s=deadline.clamp(_PAGE_DEADLINE_S),            # shares the request's overall budget
+        sensitive=config.user_content_sensitive(),
+        images=[(image_bytes, mime_type)],
     )
-
-
-def _extract_text(data: dict) -> str:
-    """Pull the transcription text out of a generateContent response."""
-    candidates = data.get("candidates") if isinstance(data, dict) else None
-    if not candidates:
-        feedback = (data or {}).get("promptFeedback", {}) if isinstance(data, dict) else {}
-        reason = feedback.get("blockReason")
-        if reason:
-            raise ScanNotesError(f"Gemini declined to transcribe this image (blocked: {reason}).")
-        raise ScanNotesError("Gemini returned no transcription for this image; try a clearer photo.")
-    parts = (candidates[0].get("content") or {}).get("parts") or []
-    text = "\n".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+    text = (res.text or "").strip()
     if not text:
-        raise ScanNotesError("Gemini returned an empty transcription; try a clearer photo.")
-    return text
+        raise ScanNotesError("The model returned an empty transcription; try a clearer photo.")
+    return text, res.to_public()
 
 
-def transcribe_image(image_bytes: bytes, mime_type: str) -> str:
-    """Transcribe ONE photo of handwritten notes into Markdown (one Gemini call)."""
-    require_gemini_key()
-    model = vision_model()
-    qualified = model if model.startswith("models/") else f"models/{model}"
-    url = f"{_API_ROOT}/{qualified}:generateContent?key={config.GEMINI_API_KEY}"
-    payload = {
-        "contents": [{
-            "parts": [
-                {"inline_data": {
-                    "mime_type": mime_type,
-                    "data": base64.b64encode(image_bytes).decode("ascii"),
-                }},
-                {"text": _PROMPT},
-            ],
-        }],
-        "generationConfig": {
-            "temperature": 0.1,                      # faithful transcription, not creativity
-            "maxOutputTokens": _MAX_OUTPUT_TOKENS,   # explicit, conservative output cap
-        },
-    }
-    return _extract_text(_post_with_retries(url, payload))
+@dataclass
+class ScanOutcome:
+    """Result of a multi-page scan: the combined Markdown plus which pages failed."""
+
+    markdown: str
+    llm: dict | None
+    pages: int
+    failed_pages: list[int] = field(default_factory=list)
+
+    @property
+    def partial(self) -> bool:
+        return bool(self.failed_pages)
 
 
-def transcribe_images(images: list[tuple[bytes, str]]) -> str:
-    """Transcribe every (bytes, mime_type) photo and join them with page headers.
+def _failure_note(exc: BaseException) -> str:
+    if isinstance(exc, LLMChainError):
+        return "the AI service was unavailable or ran out of time for this page"
+    if isinstance(exc, ScanNotesError):
+        return str(exc).rstrip(".")
+    return "an unexpected error occurred"
 
-    Pages keep the caller's order; each gets a "## Page N" heading so a
-    multi-photo scan reads as one continuous Markdown document.
+
+async def transcribe_pages(images: list[tuple[bytes, str]]) -> ScanOutcome:
+    """Transcribe every photo; keep the pages that succeeded even when others fail.
+
+    Every page already paid for is kept. A failed page becomes a visible marker in the Markdown
+    (and is listed in ``failed_pages``) so the user can re-scan just that photo. When EVERY page
+    fails the first error is raised (an ``LLMChainError`` wins, so the router returns the usual
+    503 with the model label).
     """
     if not images:
         raise ScanNotesError("No images were supplied to transcribe.")
+    require_vision()
+    sem = asyncio.Semaphore(_CONCURRENCY)
+
+    async def one(blob: bytes, mime: str):
+        async with sem:
+            return await transcribe_image(blob, mime)
+
+    results = await asyncio.gather(*[one(b, m) for b, m in images], return_exceptions=True)
+    for r in results:
+        if isinstance(r, asyncio.CancelledError):          # the request itself was cancelled
+            raise r
+    ok = [r for r in results if not isinstance(r, BaseException)]
+    if not ok:
+        errors = [r for r in results if isinstance(r, BaseException)]
+        raise next((e for e in errors if isinstance(e, LLMChainError)), errors[0])
     sections: list[str] = []
-    for number, (blob, mime) in enumerate(images, start=1):
-        text = transcribe_image(blob, mime).strip()
-        sections.append(f"## Page {number}\n\n{text}")
-        log.debug("Transcribed page %d/%d (%d bytes, %s).", number, len(images), len(blob), mime)
-    return "\n\n".join(sections)
+    failed: list[int] = []
+    llm = None
+    for n, r in enumerate(results, start=1):
+        if isinstance(r, BaseException):
+            failed.append(n)
+            log.warning("Scan page %d failed: %s", n, type(r).__name__)
+            sections.append(f"## Page {n}\n\n> [Page {n} could not be transcribed: {_failure_note(r)}. "
+                            "Scan this photo again to add it.]")
+        else:
+            text, page_llm = r
+            llm = llm or page_llm
+            sections.append(f"## Page {n}\n\n{text}")
+    return ScanOutcome(markdown="\n\n".join(sections), llm=llm, pages=len(images), failed_pages=failed)
+
+
+async def transcribe_images(images: list[tuple[bytes, str]]) -> tuple[str, dict | None]:
+    """Transcribe every (bytes, mime_type) photo; join with "## Page N" headers in the caller's order.
+
+    Returns ``(markdown, llm_public)`` where ``llm_public`` is the model of the first page that
+    succeeded. Partial failures are marked in the text (see :func:`transcribe_pages`).
+    """
+    out = await transcribe_pages(images)
+    return out.markdown, out.llm

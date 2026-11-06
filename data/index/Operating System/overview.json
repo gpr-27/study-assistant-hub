@@ -1,0 +1,10 @@
+{
+  "overview": "This lecture introduces what an **operating system** is and does, covering computer-system structure, the roles of the **kernel**, system programs, and middleware. It explains how hardware components interact through **interrupts**, I/O handling, DMA, and the storage hierarchy. It also covers OS operations such as multiprogramming, multitasking, and **dual-mode operation** for protecting the system.",
+  "questions": [
+    "How does an interrupt work, and what role does the interrupt vector play in handling it?",
+    "What is the difference between multiprogramming and multitasking (timesharing)?",
+    "How does dual-mode operation use the mode bit and system calls to keep user programs from running privileged instructions?"
+  ],
+  "sources": 2,
+  "llm": "Model: anthropic · claude-sonnet-5-5 · step 1 (Anthropic)"
+}

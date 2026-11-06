@@ -18,28 +18,28 @@
 [data-skin="editorial"][data-theme="dark"],
 [data-skin="editorial"][data-theme="light"] {
   /* fonts */
-  --font-display: "Cormorant Garamond", Georgia, serif;
-  --font-serif: "Cormorant Garamond", Georgia, serif;
-  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-display: "Cormorant Garamond", "Cormorant Fallback", Georgia, serif;
+  --font-serif: "Cormorant Garamond", "Cormorant Fallback", Georgia, serif;
+  --font-body: "Inter", "Inter Fallback", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* ink scale (warm dark on cream) — HSL triples consumed via hsl(var(--x)) */
   --ink: 60 3% 8%;          /* ink #141413 */
   --ink-soft: 60 4% 23%;    /* body #3d3d3a */
-  --ink-faint: 50 4% 41%;   /* muted #6c6a64 */
+  --ink-faint: 50 4% 37%;   /* muted #62605a (was #6c6a64: 4.4:1 on the card tint; now >=5:1) */
 
   /* primary accent + per-tool accents — coral is the through-line, with the
      design.md secondary hues for variety where the code paints per-card. */
   /* Editorial is a cohesive cream + coral + ink palette (per the reference): the
      interactive accent is coral EVERYWHERE — no per-tool rainbow. Green survives
      only as the "ready"/success pulse via the .led/.dot override further below. */
-  --accent: 16 50% 58%;     /* coral #cc785c */
-  --c-chat: 16 50% 58%;     /* coral */
-  --c-quiz: 16 50% 58%;     /* coral (was teal) */
-  --c-cards: 16 50% 58%;    /* coral (was amber) */
-  --c-plan: 16 50% 58%;     /* coral (was green) */
-  --c-add: 16 50% 58%;      /* coral (nav add) */
-  --c-mind: 15 47% 45%;     /* coral-active #a9583e (deeper, for root nodes) */
+  --accent: 16 50% 43%;     /* coral, AA-darkened #a45437: white text 5.4:1, text on cream 5.1:1 (was #cc785c, 3.2:1) */
+  --c-chat: 16 50% 43%;     /* coral */
+  --c-quiz: 16 50% 43%;     /* coral (was teal) */
+  --c-cards: 16 50% 43%;    /* coral (was amber) */
+  --c-plan: 16 50% 43%;     /* coral (was green) */
+  --c-add: 16 50% 43%;      /* coral (nav add) */
+  --c-mind: 16 50% 36%;     /* coral-active #a9583e (deeper, for root nodes) */
 
   /* page background — full values */
   --bg-0: #faf9f5;          /* canvas / page floor */
@@ -180,7 +180,7 @@
   font-weight: 600;
 }
 [data-skin="editorial"] .nav-add:hover {
-  background: hsl(15 47% 45%);   /* coral-active */
+  background: hsl(16 50% 35%);   /* coral-active (hover) #86442d */
   transform: translateY(-1px);
   box-shadow: var(--shadow-float);
 }
@@ -213,11 +213,28 @@
 }
 [data-skin="editorial"] .user-btn-slot { align-items: center; }
 
-/* key warning banner */
+/* Guest Exit — compact cream pill matching editorial nav density */
+[data-skin="editorial"] .nav-actions .guest-exit {
+  color: hsl(var(--ink));
+  background: #faf9f5;
+  border: 1px solid var(--glass-border);
+  box-shadow: none;
+  font-family: var(--font-body);
+  font-weight: 600;
+}
+[data-skin="editorial"] .nav-actions .guest-exit:hover {
+  border-color: hsl(var(--accent) / .55);
+  color: hsl(var(--accent));
+  background: #f5f0e8;
+  transform: none;
+}
+
+/* key warning / guest CTA banner */
 [data-skin="editorial"] .keywarn {
   border: 1px solid hsl(44 81% 46% / .45);    /* warning */
-  background: hsl(44 81% 46% / .1);
-  color: hsl(var(--ink));
+  background: hsl(44 81% 46% / .12);
+  color: hsl(var(--ink-soft));
+  margin-top: .85rem;
 }
 [data-skin="editorial"] .keywarn code {
   font-family: var(--font-mono);
@@ -344,7 +361,9 @@
 }
 [data-skin="editorial"] .foot p { color: #faf9f5; }            /* on-dark */
 [data-skin="editorial"] .foot .by { color: #a09d96; }          /* on-dark-soft */
-[data-skin="editorial"] .foot .heart { color: hsl(var(--accent)); }
+[data-skin="editorial"] .foot .heart { color: hsl(16 62% 66%); } /* sits on the dark footer */
+[data-skin="editorial"] .aim-state.on { color: hsl(150 62% 26%); }
+[data-skin="editorial"] .aim-state.off { color: hsl(0 65% 40%); }
 [data-skin="editorial"] .foot a { color: #faf9f5; }
 
 /* ============================================================
@@ -462,7 +481,7 @@
   box-shadow: none;
 }
 [data-skin="editorial"] .btn-accent:hover {
-  background: hsl(15 47% 45%);   /* coral-active */
+  background: hsl(16 50% 35%);   /* coral-active (hover) #86442d */
   transform: none;
   box-shadow: none;
 }
@@ -548,9 +567,15 @@
    11. AUTH GATE — cream surfaces, hairline, flat
    ============================================================ */
 [data-skin="editorial"] .auth-gate {
-  background: hsl(40 30% 90% / .82);
+  background: hsl(40 30% 90% / .88);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+}
+/* Ensure the auth card reads as a discrete cream surface on the soft wash */
+[data-skin="editorial"] .auth-card {
+  background: #faf9f5;
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-float);
 }
 [data-skin="editorial"] .auth-card .auth-mark {
   background: hsl(var(--accent));
@@ -638,7 +663,7 @@
 /* the planner accents h2 with var(--accent); keep it as coral, slightly deeper for legibility */
 [data-skin="editorial"] .md h2 { color: hsl(15 47% 42%); }
 [data-skin="editorial"] .md p { color: hsl(var(--ink-soft)); }
-[data-skin="editorial"] .md a { color: hsl(15 47% 45%); text-decoration: underline; text-underline-offset: 2px; }
+[data-skin="editorial"] .md a { color: hsl(16 50% 36%); text-decoration: underline; text-underline-offset: 2px; }
 [data-skin="editorial"] .md a:hover { opacity: .8; }
 [data-skin="editorial"] .md strong { color: hsl(var(--ink)); font-weight: 600; }
 [data-skin="editorial"] .md li { color: hsl(var(--ink-soft)); }

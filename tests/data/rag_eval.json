@@ -1,0 +1,630 @@
+{
+ "description": "End-to-end RAG eval over the bundled Operating System and Mathematics PDFs. gold pages are 1-based inclusive page ranges of the chunks that answer the question; type oos = must be answered with 'not in your notes'.",
+ "questions": [
+  {
+   "id": "os-interrupt",
+   "subject": "Operating System",
+   "type": "single",
+   "question": "What is an interrupt and how does the operating system handle one?",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      14,
+      16
+     ]
+    }
+   ],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "os-dualmode",
+   "subject": "Operating System",
+   "type": "single",
+   "question": "What is the purpose of dual-mode operation?",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      31,
+      34
+     ]
+    }
+   ],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "os-storage",
+   "subject": "Operating System",
+   "type": "multi",
+   "question": "Explain the storage hierarchy and how caching fits in.",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      24,
+      25
+     ]
+    },
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      40,
+      41
+     ]
+    }
+   ],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "os-dma",
+   "subject": "Operating System",
+   "type": "single",
+   "question": "How does direct memory access (DMA) work?",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      27,
+      28
+     ]
+    }
+   ],
+   "history": [],
+   "live": false
+  },
+  {
+   "id": "os-multiprog",
+   "subject": "Operating System",
+   "type": "single",
+   "question": "What is multiprogramming and why does it improve CPU utilization?",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      29,
+      30
+     ]
+    }
+   ],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "os-policy",
+   "subject": "Operating System",
+   "type": "single",
+   "question": "What is the difference between policy and mechanism?",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      36,
+      37
+     ]
+    }
+   ],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "os-microkernel",
+   "subject": "Operating System",
+   "type": "single",
+   "question": "What are microkernels and what do they move out of the kernel?",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      43,
+      44
+     ]
+    }
+   ],
+   "history": [],
+   "live": false
+  },
+  {
+   "id": "os-linker",
+   "subject": "Operating System",
+   "type": "single",
+   "question": "What do the linker and the loader do?",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      32,
+      34
+     ]
+    }
+   ],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "os-boot",
+   "subject": "Operating System",
+   "type": "single",
+   "question": "What happens during system boot?",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      53,
+      54
+     ]
+    }
+   ],
+   "history": [],
+   "live": false
+  },
+  {
+   "id": "os-syscall",
+   "subject": "Operating System",
+   "type": "single",
+   "question": "What is a system call and how are parameters passed to the OS?",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      14,
+      19
+     ]
+    }
+   ],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "os-smp",
+   "subject": "Operating System",
+   "type": "multi",
+   "question": "What is the difference between symmetric multiprocessing and clustered systems?",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      49,
+      56
+     ]
+    }
+   ],
+   "history": [],
+   "live": false
+  },
+  {
+   "id": "os-syscall-types",
+   "subject": "Operating System",
+   "type": "multi",
+   "question": "What are the main categories of system calls?",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      19,
+      24
+     ]
+    }
+   ],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "os-procmgmt",
+   "subject": "Operating System",
+   "type": "single",
+   "question": "What does the operating system do for process management?",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      35,
+      37
+     ]
+    }
+   ],
+   "history": [],
+   "live": false
+  },
+  {
+   "id": "os-kds",
+   "subject": "Operating System",
+   "type": "single",
+   "question": "Which kernel data structures are described in the notes?",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      69,
+      72
+     ]
+    }
+   ],
+   "history": [],
+   "live": false
+  },
+  {
+   "id": "os-cloud",
+   "subject": "Operating System",
+   "type": "single",
+   "question": "What is cloud computing?",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      63,
+      66
+     ]
+    }
+   ],
+   "history": [],
+   "live": false
+  },
+  {
+   "id": "os-structures",
+   "subject": "Operating System",
+   "type": "multi",
+   "question": "Compare the monolithic, layered and microkernel operating system structures.",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      38,
+      45
+     ]
+    }
+   ],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "os-debug",
+   "subject": "Operating System",
+   "type": "single",
+   "question": "What debugging and performance tuning tools are mentioned, such as BCC?",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      54,
+      58
+     ]
+    }
+   ],
+   "history": [],
+   "live": false
+  },
+  {
+   "id": "os-fu-dual",
+   "subject": "Operating System",
+   "type": "followup",
+   "question": "Why is it needed?",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      31,
+      34
+     ]
+    }
+   ],
+   "history": [
+    {
+     "role": "user",
+     "content": "What is dual-mode operation?"
+    },
+    {
+     "role": "assistant",
+     "content": "Dual-mode operation lets the OS distinguish between user mode and kernel mode."
+    }
+   ],
+   "live": true
+  },
+  {
+   "id": "os-fu-micro",
+   "subject": "Operating System",
+   "type": "followup",
+   "question": "What are its disadvantages?",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      43,
+      46
+     ]
+    }
+   ],
+   "history": [
+    {
+     "role": "user",
+     "content": "What is a microkernel?"
+    },
+    {
+     "role": "assistant",
+     "content": "A microkernel moves as much as possible from the kernel into user space."
+    }
+   ],
+   "live": true
+  },
+  {
+   "id": "os-fu-dma",
+   "subject": "Operating System",
+   "type": "followup",
+   "question": "And how does DMA help with that?",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      19,
+      28
+     ]
+    }
+   ],
+   "history": [
+    {
+     "role": "user",
+     "content": "Explain how I/O and interrupts work."
+    },
+    {
+     "role": "assistant",
+     "content": "I/O devices signal the CPU with interrupts when an operation completes."
+    }
+   ],
+   "live": false
+  },
+  {
+   "id": "m-symmetric",
+   "subject": "Mathematics",
+   "type": "single",
+   "question": "Define a symmetric matrix and a skew symmetric matrix.",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      3,
+      5
+     ]
+    }
+   ],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "m-matmul",
+   "subject": "Mathematics",
+   "type": "single",
+   "question": "How do you multiply two matrices? When is the product defined?",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      3,
+      3
+     ]
+    }
+   ],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "m-bayes",
+   "subject": "Mathematics",
+   "type": "single",
+   "question": "State Bayes' theorem.",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      3,
+      3
+     ]
+    }
+   ],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "m-condprob",
+   "subject": "Mathematics",
+   "type": "single",
+   "question": "What is conditional probability?",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      1,
+      2
+     ]
+    }
+   ],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "m-variance",
+   "subject": "Mathematics",
+   "type": "single",
+   "question": "How is the variance of a random variable defined?",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      4,
+      4
+     ]
+    }
+   ],
+   "history": [],
+   "live": false
+  },
+  {
+   "id": "m-independent",
+   "subject": "Mathematics",
+   "type": "single",
+   "question": "What are independent events?",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      2,
+      3
+     ]
+    }
+   ],
+   "history": [],
+   "live": false
+  },
+  {
+   "id": "m-fu-row",
+   "subject": "Mathematics",
+   "type": "followup",
+   "question": "And what is a row matrix?",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      1,
+      2
+     ]
+    }
+   ],
+   "history": [
+    {
+     "role": "user",
+     "content": "What is a column matrix?"
+    },
+    {
+     "role": "assistant",
+     "content": "A column matrix is a matrix with only one column."
+    }
+   ],
+   "live": true
+  },
+  {
+   "id": "m-fu-bayes",
+   "subject": "Mathematics",
+   "type": "followup",
+   "question": "What conditions must the events satisfy?",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      3,
+      3
+     ]
+    }
+   ],
+   "history": [
+    {
+     "role": "user",
+     "content": "State Bayes' theorem."
+    },
+    {
+     "role": "assistant",
+     "content": "Bayes' theorem gives P(Ei|A) in terms of P(A|Ei) and P(Ei)."
+    }
+   ],
+   "live": true
+  },
+  {
+   "id": "m-transpose",
+   "subject": "Mathematics",
+   "type": "single",
+   "question": "What is the transpose of a product of matrices?",
+   "gold": [
+    {
+     "source": "Lec-1.pdf",
+     "pages": [
+      3,
+      4
+     ]
+    }
+   ],
+   "history": [],
+   "live": false
+  },
+  {
+   "id": "m-expectation",
+   "subject": "Mathematics",
+   "type": "multi",
+   "question": "What are the mean and variance of a probability distribution?",
+   "gold": [
+    {
+     "source": "Lec-2.pdf",
+     "pages": [
+      3,
+      5
+     ]
+    }
+   ],
+   "history": [],
+   "live": false
+  },
+  {
+   "id": "oos-worldcup",
+   "subject": "Operating System",
+   "type": "oos",
+   "question": "Who won the FIFA World Cup in 2018?",
+   "gold": [],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "oos-banker",
+   "subject": "Operating System",
+   "type": "oos",
+   "question": "Explain how the banker's algorithm avoids deadlock.",
+   "gold": [],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "oos-python",
+   "subject": "Operating System",
+   "type": "oos",
+   "question": "Write a Python function that reverses a string.",
+   "gold": [],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "oos-lru",
+   "subject": "Operating System",
+   "type": "oos",
+   "question": "Explain the LRU page replacement algorithm.",
+   "gold": [],
+   "history": [],
+   "live": false
+  },
+  {
+   "id": "oos-derivative",
+   "subject": "Mathematics",
+   "type": "oos",
+   "question": "What is the derivative of sin(x)?",
+   "gold": [],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "oos-capital",
+   "subject": "Mathematics",
+   "type": "oos",
+   "question": "What is the capital of Australia?",
+   "gold": [],
+   "history": [],
+   "live": true
+  },
+  {
+   "id": "oos-photosynth",
+   "subject": "Mathematics",
+   "type": "oos",
+   "question": "Describe the process of photosynthesis.",
+   "gold": [],
+   "history": [],
+   "live": false
+  }
+ ]
+}

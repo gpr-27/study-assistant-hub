@@ -26,6 +26,7 @@ const actions = document.getElementById("authActions");
 const foot = document.getElementById("authFoot");
 const userSlot = document.getElementById("userButton");
 const keywarn = document.getElementById("keywarn");
+const appShell = document.getElementById("appShell");
 
 // Clerk's vanilla SDK, pinned to v5, loaded from a CDN (no bundler in this project).
 const CLERK_CDN = "https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/+esm";
@@ -42,22 +43,37 @@ function el(html) {
 function revealApp() {
   gate.classList.add("is-hidden");
   gate.setAttribute("aria-hidden", "true");
+  // The gate is done blocking the app — let keyboard/screen-reader users back into the
+  // shell (it ships `inert` by default in index.html so it's never briefly reachable
+  // behind the gate before this script decides which branch applies).
+  appShell?.removeAttribute("inert");
 }
 function showGate() {
   gate.classList.remove("is-hidden");
   gate.setAttribute("aria-hidden", "false");
+  appShell?.setAttribute("inert", "");
 }
 function gateMessage(text) {
-  actions.replaceChildren(el(`<div class="auth-loading">${text}</div>`));
+  actions.replaceChildren(el(`<div class="auth-loading" role="status">${text}</div>`));
 }
+// Backend accepts guest_[A-Za-z0-9]{1,48}; anything else is stale/corrupt -> drop it before use.
+const GUEST_RE = /^guest_[A-Za-z0-9]{1,48}$/;
 function getGuestId() {
-  try { return localStorage.getItem(GUEST_KEY) || null; } catch (_) { return null; }
+  try {
+    const id = localStorage.getItem(GUEST_KEY);
+    if (!id) return null;
+    if (!GUEST_RE.test(id)) { localStorage.removeItem(GUEST_KEY); return null; }
+    return id;
+  } catch (_) { return null; }
 }
 function setGuestId(id) {
   try { id ? localStorage.setItem(GUEST_KEY, id) : localStorage.removeItem(GUEST_KEY); } catch (_) {}
 }
 function apiBase() {
   return (window.AppConfig && window.AppConfig.apiBase) || "/api";
+}
+function announceAuthed() {
+  try { window.dispatchEvent(new CustomEvent("sah:authed")); } catch (_) {}
 }
 function notify(message, type) {
   if (window.ui && window.ui.toast) window.ui.toast(message, type);
@@ -70,7 +86,12 @@ function showGuestCta(onUpgrade) {
     `<div class="keywarn glass guest-cta">👤 <span>You’re browsing as a <b>guest</b>. ` +
     `<a href="#" class="cta-upgrade" role="button">Create an account</a> to permanently save and sync your work.</span></div>`
   );
-  bar.querySelector(".cta-upgrade").addEventListener("click", (e) => { e.preventDefault(); onUpgrade && onUpgrade(); });
+  const upgrade = bar.querySelector(".cta-upgrade");
+  const goUpgrade = (e) => { e.preventDefault(); onUpgrade && onUpgrade(); };
+  upgrade.addEventListener("click", goUpgrade);
+  upgrade.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") goUpgrade(e);
+  });
   keywarn.appendChild(bar);
 }
 function hideGuestCta() {
@@ -96,151 +117,311 @@ async function boot() {
     return;
   }
 
-  let Clerk, darkTheme;
-  try {
-    const [clerkModule, themesModule] = await Promise.all([
-      import(CLERK_CDN),
-      import(THEMES_CDN)
-    ]);
-    Clerk = clerkModule.Clerk;
-    darkTheme = themesModule.default.dark;
-  } catch (e) {
-    console.error("Failed to load the Clerk SDK or themes:", e);
-    gateMessage("⚠ Couldn’t load the sign-in module. Check your connection and reload.");
-    signalAuthReady();
-    return;
-  }
+  // Optimistic reveal: if a previous visit left evidence of a session (Clerk's own
+  // `__client_uat` cookie is non-zero, or a stored guest id), show the app shell NOW instead of
+  // waiting ~1 s for the Clerk SDK. The authoritative check below still runs and re-shows the
+  // gate if the session turns out to be invalid; API calls stay token-gated server-side.
+  // `clerkHint` (Clerk cookie non-zero) is the ONLY case that loads the SDK at boot: a likely-signed-in
+  // user needs getToken() before the first authed request. Anonymous visitors and stored guests run
+  // "lean" (no 800 KB SDK); Clerk loads on the first Sign in / Create account click (spinner), after an
+  // idle modulepreload so that click feels instant.
+  let clerkHint = false;
+  (function optimisticReveal() {
+    let hint = false;
+    try {
+      const m = document.cookie.match(/(?:^|;\s*)__client_uat(?:_[A-Za-z0-9]+)?=(\d+)/);
+      clerkHint = !!(m && m[1] !== "0");
+      hint = clerkHint || (!!getGuestId() && !!cfg.guestEnabled);
+    } catch (_) {}
+    if (hint) revealApp();
+  })();
 
-  const clerk = new Clerk(cfg.clerkPublishableKey);
-  try {
-    await clerk.load({
-      afterSignOutUrl: window.location.origin,
-      appearance: {
-        baseTheme: darkTheme,
+  let clerk = null, clerkPromise = null, darkTheme = null;
+  // @clerk/themes (dark) is only needed in dark mode; fetch it lazily, not on every load.
+  async function ensureDarkTheme() {
+    if (darkTheme) return darkTheme;
+    try {
+      const themesModule = await import(THEMES_CDN);
+      darkTheme = themesModule.default.dark;
+    } catch (e) {
+      console.warn("Couldn’t load the Clerk dark theme:", e);
+    }
+    return darkTheme;
+  }
+  // Match Clerk modals to the app's data-theme (light default / darkTheme). Hardcoding
+  // darkTheme made Sign-in look wrong on light + Editorial. Re-applied on theme toggle.
+  const isAppDark = () => document.documentElement.getAttribute("data-theme") === "dark";
+  function clerkAppearance() {
+    const dark = isAppDark();
+    const sharedElements = {
+      card: {
+        borderRadius: "24px !important",
+        padding: "2.5rem !important",
+        overflow: "visible !important",
+      },
+      headerTitle: {
+        fontFamily: '"Bricolage Grotesque", "Segoe UI", sans-serif !important',
+        fontWeight: "800 !important",
+        fontSize: "1.8rem !important",
+        letterSpacing: "-0.02em !important",
+        marginTop: "0.5rem !important",
+      },
+      headerSubtitle: {
+        fontFamily: '"Figtree", sans-serif !important',
+        fontSize: "0.95rem !important",
+      },
+      socialButtonsBlockButton: {
+        borderRadius: "12px !important",
+        transition: "transform 0.2s, background 0.2s !important",
+        height: "44px !important",
+      },
+      socialButtonsBlockButtonText: {
+        fontFamily: '"Figtree", sans-serif !important',
+        fontWeight: "600 !important",
+      },
+      dividerText: {
+        fontFamily: '"Figtree", sans-serif !important',
+      },
+      formFieldLabel: {
+        fontFamily: '"Figtree", sans-serif !important',
+        fontWeight: "600 !important",
+        fontSize: "0.88rem !important",
+        marginBottom: "0.4rem !important",
+      },
+      formFieldInput: {
+        borderRadius: "12px !important",
+        fontFamily: '"Figtree", sans-serif !important',
+        padding: "0.75rem 1rem !important",
+        height: "44px !important",
+        transition: "border-color 0.2s, box-shadow 0.2s !important",
+      },
+      formFieldInput__focus: {
+        borderColor: "#7c3aed !important",
+        boxShadow: "0 0 0 3px rgba(124, 58, 237, 0.25) !important",
+      },
+      formButtonPrimary: {
+        background: "linear-gradient(150deg, #7c3aed, #6366f1) !important",
+        borderRadius: "999px !important",
+        fontFamily: '"Bricolage Grotesque", sans-serif !important',
+        fontWeight: "600 !important",
+        fontSize: "0.95rem !important",
+        boxShadow: "0 8px 22px rgba(124, 58, 237, 0.45) !important",
+        border: "0 !important",
+        height: "44px !important",
+        transition: "transform 0.2s, box-shadow 0.2s !important",
+        cursor: "pointer !important",
+      },
+      formButtonPrimary__hover: {
+        transform: "translateY(-1px) !important",
+        boxShadow: "0 12px 28px rgba(124, 58, 237, 0.55) !important",
+      },
+      footerActionLink: {
+        color: dark ? "#a78bfa !important" : "#6d28d9 !important",
+        fontWeight: "600 !important",
+        fontFamily: '"Figtree", sans-serif !important',
+      },
+      footerActionText: {
+        fontFamily: '"Figtree", sans-serif !important',
+      },
+    };
+    if (dark) {
+      return {
+        baseTheme: darkTheme || undefined,
         variables: {
-          colorPrimary: "#7c3aed", // Vibrant purple accent
-          colorBackground: "#131520", // Dark card background
-          colorText: "#ffffff", // White text
-          colorTextSecondary: "#a7a7d0", // Soft secondary text
-          colorInputBackground: "#1e1e2e", // Dark input background
-          colorInputText: "#ffffff", // White input text
-          colorBorder: "rgba(255, 255, 255, 0.12)", // Subtle border
+          colorPrimary: "#7c3aed",
+          colorBackground: "#131520",
+          colorText: "#ffffff",
+          colorTextSecondary: "#a7a7d0",
+          colorInputBackground: "#1e1e2e",
+          colorInputText: "#ffffff",
+          colorBorder: "rgba(255, 255, 255, 0.12)",
           colorTextOnPrimaryBackground: "#ffffff",
         },
         elements: {
+          ...sharedElements,
           card: {
+            ...sharedElements.card,
             background: "#131520 !important",
             border: "1px solid rgba(255, 255, 255, 0.12) !important",
-            borderRadius: "24px !important",
             boxShadow: "0 1px 1px rgba(255, 255, 255, 0.05), 0 16px 40px rgba(0, 0, 0, 0.6) !important",
-            padding: "2.5rem !important",
-            overflow: "visible !important", // Prevent clipping of headers
           },
-          headerTitle: {
-            fontFamily: '"Bricolage Grotesque", "Segoe UI", sans-serif !important',
-            fontWeight: "800 !important",
-            fontSize: "1.8rem !important",
-            letterSpacing: "-0.02em !important",
-            color: "#ffffff !important",
-            marginTop: "0.5rem !important",
-          },
-          headerSubtitle: {
-            fontFamily: '"Figtree", sans-serif !important',
-            color: "#a7a7d0 !important",
-            fontSize: "0.95rem !important",
-          },
+          headerTitle: { ...sharedElements.headerTitle, color: "#ffffff !important" },
+          headerSubtitle: { ...sharedElements.headerSubtitle, color: "#a7a7d0 !important" },
           socialButtonsBlockButton: {
+            ...sharedElements.socialButtonsBlockButton,
             background: "rgba(255, 255, 255, 0.04) !important",
             border: "1px solid rgba(255, 255, 255, 0.1) !important",
-            borderRadius: "12px !important",
-            transition: "transform 0.2s, background 0.2s !important",
-            height: "44px !important",
           },
           socialButtonsBlockButton__hover: {
             background: "rgba(255, 255, 255, 0.08) !important",
             transform: "translateY(-1px) !important",
           },
-          socialButtonsBlockButtonText: {
-            color: "#ffffff !important",
-            fontFamily: '"Figtree", sans-serif !important',
-            fontWeight: "600 !important",
-          },
-          dividerLine: {
-            background: "rgba(255, 255, 255, 0.1) !important",
-          },
-          dividerText: {
-            color: "#a7a7d0 !important",
-            fontFamily: '"Figtree", sans-serif !important',
-          },
-          formFieldLabel: {
-            fontFamily: '"Figtree", sans-serif !important',
-            color: "#a7a7d0 !important",
-            fontWeight: "600 !important",
-            fontSize: "0.88rem !important",
-            marginBottom: "0.4rem !important",
-          },
+          socialButtonsBlockButtonText: { ...sharedElements.socialButtonsBlockButtonText, color: "#ffffff !important" },
+          dividerLine: { background: "rgba(255, 255, 255, 0.1) !important" },
+          dividerText: { ...sharedElements.dividerText, color: "#a7a7d0 !important" },
+          formFieldLabel: { ...sharedElements.formFieldLabel, color: "#a7a7d0 !important" },
           formFieldInput: {
+            ...sharedElements.formFieldInput,
             background: "rgba(255, 255, 255, 0.05) !important",
             border: "1px solid rgba(255, 255, 255, 0.1) !important",
-            borderRadius: "12px !important",
             color: "#ffffff !important",
-            fontFamily: '"Figtree", sans-serif !important',
-            padding: "0.75rem 1rem !important",
-            height: "44px !important",
-            transition: "border-color 0.2s, box-shadow 0.2s !important",
           },
-          formFieldInput__focus: {
-            borderColor: "#7c3aed !important",
-            boxShadow: "0 0 0 3px rgba(124, 58, 237, 0.25) !important",
-          },
-          formButtonPrimary: {
-            background: "linear-gradient(150deg, #7c3aed, #6366f1) !important",
-            borderRadius: "999px !important",
-            fontFamily: '"Bricolage Grotesque", sans-serif !important',
-            fontWeight: "600 !important",
-            fontSize: "0.95rem !important",
-            boxShadow: "0 8px 22px rgba(124, 58, 237, 0.45) !important",
-            border: "0 !important",
-            height: "44px !important",
-            transition: "transform 0.2s, box-shadow 0.2s !important",
-            cursor: "pointer !important",
-          },
-          formButtonPrimary__hover: {
-            transform: "translateY(-1px) !important",
-            boxShadow: "0 12px 28px rgba(124, 58, 237, 0.55) !important",
-          },
-          footerActionLink: {
-            color: "#a78bfa !important",
-            fontWeight: "600 !important",
-            fontFamily: '"Figtree", sans-serif !important',
-          },
-          footerActionText: {
-            fontFamily: '"Figtree", sans-serif !important',
-            color: "#a7a7d0 !important",
-          }
-        }
-      }
-    });
-  } catch (e) {
-    console.error("Clerk failed to initialize:", e);
-    gateMessage("⚠ Sign-in is misconfigured — verify CLERK_PUBLISHABLE_KEY in your .env.");
-    signalAuthReady();
-    return;
+          footerActionText: { ...sharedElements.footerActionText, color: "#a7a7d0 !important" },
+        },
+      };
+    }
+    // Light / Editorial: Clerk's default (light) base — no darkTheme.
+    return {
+      baseTheme: undefined,
+      variables: {
+        colorPrimary: "#7c3aed",
+        colorBackground: "#ffffff",
+        colorText: "#1a1a2e",
+        colorTextSecondary: "#5b5b7a",
+        colorInputBackground: "#f6f6fb",
+        colorInputText: "#1a1a2e",
+        colorBorder: "rgba(26, 26, 46, 0.12)",
+        colorTextOnPrimaryBackground: "#ffffff",
+      },
+      elements: {
+        ...sharedElements,
+        card: {
+          ...sharedElements.card,
+          background: "#ffffff !important",
+          border: "1px solid rgba(26, 26, 46, 0.1) !important",
+          boxShadow: "0 1px 2px rgba(26, 26, 46, 0.04), 0 16px 40px rgba(26, 26, 46, 0.12) !important",
+        },
+        headerTitle: { ...sharedElements.headerTitle, color: "#1a1a2e !important" },
+        headerSubtitle: { ...sharedElements.headerSubtitle, color: "#5b5b7a !important" },
+        socialButtonsBlockButton: {
+          ...sharedElements.socialButtonsBlockButton,
+          background: "rgba(26, 26, 46, 0.03) !important",
+          border: "1px solid rgba(26, 26, 46, 0.12) !important",
+        },
+        socialButtonsBlockButton__hover: {
+          background: "rgba(26, 26, 46, 0.06) !important",
+          transform: "translateY(-1px) !important",
+        },
+        socialButtonsBlockButtonText: { ...sharedElements.socialButtonsBlockButtonText, color: "#1a1a2e !important" },
+        dividerLine: { background: "rgba(26, 26, 46, 0.12) !important" },
+        dividerText: { ...sharedElements.dividerText, color: "#5b5b7a !important" },
+        formFieldLabel: { ...sharedElements.formFieldLabel, color: "#5b5b7a !important" },
+        formFieldInput: {
+          ...sharedElements.formFieldInput,
+          background: "#f6f6fb !important",
+          border: "1px solid rgba(26, 26, 46, 0.12) !important",
+          color: "#1a1a2e !important",
+        },
+        footerActionText: { ...sharedElements.footerActionText, color: "#5b5b7a !important" },
+      },
+    };
   }
 
-  // Expose a tiny auth surface so the API layer can attach the session token + guest id,
-  // and so other scripts can ask "is this a guest?".
+  // Auth surface for the API layer (app.js): token + guest id. Works with and without the Clerk SDK:
+  // before it loads (lean mode) there is no Clerk session, so getToken() resolves null.
   window.Auth = {
-    clerk,
-    getToken: () => (clerk.session ? clerk.session.getToken() : Promise.resolve(null)),
+    get clerk() { return clerk; },
+    getToken: () => (clerk && clerk.session ? clerk.session.getToken() : Promise.resolve(null)),
     getGuestId,
-    isGuest: () => !clerk.user && !!getGuestId(),
+    get userId() { return clerk && clerk.user ? clerk.user.id : null; },
+    isGuest: () => !(clerk && clerk.user) && !!getGuestId(),
   };
 
+  // Keep Clerk in sync when the user toggles light/dark (app.js sets data-theme).
+  let lastClerkTheme = isAppDark() ? "dark" : "light";
+  async function syncClerkTheme() {
+    const next = isAppDark() ? "dark" : "light";
+    if (next === lastClerkTheme) return;
+    lastClerkTheme = next;
+    if (next === "dark") await ensureDarkTheme();
+    try {
+      if (clerk && typeof clerk.__unstable__updateProps === "function") {
+        clerk.__unstable__updateProps({ appearance: clerkAppearance() });
+      }
+    } catch (e) {
+      console.warn("Couldn’t sync Clerk theme:", e);
+    }
+  }
+
+  // Load + initialise the Clerk SDK exactly once (memoised; a failure may be retried by the next click).
+  function initClerk() {
+    if (clerkPromise) return clerkPromise;
+    clerkPromise = (async () => {
+      let mod;
+      try {
+        const wantDark = isAppDark();
+        [mod] = await Promise.all([import(CLERK_CDN), wantDark ? ensureDarkTheme() : null]);
+      } catch (e) {
+        console.error("Failed to load the Clerk SDK:", e);
+        throw Object.assign(new Error("sdk"), { code: "sdk" });
+      }
+      const c = new mod.Clerk(cfg.clerkPublishableKey);
+      try {
+        await c.load({ afterSignOutUrl: window.location.origin, appearance: clerkAppearance() });
+      } catch (e) {
+        console.error("Clerk failed to initialize:", e);
+        throw Object.assign(new Error("init"), { code: "init" });
+      }
+      clerk = c;
+      lastClerkTheme = isAppDark() ? "dark" : "light";
+      new MutationObserver(syncClerkTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+      c.addListener(render);      // fires render() for sign-in/out; migration + UserButton live there
+      return c;
+    })();
+    clerkPromise.catch(() => { clerkPromise = null; });
+    return clerkPromise;
+  }
+
+  // Open Clerk's sign-in / sign-up UI. First use loads the SDK: the clicked button shows a small
+  // spinner (and is disabled) until the modal is ready.
+  async function openAuthUI(kind, btn) {
+    let restore = null;
+    if (!clerk && btn) {
+      const html = btn.innerHTML;
+      btn.disabled = true;
+      btn.setAttribute("aria-busy", "true");
+      btn.replaceChildren(el(`<span class="spinner" aria-hidden="true"></span>`), document.createTextNode(" Loading…"));
+      restore = () => { btn.disabled = false; btn.removeAttribute("aria-busy"); btn.innerHTML = html; };
+    }
+    try {
+      await initClerk();
+    } catch (e) {
+      if (restore && btn.isConnected) restore();
+      gateMessage(e && e.code === "init" ? "⚠ Sign-in is misconfigured — verify CLERK_PUBLISHABLE_KEY in your .env."
+        : "⚠ Couldn’t load the sign-in module. Check your connection and try again.");
+      setTimeout(() => { try { render(); } catch (_) {} }, 2500);
+      return;
+    }
+    if (restore && btn.isConnected) restore();
+    const href = window.location.href;
+    if (kind === "signIn") clerk.openSignIn({ afterSignInUrl: href });
+    else clerk.openSignUp({ afterSignUpUrl: href });
+  }
+
+  // After first paint + load, when the browser is idle: fetch (not execute) the SDK so the first click is instant.
+  function prefetchClerk() {
+    const c = navigator.connection;
+    if (c && (c.saveData || /(^|-)2g$/.test(c.effectiveType || ""))) return;
+    const go = () => {
+      const idle = window.requestIdleCallback || ((f) => setTimeout(f, 1500));
+      idle(() => {
+        const urls = [CLERK_CDN];
+        if (isAppDark()) urls.push(THEMES_CDN);
+        urls.forEach((u) => {
+          if (document.querySelector(`link[rel="modulepreload"][href="${u}"]`)) return;
+          const l = document.createElement("link");
+          l.rel = "modulepreload"; l.href = u; l.crossOrigin = "anonymous";
+          document.head.appendChild(l);
+        });
+      }, { timeout: 6000 });
+    };
+    if (document.readyState === "complete") go(); else addEventListener("load", go, { once: true });
+  }
+
   // Clerk has loaded and window.Auth is in place: clerk.session (if any) is restored, so
-  // getToken() returns the real token. Release the API layer's first-paint requests now —
-  // after this, authHeaders() will attach the token instead of racing ahead and 401ing.
-  signalAuthReady();
+  // getToken() returns the real token. The API layer's first-paint requests are released after
+  // the FIRST render() below, i.e. once a stored guest id has been validated (or cleared) —
+  // so no request is ever sent with a stale guest id.
 
   let migrating = false;
   let mountedUserId = null;     // Clerk user id whose <UserButton> is currently mounted
@@ -253,7 +434,7 @@ async function boot() {
   // retries; clearing it there would orphan the user's data (the migration never ran).
   async function maybeMigrate() {
     const gid = getGuestId();
-    if (!clerk.user || !gid || migrating) return;
+    if (!(clerk && clerk.user) || !gid || migrating) return;
     migrating = true;
     try {
       const token = await window.Auth.getToken();
@@ -329,21 +510,30 @@ async function boot() {
     userSlot.replaceChildren(badge);
   }
 
+  let lastIdentity = null;
   async function render() {
-    if (clerk.user) {
+    // Drop any in-memory API cache when the identity changes (sign in/out, guest -> account).
+    const user = clerk && clerk.user;
+    const ident = user ? user.id : (getGuestId() || "anon");
+    if (lastIdentity !== null && lastIdentity !== ident && window.api && window.api.clearCache) window.api.clearCache();
+    // Signed out with no guest either: also drop the tab's identity-scoped bootstrap mirror (sessionStorage).
+    if (ident === "anon" && window.api && window.api.clearCache) window.api.clearCache();
+    lastIdentity = ident;
+    if (user) {
       // Signed in with Clerk: run any pending guest->account upgrade, then reveal.
       await maybeMigrate();
       // Mount the Clerk <UserButton> ONCE per user. Clerk fires its listener several times
       // per load / on token refresh; re-mounting onto the same node without unmounting leaks
       // the prior component, so guard on the mounted user id.
-      if (mountedUserId !== clerk.user.id) {
+      if (mountedUserId !== user.id) {
         userSlot.classList.add("is-on");
         userSlot.replaceChildren();
         clerk.mountUserButton(userSlot, { afterSignOutUrl: window.location.origin });
-        mountedUserId = clerk.user.id;
+        mountedUserId = user.id;
       }
       hideGuestCta();
       revealApp();
+      announceAuthed();
       return;
     }
 
@@ -353,20 +543,25 @@ async function boot() {
     // Signed out: is there a valid guest session to restore?
     if (await guestSessionValid()) {
       mountGuestNav();
-      showGuestCta(() => clerk.openSignUp({ afterSignUpUrl: window.location.href }));
+      showGuestCta(() => openAuthUI("signUp"));
       revealApp();
+      announceAuthed();
       return;
     }
 
     // No identity: show the gate (Sign in · Create account · Continue as guest).
+    // clerk.addListener(render) can fire this branch repeatedly before the user acts
+    // (token refreshes, etc.) — only steal focus on the actual hidden->visible transition,
+    // not on every redundant re-render while the gate is already up.
+    const gateWasHidden = gate.classList.contains("is-hidden");
     userSlot.classList.remove("is-on");
     userSlot.replaceChildren();
     hideGuestCta();
     showGate();
     const signIn = el(`<button class="btn-accent btn-lg" type="button">Sign in</button>`);
     const signUp = el(`<button class="btn btn-lg" type="button">Create account</button>`);
-    signIn.addEventListener("click", () => clerk.openSignIn({ afterSignInUrl: window.location.href }));
-    signUp.addEventListener("click", () => clerk.openSignUp({ afterSignUpUrl: window.location.href }));
+    signIn.addEventListener("click", () => openAuthUI("signIn", signIn));
+    signUp.addEventListener("click", () => openAuthUI("signUp", signUp));
     const children = [signIn, signUp];
     if (cfg.guestEnabled) {
       const guestBtn = el(`<button class="btn-ghost btn-lg" type="button">Continue as guest</button>`);
@@ -375,10 +570,19 @@ async function boot() {
     }
     actions.replaceChildren(...children);
     foot.textContent = cfg.appEnv ? `Secured by Clerk · ${cfg.appEnv}` : "Secured by Clerk";
+    if (gateWasHidden) signIn.focus();
   }
 
-  clerk.addListener(render);
-  render();
+  if (clerkHint) {            // likely signed in: SDK now (the head script already modulepreloaded it)
+    try { await initClerk(); } catch (e) {
+      gateMessage(e && e.code === "init" ? "⚠ Sign-in is misconfigured — verify CLERK_PUBLISHABLE_KEY in your .env."
+        : "⚠ Couldn’t load the sign-in module. Check your connection and reload.");
+      signalAuthReady();
+      return;
+    }
+  }
+  try { await render(); } finally { signalAuthReady(); }
+  if (!clerk) prefetchClerk();
 }
 
 boot().catch((e) => {

@@ -1,17 +1,13 @@
 """Cheat-sheet service: condense a document's text into a one-page exam crib sheet.
 
-ONE Groq call per sheet — plain markdown out (no JSON mode), with a conservative
-completion cap so input + reserved output stays inside the free tier's per-minute
-token budget. The content slice is bounded with clip_to_tokens before the call.
+ONE chain call per sheet — plain markdown out (no JSON mode). The content slice is bounded with
+NOT clipped here: the full text is passed and llm_chain trims it per provider (Groq only).
 """
-from groq import APIError, Groq
+from backend.services import _gen
 
-from backend.config import MAX_CONTENT_TOKENS, model_for, require_groq_key
-from backend.documents import clip_to_tokens
-
-# Output (completion) cap. A dense one-page crib sheet is ~800-1000 tokens of terse
-# bullets/tables; 1200 leaves headroom without letting Groq reserve a huge default.
-_MAX_OUTPUT_TOKENS: int = 1200
+# A dense one-page crib sheet is ~800-1200 tokens of terse bullets/tables; the rest is headroom
+# for reasoning models (their thinking tokens count against the completion budget).
+_MAX_OUTPUT_TOKENS: int = 3500
 
 _SYSTEM_PROMPT: str = (
     "You are an expert exam coach who writes ultra-dense one-page crib sheets. "
@@ -55,49 +51,33 @@ def _build_topic_prompt(topic: str) -> str:
     )
 
 
-def _run(prompt: str, model: str | None) -> str:
-    """One Groq call -> non-empty cheat-sheet markdown. Shared by both entry points."""
-    require_groq_key()
-    client = Groq()
-    try:
-        response = client.chat.completions.create(
-            model=model_for("cheatsheet", model),
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.3,
-            max_tokens=_MAX_OUTPUT_TOKENS,
-        )
-        markdown = response.choices[0].message.content
-    except APIError:
-        raise  # Groq errors (rate limit, auth, …) are formatted by the global handlers
-    except Exception as exc:  # noqa: BLE001 — wrap any other transport/SDK failure
-        raise CheatsheetError(f"Cheat-sheet generation failed: {exc}") from exc
+def _run(prompt: str) -> tuple[str, dict | None]:
+    """One chain call -> (non-empty cheat-sheet markdown, llm_public). Shared by both entry points."""
+    markdown, res = _gen.generate_text(_SYSTEM_PROMPT, prompt, max_tokens=_MAX_OUTPUT_TOKENS,
+                                       error_cls=CheatsheetError, what="cheat sheet", temperature=0.3)
+    return markdown, _gen.public(res)
 
-    if not markdown or not markdown.strip():
-        raise CheatsheetError("The model returned an empty cheat sheet; try again.")
-    return markdown.strip()
+
+def make_cheatsheet_ex(content: str, model: str | None = None) -> tuple[str, dict | None]:
+    """Cheat sheet from document text -> ``(markdown, llm_public)``. ``model`` is ignored (chain picks)."""
+    if not content or not content.strip():
+        raise CheatsheetError("No content was supplied to build a cheat sheet from.")
+    return _run(_build_prompt(content))
+
+
+def make_cheatsheet_from_topic_ex(topic: str, model: str | None = None) -> tuple[str, dict | None]:
+    """Cheat sheet about a free topic (model's own knowledge) -> ``(markdown, llm_public)``."""
+    topic = _gen.clean_topic(topic)
+    if not topic:
+        raise CheatsheetError("No topic was supplied to build a cheat sheet from.")
+    return _run(_build_topic_prompt(topic))
 
 
 def make_cheatsheet(content: str, model: str | None = None) -> str:
-    """Generate the cheat-sheet markdown from document text in a single Groq call.
-
-    Raises CheatsheetError on empty input, transport failures, or an empty/blank
-    completion. Groq APIErrors bubble for the global 429/502 handlers.
-    """
-    if not content or not content.strip():
-        raise CheatsheetError("No content was supplied to build a cheat sheet from.")
-    snippet = clip_to_tokens(content, MAX_CONTENT_TOKENS)
-    return _run(_build_prompt(snippet), model)
+    """Back-compat: cheat-sheet markdown only (see :func:`make_cheatsheet_ex` for the ``llm`` info)."""
+    return make_cheatsheet_ex(content, model)[0]
 
 
 def make_cheatsheet_from_topic(topic: str, model: str | None = None) -> str:
-    """Generate a cheat sheet about a free topic, using the model's own knowledge.
-
-    Same return shape and validation as ``make_cheatsheet`` (non-empty markdown
-    string). One Groq call is enough since there is no document to condense.
-    """
-    if not topic or not topic.strip():
-        raise CheatsheetError("No topic was supplied to build a cheat sheet from.")
-    return _run(_build_topic_prompt(topic.strip()), model)
+    """Back-compat: markdown only (see :func:`make_cheatsheet_from_topic_ex`)."""
+    return make_cheatsheet_from_topic_ex(topic, model)[0]

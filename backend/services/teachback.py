@@ -1,33 +1,34 @@
 """Socratic Teach-back tutor service — the student explains a concept, the LLM probes.
 
-Modeled on backend/services/chat.py's in-module session registry (dict + uuid +
-eviction cap) and backend/services/quiz.py's Groq JSON-mode call pattern. The tutor
-uses the Feynman technique: it never lectures or gives the answer; it asks ONE
-pointed follow-up question per turn and, after 4-6 exchanges (or when the student
-says "done"/"evaluate"), returns a structured evaluation of the student's
-understanding. Finished sessions are persisted to the "teachbacks" history kind.
+The tutor uses the Feynman technique: it never lectures or gives the answer; it asks ONE pointed
+follow-up question per turn and, after 4-6 exchanges (or when the student says "done"/"evaluate"),
+returns a structured evaluation of the student's understanding. Finished sessions are persisted
+to the "teachbacks" history kind.
 
-Every Groq object is created lazily inside a function so importing this module
-never requires a key. All calls set an explicit, conservative max_tokens because
-the free tier's per-minute budget counts input AND reserved output.
+Stateless-friendly: a live session is NOT kept in a process-global dict. It lives in MongoDB
+(``teachback_sessions``, TTL-expired after 3 h, owner-scoped on every access) so any serverless
+instance can serve any turn; with persistence off it falls back to a small bounded in-process LRU
+(single-process dev). Every LLM call goes through ``backend.llm_chain`` (JSON mode).
 """
-import json
+import logging
 import threading
+import time
+from collections import OrderedDict
 from uuid import uuid4
 
-from groq import APIError, Groq
-
-from backend import db
+from backend import db, llm_chain, privacy
 from backend.auth import LOCAL_OWNER
-from backend.config import model_for, require_groq_key
-from backend.documents import clip_to_tokens
+from backend.config import require_llm_key
+from backend.services.llm_json import extract_json
 
-# In-memory session store: {session_id: {concept, persona, messages, exchanges,
-# owner, mode, label, model}}. Oldest sessions are evicted past the cap (an
-# evicted session simply needs restarting), mirroring chat.py.
-_sessions: dict[str, dict] = {}
-_sessions_lock = threading.Lock()
+log = logging.getLogger(__name__)
+
+# In-process fallback (persistence off): {session_id: session}. Bounded LRU + TTL.
+_local: "OrderedDict[str, dict]" = OrderedDict()
+_local_lock = threading.Lock()
 _MAX_SESSIONS: int = 200
+_SESSION_TTL_S: int = 3 * 3600
+_ttl_index_ready = False
 
 # A session hard-expires once its transcript reaches this many messages.
 _MAX_MESSAGES: int = 50
@@ -35,13 +36,11 @@ _MAX_MESSAGES: int = 50
 _MIN_EXCHANGES: int = 4
 _MAX_EXCHANGES: int = 6
 
-# Token budgets (Groq free tier = 6000 tokens/min, input + output, so keep every
-# request small: clipped grounding context + short history + a capped completion).
-_CONTEXT_TOKENS: int = 1200       # grounding context kept in the persona each turn
-_MESSAGE_TOKENS: int = 600        # cap on a single student message
+# Token budgets (free tiers count input AND reserved output per minute, so keep every request
+# small: clipped grounding context + short history + a capped completion; the chain raises the
+# output cap to its own floor where reasoning models need it).
 _START_OUTPUT_TOKENS: int = 350   # concept + opening prompt
 _REPLY_OUTPUT_TOKENS: int = 700   # one question, or the final evaluation lists
-_HISTORY_TURNS: int = 8           # exchanges replayed to the model (> _MAX_EXCHANGES)
 
 # Student phrases that end the session immediately (the spec's "done"/"evaluate";
 # the UI's "Evaluate me now" button posts the literal message "evaluate").
@@ -112,27 +111,19 @@ def _start_prompt(topic: str | None, context: str | None) -> str:
     )
 
 
-def _call_llm(model_id: str | None, messages: list[dict], max_tokens: int) -> dict:
-    """One Groq JSON-mode call -> parsed dict. Groq APIErrors bubble to the global handlers."""
-    require_groq_key()
-    client = Groq()
-    try:
-        response = client.chat.completions.create(
-            model=model_id,
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.4,
-            max_tokens=max_tokens,
-        )
-        payload = response.choices[0].message.content
-        data = json.loads(payload or "{}")
-    except json.JSONDecodeError as exc:
-        raise TeachbackError(f"The model returned invalid JSON: {exc}") from exc
-    except APIError:
-        raise  # formatted by the global Groq handlers (rate limit, auth, …)
-    except Exception as exc:  # noqa: BLE001 — wrap any other transport/SDK failure
-        raise TeachbackError(f"The tutor could not respond: {exc}") from exc
-    return data if isinstance(data, dict) else {}
+def _call_llm(messages: list[dict], max_tokens: int, system: str, sensitive: bool = False) -> tuple[dict, dict | None]:
+    """One chain JSON-mode call -> (parsed dict, public llm). ``LLMChainError`` propagates (→ 503)."""
+    require_llm_key()
+    # Providers require the conversation to start with a user turn; the transcript starts with the
+    # tutor's opening, so a short synthetic user turn goes first.
+    if not messages or messages[0]["role"] != "user":
+        messages = [{"role": "user", "content": "Begin the teach-back session."}, *messages]
+    result = llm_chain.chat(system, messages, max_tokens=max_tokens, temperature=0.4, json_mode=True,
+                            sensitive=sensitive or privacy.current())
+    data = extract_json(result.text)
+    if data is None:
+        raise TeachbackError("The model returned invalid JSON; please try again.")
+    return (data if isinstance(data, dict) else {}), result.to_public()
 
 
 def _str_list(value: object) -> list[str]:
@@ -158,14 +149,76 @@ def _normalise_evaluation(raw: object) -> dict | None:
     }
 
 
-def _register(session: dict) -> str:
-    """Store a session under a fresh id, evicting the oldest past the cap."""
+# --------------------------------------------------------------------------------------
+# Session storage (MongoDB, owner-scoped; bounded in-process fallback when persistence is off)
+# --------------------------------------------------------------------------------------
+def _coll():
+    global _ttl_index_ready
+    database = db._get_db()
+    if database is None:
+        return None
+    coll = database["teachback_sessions"]
+    if not _ttl_index_ready:
+        try:
+            coll.create_index("created_at", expireAfterSeconds=_SESSION_TTL_S, background=True)
+            _ttl_index_ready = True
+        except Exception:  # noqa: BLE001 — index creation is best-effort; the session still works
+            log.debug("teachback TTL index not created.", exc_info=True)
+    return coll
+
+
+def _store_new(session: dict) -> str:
     session_id = uuid4().hex
-    with _sessions_lock:
-        _sessions[session_id] = session
-        while len(_sessions) > _MAX_SESSIONS:
-            del _sessions[next(iter(_sessions))]  # dicts preserve insertion order
+    coll = _coll()
+    if coll is not None:
+        coll.insert_one({"_id": session_id, "created_at": db._now(), **session})
+        return session_id
+    with _local_lock:
+        _local[session_id] = {**session, "_t": time.monotonic()}
+        while len(_local) > _MAX_SESSIONS:
+            _local.popitem(last=False)
     return session_id
+
+
+def _store_get(owner: str, session_id: str) -> dict | None:
+    """The session if it exists AND belongs to ``owner`` (else None — never leaks another user's)."""
+    if not isinstance(session_id, str) or not session_id or len(session_id) > 64:
+        return None
+    coll = _coll()
+    if coll is not None:
+        return coll.find_one({"_id": session_id, "owner": owner})
+    with _local_lock:
+        s = _local.get(session_id)
+        if s is None or s.get("owner") != owner or time.monotonic() - s["_t"] > _SESSION_TTL_S:
+            return None
+        _local.move_to_end(session_id)
+        return {**s, "messages": list(s["messages"])}
+
+
+def _store_append(owner: str, session_id: str, new_messages: list[dict]) -> None:
+    coll = _coll()
+    if coll is not None:
+        coll.update_one({"_id": session_id, "owner": owner},
+                        {"$push": {"messages": {"$each": new_messages}}, "$inc": {"exchanges": 1}})
+        return
+    with _local_lock:
+        s = _local.get(session_id)
+        if s is not None and s.get("owner") == owner:
+            s["messages"].extend(new_messages)
+            s["exchanges"] += 1
+
+
+def _store_drop(owner: str, session_id: str) -> bool:
+    """Delete a session; True only for the caller that actually removed it (double-finish guard)."""
+    coll = _coll()
+    if coll is not None:
+        return coll.delete_one({"_id": session_id, "owner": owner}).deleted_count > 0
+    with _local_lock:
+        s = _local.get(session_id)
+        if s is not None and s.get("owner") == owner:
+            del _local[session_id]
+            return True
+    return False
 
 
 def start_session(
@@ -176,80 +229,88 @@ def start_session(
     label: str = "",
     model: str | None = None,
     owner: str = LOCAL_OWNER,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, dict | None]:
     """Pick the concept + opening prompt and open a live session.
 
-    ``content`` (subject mode) is the already-extracted PDF text; it is clipped
-    again here to the small per-turn grounding budget. Returns
-    (session_id, concept, opening).
+    ``content`` (subject mode) is the already-extracted PDF text; it is used in full as grounding
+    (llm_chain trims per provider). Returns ``(session_id, concept, opening, llm_public)``.
+    ``model`` is accepted for back-compat and ignored (the chain picks the model).
     """
-    resolved = model_for("teachback", model)
-    context = clip_to_tokens(content, _CONTEXT_TOKENS) if content else None
-    raw = _call_llm(
-        resolved,
-        [
-            {"role": "system", "content": "You set up Feynman-technique teach-back study sessions."},
-            {"role": "user", "content": _start_prompt(topic, context)},
-        ],
-        _START_OUTPUT_TOKENS,
+    context = content or None
+    raw, llm_public = _call_llm(
+        [{"role": "user", "content": _start_prompt(topic, context)}],
+        _START_OUTPUT_TOKENS, "You set up Feynman-technique teach-back study sessions.",
     )
-    concept = str(raw.get("concept") or "").strip() or (topic or label or "this concept").strip()
+    concept = str(raw.get("concept") or "").strip()[:200] or (topic or label or "this concept").strip()
     opening = str(raw.get("opening") or "").strip() or (
         f"Explain {concept} to me in your own words, as if I knew nothing about it."
     )
-    session_id = _register({
+    session_id = _store_new({
         "mode": mode,
         "concept": concept,
-        "label": label or concept,
-        "model": resolved,
+        "label": (label or concept)[:200],
         "owner": owner,
         "persona": _persona(concept, context),
-        "messages": [{"role": "assistant", "content": opening}],  # full transcript
+        "messages": [{"role": "assistant", "content": opening, "llm": llm_public}],  # full transcript
         "exchanges": 0,
+        "sensitive": privacy.current(),          # later turns keep the same privacy class
     })
-    return session_id, concept, opening
+    return session_id, concept, opening, llm_public
 
 
 def _history_messages(transcript: list[dict]) -> list[dict]:
-    """The last few transcript entries as plain chat messages for the model."""
-    recent = transcript[-(_HISTORY_TURNS * 2 + 1):]
-    return [{"role": m["role"], "content": m["content"]} for m in recent]
+    """The whole transcript (already bounded by the 50-message session limit) as chat messages."""
+    return [{"role": m["role"], "content": m["content"]} for m in transcript]
 
 
-def _save_and_close(session_id: str, session: dict, evaluation: dict) -> None:
-    """Persist the finished session to history (id or None tolerated) and drop it."""
-    db.save("teachbacks", session["owner"], {
+def _record_result(owner: str, session_id: str, session: dict, evaluation: dict, llm_public: dict | None) -> dict | None:
+    """The unified result for a finished session, stored once as a graded attempt (feeds Analytics). Never raises."""
+    try:
+        from backend.services import attempts, grading
+
+        subject = session["label"].split(" / ")[0] if session.get("mode") == "subject" else None
+        return attempts.run_idempotent(owner, session_id, "teachback", lambda: grading.teachback_result(
+            attempt_id=session_id, concept=session["concept"], subject=subject, evaluation=evaluation,
+            llm=llm_public))[0]
+    except Exception:  # noqa: BLE001 - analytics must never break the evaluation the student is waiting for
+        log.warning("Could not record the teach-back result.", exc_info=True)
+        return None
+
+
+def _save_and_close(owner: str, session_id: str, session: dict, evaluation: dict, llm_public: dict | None) -> dict | None:
+    """Persist the finished session to history (id or None tolerated) and drop it (once). Returns the unified result."""
+    if not _store_drop(owner, session_id):
+        return None   # a concurrent finish already saved it
+    db.save("teachbacks", owner, {
         "title": f"Teach-back · {session['concept']}",
         "concept": session["concept"],
         "mode": session["mode"],
         "source": session["label"],
-        "model": session["model"],
+        "llm": llm_public,
         "messages": list(session["messages"]),
         "evaluation": evaluation,
     })
-    with _sessions_lock:
-        _sessions.pop(session_id, None)
+    return _record_result(owner, session_id, session, evaluation, llm_public)
 
 
-def respond(session_id: str, message: str) -> dict:
-    """Handle one student message; returns {reply, done, evaluation}.
+def respond(session_id: str, message: str, owner: str = LOCAL_OWNER) -> dict:
+    """Handle one student message; returns {reply, done, evaluation, llm}.
 
-    The session ends (done=True, evaluation attached, transcript saved, session
-    cleared) when the student says "done"/"evaluate" or the exchange cap is hit;
-    otherwise the tutor returns its single probing question.
+    The session ends (done=True, evaluation attached, transcript saved, session cleared) when the
+    student says "done"/"evaluate" or the exchange cap is hit; otherwise the tutor returns its
+    single probing question. Owner-scoped: a foreign session id is "unknown".
     """
-    session = _sessions.get(session_id)
+    session = _store_get(owner, session_id)
     if session is None:
         raise TeachbackSessionError(f"Unknown or expired teach-back session: {session_id}")
     if len(session["messages"]) >= _MAX_MESSAGES:
-        with _sessions_lock:
-            _sessions.pop(session_id, None)
+        _store_drop(owner, session_id)
         raise TeachbackSessionExpiredError(
             "This teach-back session reached its 50-message limit — nice stamina! "
             "Please start a fresh session to keep going."
         )
 
-    text = clip_to_tokens((message or "").strip(), _MESSAGE_TOKENS)
+    text = (message or "").strip()
     if not text:
         raise TeachbackError("The message was empty — explain the concept in your own words.")
 
@@ -263,16 +324,17 @@ def respond(session_id: str, message: str) -> dict:
             "and the complete final evaluation JSON now.]"
         )
 
-    llm_messages = [{"role": "system", "content": session["persona"]}]
-    llm_messages.extend(_history_messages(session["messages"]))
+    llm_messages = _history_messages(session["messages"])
     llm_messages.append({"role": "user", "content": user_content})
 
-    raw = _call_llm(session["model"], llm_messages, _REPLY_OUTPUT_TOKENS)
+    raw, llm_public = _call_llm(llm_messages, _REPLY_OUTPUT_TOKENS, session["persona"],
+                                sensitive=bool(session.get("sensitive")))
     evaluation = _normalise_evaluation(raw.get("evaluation"))
     done = bool(raw.get("done"))
     if must_finish and (not done or evaluation is None):
         # One retry before giving up — a forced finish must yield an evaluation.
-        raw = _call_llm(session["model"], llm_messages, _REPLY_OUTPUT_TOKENS)
+        raw, llm_public = _call_llm(llm_messages, _REPLY_OUTPUT_TOKENS, session["persona"],
+                                sensitive=bool(session.get("sensitive")))
         evaluation = _normalise_evaluation(raw.get("evaluation"))
         done = bool(raw.get("done"))
         if not done or evaluation is None:
@@ -287,11 +349,11 @@ def respond(session_id: str, message: str) -> dict:
             else "Go on — tell me more, in your own words."
         )
 
-    session["messages"].append({"role": "user", "content": text})
-    session["messages"].append({"role": "assistant", "content": reply})
-    session["exchanges"] += 1
-
+    new_messages = [{"role": "user", "content": text},
+                    {"role": "assistant", "content": reply, "llm": llm_public}]    # each AI turn keeps its own model label
     if done:
-        _save_and_close(session_id, session, evaluation)
-        return {"reply": reply, "done": True, "evaluation": evaluation}
-    return {"reply": reply, "done": False, "evaluation": None}
+        session["messages"] = list(session["messages"]) + new_messages
+        result = _save_and_close(owner, session_id, session, evaluation, llm_public)
+        return {"reply": reply, "done": True, "evaluation": evaluation, "llm": llm_public, "result": result}
+    _store_append(owner, session_id, new_messages)
+    return {"reply": reply, "done": False, "evaluation": None, "llm": llm_public}

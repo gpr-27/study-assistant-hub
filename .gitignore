@@ -30,3 +30,12 @@ render-upload.env
 # and are re-hydrated at startup). Only bundled demo subjects are committed.
 documents/user__*/
 faiss_index/user__*/
+
+# Vercel
+.vercel/
+dist/
+
+# Playwright MCP scratch
+.playwright-mcp/
+.vercel
+.env*

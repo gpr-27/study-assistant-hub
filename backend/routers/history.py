@@ -5,11 +5,11 @@ One uniform surface for every tool's memory:
   GET    /api/history/{kind}/{id}          -> the full saved artifact
   DELETE /api/history/{kind}/{id}          -> remove it
 
-``kind`` is one of chats | quizzes | flashcards | plans | mindmaps. Every route is
+``kind`` is any of ``db.KINDS`` (chats, quizzes, flashcards, plans, mindmaps, exams, …). Every route is
 scoped by current_owner, so a user can only ever see or delete their own items. When
 persistence is disabled (no MONGODB_URI) the list is simply empty.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from backend import db
 from backend.auth import current_owner
@@ -28,19 +28,23 @@ def _check_kind(kind: str) -> None:
 @router.get("/{kind}")
 def list_history(
     kind: str,
-    q: str | None = Query(None, description="Case-insensitive search filter"),
+    q: str | None = Query(None, max_length=100, description="Case-insensitive search filter"),
     owner: str = Depends(current_owner),
 ) -> dict:
     _check_kind(kind)
-    return {"items": db.list_items(kind, owner, q=q), "persistence": db.is_enabled()}
+    items = db.list_items(kind, owner, q=q)
+    for item in items:
+        item.pop("recent_artifact", None)      # chat-internal memory; keep list payloads small
+    return {"items": items, "persistence": db.is_enabled()}
 
 
 @router.get("/{kind}/{item_id}")
-def get_history(kind: str, item_id: str, owner: str = Depends(current_owner)) -> dict:
+def get_history(kind: str, item_id: str = Path(..., max_length=64), owner: str = Depends(current_owner)) -> dict:
     _check_kind(kind)
     doc = db.get_item(kind, owner, item_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Item not found.")
+    doc.pop("recent_artifact", None)
     return doc
 
 

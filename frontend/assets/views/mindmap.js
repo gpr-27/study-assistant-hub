@@ -7,7 +7,7 @@
    ============================================================ */
 (() => {
   "use strict";
-  const { el, clear, esc, spinner, toast, copy } = window.ui;
+  const { el, clear, esc, spinner, empty, toast, copy } = window.ui;
 
   let source = "subject";   // "subject" | "topic" | "upload"
   let pdfFile = null;       // File for upload mode
@@ -67,12 +67,12 @@
     } else {
       const field = el(`
         <div class="field" style="margin:0">
-          <label class="label">PDF</label>
-          <div class="row row-wrap">
-            <label class="btn" for="mmPdfFile" style="cursor:pointer">Choose PDF…</label>
-            <span class="muted" id="mmPdfName">No file selected</span>
+          <label class="label" for="mmPdfFile">PDF</label>
+          <div class="row row-wrap" style="align-items:center">
+            <label class="btn" for="mmPdfFile" style="cursor:pointer;flex:none">Choose PDF…</label>
+            <span class="muted" id="mmPdfName" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">No file selected</span>
           </div>
-          <input id="mmPdfFile" type="file" accept="application/pdf" hidden />
+          <input id="mmPdfFile" type="file" accept="application/pdf" hidden aria-label="Upload PDF for mind map" />
           <div class="hint">Upload one PDF and map its key concepts.</div>
         </div>`);
       host.append(field);
@@ -81,6 +81,7 @@
       input.addEventListener("change", () => {
         pdfFile = input.files && input.files[0] ? input.files[0] : null;
         nameSlot.textContent = pdfFile ? pdfFile.name : "No file selected";
+        nameSlot.title = pdfFile ? pdfFile.name : "";
       });
     }
   }
@@ -354,17 +355,18 @@
       prepTree(root, 0);
       clear(result);
       const head = el(`<div class="row row-wrap between" style="margin-bottom:1rem"><h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em;margin:0">Mind map</h3></div>`);
-      const copyBtn = el(`<button class="btn" type="button">Copy outline</button>`);
+      const copyBtn = window.ui.iconBtn({ icon: "copy", label: "Copy outline", cls: "ib-outline" });
       copyBtn.addEventListener("click", () => copy(toOutline(root, 0), copyBtn));
       head.append(copyBtn);
       result.append(head);
+      { const l = window.ui.renderModelLabel(resp.llm); if (l) result.append(l); }   // "Model: …" above the map
       mountMindmap(root, result);
       toast("Mind map ready. Drag to pan, click ‹ › to fold.", "ok");
       const __hp = document.querySelector('.history-panel[data-kind="mindmaps"]');
       if (__hp && __hp.refresh) __hp.refresh();
     } catch (e) {
       clear(result);
-      result.append(el(`<div class="empty"><div class="big">⚠</div><div>${esc(e.message)}</div></div>`));
+      result.append(window.ui.errorBlock(e, e.retryable ? () => goBtn.click() : null));
       toast(e.message, "error");
     } finally {
       goBtn.disabled = false;
@@ -379,15 +381,15 @@
     async mount(root) {
       const layout = el(`
         <div class="stack">
-          <div class="panel stack">
-            <div class="between" style="align-items:flex-start">
-              <div class="stack-sm" style="flex:1">
-                <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em">Create a mind map</h3>
+          <div class="panel stack" style="max-width:640px;width:100%;margin:0 auto">
+            <div class="between" style="align-items:flex-start;gap:.75rem">
+              <div class="stack-sm" style="flex:1;min-width:0">
+                <h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em;overflow-wrap:anywhere">Create a mind map</h3>
                 <p class="muted">From one PDF in a subject, a topic you type, or a PDF you upload.</p>
               </div>
-              <button id="mm-hist" class="btn" type="button" style="flex:none;padding:.4rem .8rem;font-size:.85rem">≡ History</button>
+              <button id="mm-hist" class="icon-btn ib-outline" type="button" aria-label="Open mind map history" title="Open mind map history">${window.ui.iconHtml("history")}</button>
             </div>
-            <div class="seg" role="tablist" aria-label="Mind map source">
+            <div class="seg" role="tablist" aria-label="Mind map source" style="flex-wrap:wrap">
               <button type="button" data-src="subject" aria-pressed="true">Subject PDF</button>
               <button type="button" data-src="topic" aria-pressed="false">Topic</button>
               <button type="button" data-src="upload" aria-pressed="false">Upload PDF</button>
@@ -396,11 +398,10 @@
             <div id="mmModelCtl"></div>
             <button id="mmGo" class="btn-accent btn-lg btn-block" type="button">Generate mind map</button>
           </div>
-          <div class="panel" id="mmResult">
-            <div class="empty"><div class="big">✦</div><div>Pick a source and generate your mind map.</div></div>
-          </div>
+          <div class="panel" id="mmResult"></div>
         </div>`);
       root.append(layout);
+      layout.querySelector("#mmResult").append(empty("Pick a source and generate your mind map.", "✦"));
 
       function openSavedMindmap(saved) {
         const result = layout.querySelector("#mmResult");
@@ -409,10 +410,11 @@
         prepTree(tree, 0);
         clear(result);
         const head = el('<div class="row row-wrap between" style="margin-bottom:1rem"><h3 style="font-family:var(--font-display);font-weight:700;letter-spacing:-.02em;margin:0">Mind map</h3></div>');
-        const copyBtn = el('<button class="btn" type="button">Copy outline</button>');
+        const copyBtn = window.ui.iconBtn({ icon: "copy", label: "Copy outline", cls: "ib-outline" });
         copyBtn.addEventListener("click", () => copy(toOutline(tree, 0), copyBtn));
         head.append(copyBtn);
         result.append(head);
+        { const l = window.ui.renderModelLabel(saved.llm, { stored: true }); if (l) result.append(l); }   // stored label from history
         mountMindmap(tree, result);
       }
       layout.querySelector("#mm-hist").addEventListener("click", (e) =>

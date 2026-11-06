@@ -29,13 +29,27 @@
 
   const KEYS = ["A", "B", "C", "D"];
 
+  // ---- shared grading UI (grade-ui.js) + chat hand-off ----
+  function GU_ID() { return "ic" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
+  function loadGrade() {
+    return window.GradeUI ? Promise.resolve(window.GradeUI) : ui.loadScript("/assets/grade-ui.js").then(() => window.GradeUI);
+  }
+  // "Study these weak topics": ask the Apex Agent itself for a quiz on them (a normal chat tool turn).
+  function studyInChat(topics) {
+    const input = document.querySelector("#chatComposer .input");
+    const send = document.getElementById("chatSend");
+    if (!input || !send) return;
+    input.value = "/quiz " + topics.slice(0, 3).join(", ");
+    send.click();
+  }
+
   // ---- small helpers (no external deps) ----
   function isObj(v) { return v && typeof v === "object"; }
   function nonEmptyArr(v) { return Array.isArray(v) && v.length > 0; }
   function str(v) { return typeof v === "string" ? v : ""; }
 
   /* ---------------- quizzes: playable MCQ runner ---------------- */
-  function renderQuiz(container, data) {
+  function renderQuiz(container, data, artifact) {
     const questions = (data && data.questions) || [];
     if (!nonEmptyArr(questions)) return false;
 
@@ -43,9 +57,15 @@
     let index = 0;
     let score = 0;
     const answered = new Array(total).fill(false);
+    const chosenKeys = {};
+    let attemptId = GU_ID();
+    const startedAt = Date.now();
 
     const wrap = el(`<div class="cl-quiz"></div>`);
-    const head = el(`<div class="cl-qhead"></div>`);
+    // aria-live: the counter/score text mutates in place on every answer/next —
+    // without this, screen-reader users get no announcement unless they're
+    // already focused on this exact node.
+    const head = el(`<div class="cl-qhead" role="status" aria-live="polite"></div>`);
     const counter = el(`<span></span>`);
     const score_b = el(`<span class="cl-score"></span>`);
     head.append(counter, score_b);
@@ -82,6 +102,7 @@
     function choose(chosen, q, correct, buttons, opts) {
       if (answered[index]) return;
       answered[index] = true;
+      chosenKeys["q" + (index + 1)] = chosen;
       if (chosen === correct) score += 1;
 
       Object.keys(buttons).forEach((key) => {
@@ -107,15 +128,26 @@
       body.append(next);
     }
 
-    function finish() {
+    // Marking + recording go through the SAME endpoint and result component as the Quiz view (POST /api/grade).
+    async function finish() {
       while (body.firstChild) body.removeChild(body.firstChild);
-      const pct = total ? Math.round((score / total) * 100) : 0;
       counter.textContent = "Finished";
       score_b.textContent = `${score} / ${total}`;
-      body.append(el(`<div class="cl-score">You scored ${score} of ${total} (${pct}%).</div>`));
-      const again = el(`<button class="cl-next" type="button">Try again</button>`);
-      again.addEventListener("click", () => { index = 0; score = 0; answered.fill(false); paint(); });
-      body.append(again);
+      const box = el(`<div></div>`);
+      body.append(box);
+      try {
+        const GradeUI = await loadGrade();
+        GradeUI.gradeInto(box, {
+          kind: "quiz", subject: str(data.subject) || undefined, topic: str(data.topic) || undefined,
+          title: str(artifact && artifact.title) || "Quiz", items: questions, answers: chosenKeys, attempt_id: attemptId,
+          quiz_id: (artifact && artifact.id) || undefined, duration_seconds: Math.round((Date.now() - startedAt) / 1000),
+          generated_llm: (artifact && artifact.llm) || undefined,
+        }, {
+          newLabel: "Try again", compact: true,
+          onNew: () => { index = 0; score = 0; answered.fill(false); Object.keys(chosenKeys).forEach((k) => delete chosenKeys[k]); attemptId = GU_ID(); paint(); },
+          onStudyWeak: (topics) => studyInChat(topics),
+        });
+      } catch (e) { box.append(ui.errorBlock(e, finish)); }
     }
 
     paint();
@@ -123,7 +155,9 @@
   }
 
   /* ---------------- mock exams: take → submit → graded report ---------------- */
-  function renderExam(container, data) {
+  function renderExam(container, data, genLlm) {
+    const attemptId = GU_ID();
+    const startedAt0 = Date.now();
     const raw = (data && data.questions) || [];
     if (!nonEmptyArr(raw)) return false;
 
@@ -225,18 +259,24 @@
       submit.disabled = true;
       submit.textContent = "Grading…";
       try {
-        const report = await window.api.post("/exam/grade", {
-          subject: subject,
-          questions: questions,
-          answers: answers,
-          duration_seconds: elapsed,
-          model: null,
-        });
-        renderReport(report);
+        const GradeUI = await loadGrade();
+        const payload = {
+          kind: "exam", subject: subject, title: "Mock exam" + (subject ? " \u00b7 " + subject : ""), items: questions, answers: answers,
+          attempt_id: attemptId, duration_seconds: elapsed != null ? elapsed : Math.round((Date.now() - startedAt0) / 1000),
+          generated_llm: genLlm || undefined,      // lets the saved report name who wrote the paper
+        };
+        wrap.classList.add("is-graded");
+        submit.remove();
+        const box = el(`<div class="cl-exam-report"></div>`);
+        wrap.append(box);
+        const res = await GradeUI.gradeInto(box, payload, { compact: true, items: questions, onStudyWeak: (t) => studyInChat(t) });
+        void res;
       } catch (err) {
         submit.disabled = false;
         submit.textContent = "Submit exam";
-        body.after(el(`<div class="cl-exam-err">Could not grade the exam — ${esc((err && err.message) || "please try again")}.</div>`));
+        const eb = el(`<div class="cl-exam-err">Could not grade the exam — ${esc((err && err.message) || "please try again")}.</div>`);
+        { const l = ui.renderModelLabel && ui.renderModelLabel(err && err.llm); if (l) eb.append(l); }
+        body.after(eb);
       }
     }
 
@@ -289,6 +329,7 @@
         });
         rep.append(tb);
       }
+      { const l = ui.renderModelLabel && ui.renderModelLabel(report.llm, { caption: "Marking" }); if (l) rep.append(l); }   // "Model: …" (grader)
       wrap.append(rep);
     }
 
@@ -299,7 +340,7 @@
   function cssId(id) { return String(id).replace(/["\\]/g, "\\$&"); }
 
   /* ---------------- flashcards: flip deck ---------------- */
-  function renderFlashcards(container, data) {
+  function renderFlashcards(container, data, artifact) {
     const cards = (data && data.cards) || [];
     if (!nonEmptyArr(cards)) return false;
 
@@ -308,14 +349,60 @@
     let flipped = false;
 
     const wrap = el(`<div class="cl-deck"></div>`);
-    const card = el(`<button class="cl-card" type="button" aria-label="Flashcard, click to flip"></button>`);
+    const card = el(`<button class="cl-card" type="button" aria-label="Flashcard, showing front, click to flip"></button>`);
     const nav = el(`<div class="cl-nav"></div>`);
-    const prev = el(`<button class="cl-navbtn" type="button">← Prev</button>`);
+    const prev = window.ui.iconBtn({ icon: "chevron-left", label: "Previous card", cls: "cl-navbtn" });
     const pos = el(`<span></span>`);
-    const next = el(`<button class="cl-navbtn" type="button">Next →</button>`);
+    const next = window.ui.iconBtn({ icon: "chevron-right", label: "Next card", cls: "cl-navbtn" });
     nav.append(prev, pos, next);
     wrap.append(card, nav);
     container.append(wrap);
+
+    // Spaced repetition (same endpoint as the Flashcards view): rate after flipping; saved decks only.
+    const deckId = artifact && artifact.id;
+    const batchPending = [];
+    let batchId = GU_ID();
+    const rated = {};
+    let fb = null;
+    if (deckId) {
+      fb = el(`<div class="cl-nav" role="group" aria-label="How well did you know this card" hidden></div>`);
+      [["again", "Again"], ["hard", "Hard"], ["good", "Good"], ["easy", "Easy"]].forEach(([r, label], i) => {
+        const b = el(`<button class="cl-navbtn" type="button" title="Key ${i + 1}">${label}</button>`);
+        b.addEventListener("click", () => rate(r));
+        fb.append(b);
+      });
+      wrap.append(fb);
+      wrap.setAttribute("tabindex", "0");
+      wrap.addEventListener("keydown", (e) => {
+        if (e.target && /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
+        const k = { "1": "again", "2": "hard", "3": "good", "4": "easy" }[e.key];
+        if (k && flipped) { e.preventDefault(); rate(k); }
+        else if (e.key === " " && e.target === wrap) { e.preventDefault(); flipped = !flipped; paint(); }
+      });
+    }
+    async function flush() {
+      if (!batchPending.length) return;
+      const reviews = batchPending.splice(0);
+      const id = batchId; batchId = GU_ID();
+      try { await window.api.post("/flashcards/review", { deck_id: deckId, batch_id: id, reviews }); window.api.invalidate && window.api.invalidate("/progress"); }
+      catch (_) { batchPending.unshift(...reviews); batchId = id; }     // same batch id on retry: never applied twice
+    }
+    function rate(r) {
+      const c = cards[index] || {};
+      const cid = c.cid || c.id;
+      if (!cid) return;
+      batchPending.push({ card_id: cid, rating: r });
+      rated[index] = r;
+      if (batchPending.length >= 10 || index >= total - 1) flush();
+      if (index < total - 1) { index += 1; flipped = false; paint(); }
+      else { pos.textContent = `${total} / ${total} \u00b7 reviewed`; fb.hidden = true; }
+    }
+    if (deckId) {     // card ids are server-derived (hash of front+back): fetch them once
+      window.api.get(`/flashcards/due?deck_id=${encodeURIComponent(deckId)}&new_limit=50&limit=200`).then((q) => {
+        const byFront = {}; (q.cards || []).forEach((x) => { byFront[x.front + "\u241f" + x.back] = x.cid; });
+        cards.forEach((c) => { c.cid = byFront[str(c.front) + "\u241f" + str(c.back)]; });
+      }).catch(() => { if (fb) fb.remove(); });
+    }
 
     function paint() {
       while (card.firstChild) card.removeChild(card.firstChild);
@@ -328,9 +415,13 @@
       face.append(el(`<span class="cl-flip">${flipped ? "back · click to flip" : "front · click to flip"}</span>`));
       card.append(face);
       card.classList.toggle("cl-flip", flipped);
+      // Keep the accessible name in sync with the visible face so screen-reader
+      // users (who can't see the front/back flip) know which side they're on.
+      card.setAttribute("aria-label", `Flashcard, showing ${flipped ? "back" : "front"}, click to flip`);
       pos.textContent = `${index + 1} / ${total}`;
       prev.disabled = index === 0;
       next.disabled = index >= total - 1;
+      if (fb) fb.hidden = !flipped || !!rated[index];
     }
 
     card.addEventListener("click", () => { flipped = !flipped; paint(); });
@@ -466,7 +557,10 @@
 
     const wrap = el(`<div class="cl-tb"></div>`);
     if (concept) wrap.append(el(`<div class="cl-tb-concept">Explain: <strong>${esc(concept)}</strong></div>`));
-    const thread = el(`<div class="cl-tb-thread"></div>`);
+    // aria-live: this mini-chat has no page-level announcement elsewhere, so
+    // without this a screen-reader user gets silence after they submit — the
+    // tutor's reply lands in the DOM but nothing tells them it arrived.
+    const thread = el(`<div class="cl-tb-thread" role="log" aria-live="polite"></div>`);
     wrap.append(thread);
     container.append(wrap);
 
@@ -482,7 +576,7 @@
 
     const form = el(`<div class="cl-tb-form"></div>`);
     const input = el(`<textarea class="cl-tb-input" rows="2" placeholder="Explain it in your own words…"></textarea>`);
-    const send = el(`<button class="cl-tb-send" type="button">Send</button>`);
+    const send = el(`<button class="cl-tb-send" type="button" aria-label="Send" title="Send">${window.ui.iconHtml("send")}<span>Send</span></button>`);
     form.append(input, send);
     wrap.append(form);
 
@@ -503,7 +597,8 @@
           message: message,
         });
         pending.remove();
-        bubble("tutor", str(res && res.reply) || "…");
+        const tb = bubble("tutor", str(res && res.reply) || "…");
+        { const l = window.ui && window.ui.renderModelLabel && window.ui.renderModelLabel(res && res.llm); if (l && tb && tb.append) tb.append(l); }
         if (res && res.done) {
           done = true;
           form.remove();
@@ -519,7 +614,9 @@
         busy = false;
         send.disabled = false;
         input.disabled = false;
-        thread.append(el(`<div class="cl-tb-err">Couldn't reach the tutor — ${esc((err && err.message) || "try again")}.</div>`));
+        const eb = el(`<div class="cl-tb-err">Couldn't reach the tutor — ${esc((err && err.message) || "try again")}.</div>`);
+        { const l = ui.renderModelLabel && ui.renderModelLabel(err && err.llm); if (l) eb.append(l); }   // "Model: none (…)"
+        thread.append(eb);
       }
     }
 
@@ -548,6 +645,12 @@
       block("Strengths", evaluation.strengths, "is-strength");
       block("Gaps", evaluation.gaps, "is-gap");
       block("Review next", evaluation.suggested_review, "is-review");
+      const gaps = Array.isArray(evaluation.gaps) ? evaluation.gaps.filter((g) => str(g).trim()) : [];
+      if (gaps.length) {
+        const b = el(`<button class="cl-next" type="button">Quiz me on these gaps</button>`);
+        b.addEventListener("click", () => studyInChat(gaps));
+        ev.append(b);
+      }
       wrap.append(ev);
     }
 
@@ -673,9 +776,9 @@
 
     try {
       switch (artifact.kind) {
-        case "quizzes":     return renderQuiz(container, data);
-        case "exams":       return renderExam(container, data);
-        case "flashcards":  return renderFlashcards(container, data);
+        case "quizzes":     return renderQuiz(container, data, artifact);
+        case "exams":       return renderExam(container, data, artifact.llm);
+        case "flashcards":  return renderFlashcards(container, data, artifact);
         case "cheatsheets": return renderDoc(container, data.markdown);
         case "plans":       return renderDoc(container, data.plan);
         case "summaries":   return renderSummaries(container, data);

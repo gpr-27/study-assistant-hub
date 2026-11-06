@@ -1,66 +1,87 @@
 """Chat overview service: a NotebookLM-style empty-state card for a new session.
 
-When a Chat Assistant session opens on a subject or topic, the SPA shows a short
-overview of what the materials cover plus a few tappable "starter question" chips.
-This module produces that card from ONE bounded Groq call generated from the PDF
-TEXT (never embeddings — the Gemini embedding quota is exhausted) and caches the
-result per subject/topic so reopening a session is free.
+When a Chat Assistant session opens on a subject or topic, the SPA shows a short overview of
+what the materials cover plus a few tappable "starter question" chips.
 
-Design rules:
-  * NO embeddings / FAISS. We read the raw PDF text via ``backend.documents`` and
-    clip it to a token budget, exactly like the other generation tools, so a single
-    request stays within the free-tier per-minute limit.
-  * ONE LLM call, bounded output (max_tokens). The model returns a small JSON object
-    ``{"overview": "...", "questions": ["...", "...", "..."]}`` which we parse
-    tolerantly (regex the first ``{...}``) and clamp to 3 questions.
-  * Fully best-effort: this NEVER raises. Any failure (no key, unreadable PDFs,
-    rate limit, bad JSON) degrades to ``overview="", questions=[]`` — and that empty
-    result is STILL cached, so a broken subject isn't re-tried on every open.
+Request-path rules (this is hit on every session open):
+  1. BUNDLED subjects ship a pre-baked ``data/index/<subject>/overview.json`` (written by
+     ``scripts/prebake_overviews.py`` at build time). Reading it is a pure file read — no PDF
+     parse, no embedding, NO LLM call. That is the normal case.
+  2. Otherwise a bounded in-process TTL cache (per owner + subject/topic + PDF fingerprint).
+  3. Only when both miss is ONE bounded LLM call made through ``backend.llm_chain`` (JSON mode,
+     ≤ ``_GEN_DEADLINE_S``), de-duplicated across concurrent requests for the same key. A failed
+     generation is cached briefly (negative cache) so a provider outage doesn't make every
+     session-open pay the timeout, and ``refresh`` is rate-limited per key.
+
+The function never raises: any failure degrades to ``overview="", questions=[]``.
 """
+from __future__ import annotations
+
 import json
 import logging
-import re
 import threading
+import time
+from collections import OrderedDict
+from pathlib import Path
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_groq import ChatGroq
-
-from backend import config
-from backend.config import FAISS_INDEX_DIR
-from backend.documents import clip_to_tokens, list_pdf_names, pdf_signature, read_pdf
+from backend import deadline, llm_chain, privacy
+from backend.config import ROOT_DIR
+from backend.documents import list_pdf_names, pdf_signature, read_pdf, subject_internal_key
+from backend.services.llm_json import extract_json_object
 
 log = logging.getLogger(__name__)
 
-# Pre-baked overview for a BUNDLED subject, written next to its index and shipped in
-# the Docker image (scripts/prebake_overviews.py). Loading it is instant — no PDF
-# read, no Groq call — so the card appears immediately for the bundled subjects.
 _PREBAKE_NAME = "overview.json"
 
 
-def _load_prebaked(subject: str) -> dict | None:
-    """Return ``{overview, questions, sources}`` from a committed overview.json, or None."""
+def _bundled_index_dir() -> Path:
     try:
-        path = FAISS_INDEX_DIR / subject / _PREBAKE_NAME
-        if not path.exists():
+        from backend import vector_store
+
+        return Path(vector_store.BUNDLED_INDEX_DIR)
+    except Exception:  # noqa: BLE001
+        return ROOT_DIR / "data" / "index"
+
+
+PREBAKED_UNKNOWN_LABEL = "Model: not recorded (pre-generated overview)"
+
+
+def _prebaked_llm(stored: object) -> dict:
+    """Public ``llm`` block for a shipped overview: the label the prebake script recorded, else an
+    honest "not recorded" label (older files predate model tracking) — never a made-up model."""
+    if isinstance(stored, dict) and str(stored.get("label") or "").startswith("Model:"):
+        return {"label": str(stored["label"])}
+    if isinstance(stored, str) and stored.startswith("Model:"):
+        return {"label": stored}
+    return {"label": PREBAKED_UNKNOWN_LABEL}
+
+
+def _load_prebaked(subject: str, owner: str | None) -> dict | None:
+    """``{overview, questions, sources}`` from a shipped overview.json (bundled subjects only)."""
+    try:
+        key = subject_internal_key(subject, owner)
+        if key != subject:          # a user-owned subject: never serve (or probe) a bundled file
             return None
+        path = _bundled_index_dir() / key / _PREBAKE_NAME
         data = json.loads(path.read_text(encoding="utf-8"))
         overview = str(data.get("overview", "") or "").strip()
         questions = [str(q).strip() for q in (data.get("questions") or []) if str(q).strip()][:_MAX_QUESTIONS]
         if not overview and not questions:
             return None
-        return {"overview": overview, "questions": questions, "sources": int(data.get("sources") or 0)}
-    except Exception:  # noqa: BLE001 — a malformed/absent prebake just falls back to live generation
+        return {"overview": overview, "questions": questions, "sources": int(data.get("sources") or 0),
+                "llm": _prebaked_llm(data.get("llm"))}
+    except Exception:  # noqa: BLE001 — absent/malformed prebake just falls back to cache/generation
         return None
 
-# Read a few documents and clip to a single bounded slice — a few PDFs are plenty
-# for an overview within the free-tier token budget (input + reserved output).
+
 _MAX_PDFS: int = 3
-_MAX_CONTENT_TOKENS: int = 4000
-_MAX_OUTPUT_TOKENS: int = 500   # 2-3 sentences + 3 short questions is small
+_MAX_OUTPUT_TOKENS: int = 700
 _MAX_QUESTIONS: int = 3
-# Cap the cache so a guest-heavy stream of distinct subjects/topics can't grow it
-# without bound on the 512MB box; oldest entries are evicted first (insertion order).
+_GEN_DEADLINE_S: float = 18.0
 _MAX_CACHE: int = 256
+_OK_TTL_S: float = 6 * 3600.0
+_FAIL_TTL_S: float = 30.0
+_REFRESH_MIN_INTERVAL_S: float = 30.0
 
 _SYSTEM: str = (
     "You help a student get oriented before they start studying. Given the study "
@@ -68,22 +89,20 @@ _SYSTEM: str = (
     "starter questions. You always reply with a single valid JSON object and nothing else."
 )
 
-# In-process cache keyed per owner+subject or per topic, guarded by a lock. An empty
-# (failed) result is cached too, so a broken subject is not re-generated on every open.
-_cache: dict[str, dict] = {}
-_cache_lock = threading.Lock()
-
 _EMPTY: dict = {"overview": "", "questions": []}
+
+_cache: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()     # key -> (expires_at, card)
+_last_gen: "OrderedDict[str, float]" = OrderedDict()               # key -> last generation start
+_inflight: dict[str, threading.Event] = {}
+_lock = threading.Lock()
 
 
 def _subject_fingerprint(subject: str, owner: str) -> str:
-    """A (mtime,size) fingerprint over the subject's PDFs so the cache misses when
-    the materials change (a re-upload regenerates the overview, never serves stale)."""
     sig: list = []
     for name in list_pdf_names(subject, owner)[:_MAX_PDFS]:
         try:
             sig.append((name, pdf_signature(subject, name, owner)))
-        except Exception:  # noqa: BLE001 — a missing/unreadable file just drops from the print
+        except Exception:  # noqa: BLE001
             continue
     return repr(sig)
 
@@ -95,28 +114,34 @@ def _cache_key(*, subject: str | None, topic: str | None, owner: str) -> str:
 
 
 def _cache_get(key: str) -> dict | None:
-    with _cache_lock:
-        cached = _cache.get(key)
-    # Deep-copy the questions list so a caller mutating it can't corrupt the cache.
-    return None if cached is None else {**cached, "questions": list(cached["questions"])}
+    with _lock:
+        hit = _cache.get(key)
+        if hit is None:
+            return None
+        if time.monotonic() >= hit[0]:
+            del _cache[key]
+            return None
+        _cache.move_to_end(key)
+        card = hit[1]
+    return {**card, "questions": list(card["questions"])}
 
 
-def _cache_put(key: str, card: dict) -> None:
-    with _cache_lock:
-        _cache[key] = {**card, "questions": list(card["questions"])}
+def _cache_put(key: str, card: dict, ttl: float) -> None:
+    with _lock:
+        _cache[key] = (time.monotonic() + ttl, {**card, "questions": list(card["questions"])})
+        _cache.move_to_end(key)
         while len(_cache) > _MAX_CACHE:
-            del _cache[next(iter(_cache))]   # dicts preserve insertion order
+            _cache.popitem(last=False)
 
 
 def _subject_body(subject: str, owner: str) -> str:
-    """Concatenate (and clip) up to a few of the subject's PDFs into one blob."""
     parts: list[str] = []
     for pdf in list_pdf_names(subject, owner)[:_MAX_PDFS]:
         try:
             parts.append(f"## {pdf}\n{read_pdf(subject, pdf, owner)}")
         except Exception:  # noqa: BLE001 — skip unreadable PDFs, keep the rest
             continue
-    return clip_to_tokens("\n\n".join(parts), _MAX_CONTENT_TOKENS)
+    return "\n\n".join(parts)    # full text; llm_chain trims per provider
 
 
 def _prompt(label: str, body: str, is_subject: bool) -> str:
@@ -130,18 +155,13 @@ def _prompt(label: str, body: str, is_subject: bool) -> str:
         "no commentary, no markdown fences."
     )
     if is_subject and body:
-        return (
-            f"Study material for “{label}” is below.\n\n{spec}\n\nMATERIAL:\n{body}"
-        )
+        return f"Study material for “{label}” is below.\n\n{spec}\n\nMATERIAL:\n{body}"
     return f"The student wants to learn about: {label}.\n\n{spec}"
 
 
 def _parse(raw: str) -> dict:
     """Tolerantly extract {overview, questions} from the model's reply."""
-    match = re.search(r"\{.*\}", raw or "", re.DOTALL)
-    data = json.loads(match.group(0)) if match else {}
-    if not isinstance(data, dict):
-        return dict(_EMPTY)
+    data = extract_json_object(raw)
     overview = str(data.get("overview", "") or "").strip()
     raw_qs = data.get("questions")
     questions: list[str] = []
@@ -153,14 +173,12 @@ def _parse(raw: str) -> dict:
     return {"overview": overview, "questions": questions[:_MAX_QUESTIONS]}
 
 
-def _generate(label: str, body: str, is_subject: bool, model: str | None) -> dict:
-    """Run the single bounded Groq call and parse it. Raises on any failure."""
-    llm = ChatGroq(model=config.model_for("chat", model), temperature=0.3, max_tokens=_MAX_OUTPUT_TOKENS)
-    raw = str(llm.invoke([
-        SystemMessage(content=_SYSTEM),
-        HumanMessage(content=_prompt(label, body, is_subject)),
-    ]).content)
-    return _parse(raw)
+def _generate(label: str, body: str, is_subject: bool) -> tuple[dict, dict | None]:
+    """The single bounded chain call. Returns (parsed card parts, public llm). Raises on failure."""
+    res = llm_chain.chat(_SYSTEM, [{"role": "user", "content": _prompt(label, body, is_subject)}],
+                         max_tokens=_MAX_OUTPUT_TOKENS, temperature=0.3, json_mode=True,
+                         sensitive=privacy.current(), deadline_s=deadline.clamp(_GEN_DEADLINE_S))
+    return _parse(res.text), res.to_public()
 
 
 def build_overview(
@@ -171,52 +189,77 @@ def build_overview(
     model: str | None = None,
     refresh: bool = False,
 ) -> dict:
-    """Return a NotebookLM-style overview card for a subject or topic session.
+    """Return ``{"label", "sources", "overview", "questions", "llm"}``. NEVER raises.
 
-    Returns ``{"label", "sources", "overview", "questions"}``:
-      * subject mode: ``sources`` is the subject's total PDF count; the overview is
-        generated from up to a few of those PDFs' text.
-      * topic mode: ``sources`` is 0; the overview is generated from the topic alone.
-
-    Best-effort by contract — NEVER raises. On any failure ``overview`` is "" and
-    ``questions`` is ``[]``. Only SUCCESSFUL (non-empty) results are cached — a
-    transient failure (e.g. a Groq rate-limit) must NOT be cached, or the card would
-    stay permanently empty for that subject until the process restarts, even after
-    the model recovers. ``refresh=True`` bypasses the cache.
+    ``llm`` is the public chain label of the generating model (for a pre-baked card: the label stored
+    in overview.json, or a "not recorded" label), or ``None`` for an empty/failed card. ``model`` is accepted for back-compat and ignored.
     """
     is_subject = bool(subject)
     label = (subject if is_subject else topic) or ""
-    key = _cache_key(subject=subject, topic=topic, owner=owner)
 
+    # 1) Pre-baked (pure file read; no LLM) — skipped on an explicit refresh.
+    if is_subject and not refresh:
+        pre = _load_prebaked(subject, owner)
+        if pre is not None:
+            try:
+                sources = pre["sources"] or len(list_pdf_names(subject, owner))
+            except Exception:  # noqa: BLE001
+                sources = pre["sources"]
+            return {"label": label, "sources": sources, "overview": pre["overview"],
+                    "questions": pre["questions"], "llm": pre["llm"]}
+
+    try:
+        key = _cache_key(subject=subject, topic=topic, owner=owner)
+    except Exception:  # noqa: BLE001 — unknown/forbidden subject → empty card, not an error
+        return {"label": label, "sources": 0, **_EMPTY, "llm": None}
+
+    # 2) Cache.
     if not refresh:
         cached = _cache_get(key)
         if cached is not None:
             return cached
-        # Bundled subjects ship a pre-baked overview — load it instantly (no Groq).
-        if is_subject:
-            pre = _load_prebaked(subject)
-            if pre is not None:
-                card = {"label": label, "sources": pre["sources"] or len(list_pdf_names(subject, owner)),
-                        "overview": pre["overview"], "questions": pre["questions"]}
-                _cache_put(key, card)
-                return card
 
-    sources = 0
-    body = ""
-    result = dict(_EMPTY)
+    # 3) Generate once (single-flight), bounded.
+    now = time.monotonic()
+    with _lock:
+        if refresh and now - _last_gen.get(key, -1e9) < _REFRESH_MIN_INTERVAL_S:
+            refresh = False                     # too soon: serve whatever we have instead of burning the LLM
+        waiter = _inflight.get(key)
+        if waiter is None:
+            _inflight[key] = threading.Event()
+            _last_gen[key] = now
+            while len(_last_gen) > _MAX_CACHE:
+                _last_gen.popitem(last=False)
+    if waiter is not None:
+        waiter.wait(_GEN_DEADLINE_S + 2)
+        cached = _cache_get(key)
+        return cached if cached is not None else {"label": label, "sources": 0, **_EMPTY, "llm": None}
     try:
-        if is_subject:
-            sources = len(list_pdf_names(subject, owner))
-            body = _subject_body(subject, owner)
-        config.require_groq_key()
-        result = _generate(label, body, is_subject, model)
-    except Exception:  # noqa: BLE001 — overview is best-effort; degrade to empty
-        log.debug("Overview generation failed for %r; serving empty card.", key, exc_info=True)
+        if not refresh:
+            cached = _cache_get(key)        # a refresh-throttled call may still have a card
+            if cached is not None:
+                return cached
+        sources, body, llm_public = 0, "", None
         result = dict(_EMPTY)
+        with privacy.scope(privacy.for_subject(subject) if is_subject else False):   # user subject => private
+            try:
+                if is_subject:
+                    sources = len(list_pdf_names(subject, owner))
+                    body = _subject_body(subject, owner)
+                result, llm_public = _generate(label, body, is_subject)
+            except Exception:  # noqa: BLE001 — overview is best-effort; degrade to empty
+                log.info("Overview generation failed for %r; serving empty card.", label, exc_info=True)
+                result, llm_public = dict(_EMPTY), None
+        card = {"label": label, "sources": sources, **result, "llm": llm_public}
+        ok = bool(result["overview"] or result["questions"])
+        _cache_put(key, card, _OK_TTL_S if ok else _FAIL_TTL_S)      # failures are cached only briefly
+        return card
+    finally:
+        _release(key)
 
-    card = {"label": label, "sources": sources, **result}
-    # Cache only successful results so a transient generation failure is retried on
-    # the next open instead of serving an empty card forever.
-    if result["overview"] or result["questions"]:
-        _cache_put(key, card)
-    return card
+
+def _release(key: str) -> None:
+    with _lock:
+        ev = _inflight.pop(key, None)
+    if ev is not None:
+        ev.set()

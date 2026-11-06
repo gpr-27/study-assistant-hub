@@ -5,8 +5,9 @@
      • #voiceMicBtn — dictate a question via SpeechRecognition
        (interim results stream into the composer input; the final
        text is LEFT in the input, never auto-sent).
-     • #voiceTtsBtn — toggle that reads each newly added AI reply
-       (.msg.ai, skipping .msg-thinking) aloud via speechSynthesis.
+     • window.Voice — speak()/stop()/setAuto(): per-message "Read aloud"
+       buttons (chat.js) and the "Read replies aloud automatically" option
+       use it (speechSynthesis). There is no speaker button in the composer.
    Fully feature-checked: the mic button is never created when
    SpeechRecognition is unsupported (e.g. Firefox), and the speaker
    button is never created without speechSynthesis. Navigating away
@@ -54,16 +55,17 @@
   function messageText(msg) {
     let clone;
     try { clone = msg.cloneNode(true); } catch (_) { return ""; }
-    clone.querySelectorAll(".msg-footer, .codeblock, pre").forEach((n) => n.remove());
+    clone.querySelectorAll(".msg-footer, .msg-actions, .codeblock, pre").forEach((n) => n.remove());
     return stripMarkdown(clone.textContent);
   }
 
   /* ---------------- speech synthesis ---------------- */
-  function speak(text) {
-    if (!TTS || !text) return;
+  function speak(text, onEnd) {
+    if (!TTS || !text) { if (onEnd) onEnd(); return; }
     try {
       const u = new SpeechSynthesisUtterance(text);
       u.lang = LANG;
+      if (onEnd) { u.onend = onEnd; u.onerror = onEnd; }
       TTS.speak(u);
     } catch (_) { /* synthesis unavailable mid-session — stay silent */ }
   }
@@ -85,8 +87,7 @@
       for (const m of mutations) {
         m.addedNodes.forEach((node) => {
           if (node.nodeType !== 1) return;
-          if (!node.classList.contains("msg") || !node.classList.contains("ai")) return;
-          if (node.classList.contains("msg-thinking")) return;
+          if (!node.classList.contains("msg-row") || !node.classList.contains("ai")) return;   // finished answers only (not the live bubble)
           added.push(node);
         });
       }
@@ -113,11 +114,11 @@
     const btn = document.createElement("button");
     btn.id = "voiceMicBtn";
     btn.type = "button";
-    btn.className = "btn";
+    btn.className = "icon-btn ib-outline";
     btn.title = "Speak your question (tap again to stop)";
     btn.setAttribute("aria-label", "Speak your question (tap again to stop)");
     btn.setAttribute("aria-pressed", "false");
-    btn.textContent = "🎤";
+    btn.append(window.ui.icon("mic"));
 
     btn.addEventListener("click", () => {
       if (recognition) { stopRecognition(); return; } // tap again to stop
@@ -181,26 +182,15 @@
     return btn;
   }
 
-  /* ---------------- speaker toggle ---------------- */
-  function buildTtsBtn() {
-    const btn = document.createElement("button");
-    btn.id = "voiceTtsBtn";
-    btn.type = "button";
-    btn.className = "btn";
-    btn.title = "Read answers aloud";
-    btn.setAttribute("aria-label", "Read answers aloud");
-    btn.setAttribute("aria-pressed", "false");
-    btn.textContent = "🔊";
-
-    btn.addEventListener("click", () => {
-      ttsOn = !ttsOn;
-      btn.setAttribute("aria-pressed", String(ttsOn));
-      if (ttsOn) startObserver();
-      else { stopObserver(); stopSpeaking(); }
-    });
-
-    return btn;
-  }
+  /* ---------------- public API (used by the chat view) ---------------- */
+  // Per-message "Read aloud" buttons live in the message footer (chat.js); the composer has no speaker button.
+  // "Read replies aloud automatically" is a checkbox in the chat Options panel (default off).
+  window.Voice = {
+    supported: !!TTS,
+    stop: stopSpeaking,
+    speak: (text, onEnd) => { stopSpeaking(); speak(stripMarkdown(text), onEnd); },
+    setAuto: (on) => { ttsOn = !!on; if (ttsOn) startObserver(); else { stopObserver(); stopSpeaking(); } },
+  };
 
   /* ---------------- injection ---------------- */
   // Idempotent — guarded by element ids so repeated calls (poll ticks,
@@ -210,16 +200,11 @@
     if (!composer) return false;
     const sendBtn = composer.querySelector("#chatSend");
 
-    if (TTS && !document.getElementById("voiceTtsBtn")) {
-      const tts = buildTtsBtn();
-      if (sendBtn) composer.insertBefore(tts, sendBtn);
-      else composer.appendChild(tts);
-    }
     if (SR && !document.getElementById("voiceMicBtn")) {
       // Mic sits first: mic, speaker, then Send. Hidden entirely
       // (never created) when SpeechRecognition is unsupported.
       const mic = buildMicBtn(composer);
-      const anchor = document.getElementById("voiceTtsBtn") || sendBtn;
+      const anchor = sendBtn;
       if (anchor) composer.insertBefore(mic, anchor);
       else composer.appendChild(mic);
     }
@@ -230,19 +215,16 @@
   const isChat = () => /^#\/?chat$/.test(location.hash);
 
   function clearPoll() {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (pollTimer) { removeEventListener("sah:viewmounted", pollTimer); pollTimer = null; }
   }
 
-  // The chat view mounts asynchronously after the router fires, so wait
-  // briefly (up to ~5s) for #chatComposer to appear, then inject once.
+  // The chat view mounts asynchronously after the router fires. Instead of polling, wait for
+  // the router's "sah:viewmounted" event (dispatched after Views.chat.mount resolves).
   function schedulePoll() {
     clearPoll();
     if (inject()) return;
-    let tries = 0;
-    pollTimer = setInterval(() => {
-      tries += 1;
-      if (inject() || tries >= 40 || !isChat()) clearPoll();
-    }, 125);
+    pollTimer = () => { if (inject() || !isChat()) clearPoll(); };
+    addEventListener("sah:viewmounted", pollTimer);
   }
 
   function teardown() {

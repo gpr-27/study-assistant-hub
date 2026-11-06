@@ -1,37 +1,27 @@
-# --- Study Assistant Hub (Streamlit-free; FastAPI + vanilla-JS SPA; Groq LLM) ---
+# Study Assistant Hub -- RUNTIME dependencies for the Vercel Python function (api/index.py).
+# Keep this list minimal: every package here is unzipped into the function bundle and imported
+# on cold start. Dev/test tools (uvicorn, pytest) live in requirements-dev.txt.
+#
+# LLM calls   -> backend/llm_chain.py via raw HTTPS (httpx); no provider SDKs.
+# Retrieval   -> numpy vector store + Gemini embedding REST; no FAISS / langchain / tiktoken.
 # Web
 fastapi>=0.110,<1.0
-uvicorn[standard]>=0.27,<1.0
 python-multipart>=0.0.9
-# Production WSGI/ASGI process manager (used by the Docker image; dev uses run.py).
-gunicorn>=21,<24
-
-# Config / models
 pydantic>=2.6,<3.0
 python-dotenv>=1.0
+httpx>=0.27,<1.0
+sniffio>=1.3             # httpcore's async locks detect the event loop via sniffio; without it every new
+                              # AsyncLock re-stats sys.path on the event loop (~0.2 ms each, see LOADTEST.md)
+requests>=2.31            # only for backend/services/scannotes.py (drop when it moves to httpx)
 
-# Groq LLM (no OpenAI anywhere)
-groq>=0.11,<1.0
-
-# Retrieval (chat) — Groq chat model + hosted Google Gemini embeddings
-langchain>=0.2,<0.4
-langchain-groq>=0.1,<0.3
-langchain-community>=0.2,<0.4
-langchain-text-splitters>=0.2,<0.4
-faiss-cpu>=1.7.4
-requests>=2.31           # Gemini embeddings REST client (EMBEDDING_PROVIDER=gemini)
-tiktoken>=0.6
-# Optional: only needed for the legacy on-device embedder (EMBEDDING_PROVIDER=local).
-# Pulls in onnxruntime (~heavy) and the libomp that clashed with faiss; omit on the
-# free tier when using Gemini embeddings.
-# fastembed>=0.3
-
-# PDF + dates
+# Retrieval / documents / dates
+numpy>=1.26,<3.0
 pypdf>=4.0
 python-dateutil>=2.8
 
-# Persistence (optional history store) — MongoDB; [srv] pulls in dnspython for mongodb+srv URIs
-pymongo[srv]>=4.6,<5.0
+# Persistence (MongoDB Atlas; dnspython is required for mongodb+srv URIs)
+pymongo>=4.9,<5.0
+dnspython>=2.6
 
-# Auth (optional) — verify Clerk session JWTs for per-user history scoping
+# Auth -- verify Clerk session JWTs (RS256 needs `cryptography`, hence the [crypto] extra)
 pyjwt[crypto]>=2.8,<3.0

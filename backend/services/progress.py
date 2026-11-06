@@ -9,19 +9,43 @@ the summary is simply empty.
 """
 from __future__ import annotations
 
+import copy
+import threading
+import time
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 
-from backend import db
+from backend import cache, db
 
 # How many recent attempts feed the summary (matches db.list_items' default cap).
 _SUMMARY_LIMIT: int = 100
 # A topic needs at least this many attempts before it can be called "weak"
 # (one bad roll of the dice shouldn't brand a topic).
 _MIN_ATTEMPTS_FOR_WEAKNESS: int = 2
+# ... unless one graded sitting already asked this many questions on the topic (a mock exam covers several topics).
+_MIN_QUESTIONS_FOR_WEAKNESS: int = 3
+# Mastery weights recent attempts more: an attempt's weight halves every this many days.
+_HALF_LIFE_DAYS: float = 21.0
 _MAX_WEAKEST: int = 5
 
+_MAX_TOTAL: int = 10_000        # sane ceiling for one attempt's question/card count
+_MAX_LABEL: int = 200
 _VALID_TOOLS: tuple[str, ...] = ("quiz", "flashcards")
 _FALLBACK_LABEL: str = "General"
+
+
+# Per-instance summary cache, keyed by owner (an entry can only ever be returned to the owner whose
+# key it is). Dropped when this instance observes a write for that owner (db.epoch) and after a short
+# TTL, which bounds staleness when the write happened on another serverless instance.
+_CACHE_TTL_S: float = 20.0
+_CACHE_MAX: int = 512
+_cache: "OrderedDict[str, tuple[float, tuple, dict]]" = OrderedDict()
+_cache_lock = threading.Lock()
+
+
+def clear_cache() -> None:
+    with _cache_lock:
+        _cache.clear()
 
 
 class ProgressError(Exception):
@@ -32,7 +56,7 @@ def _clean(value: str | None) -> str | None:
     """Strip a free-text label; empty/whitespace-only becomes None."""
     if value is None:
         return None
-    value = str(value).strip()
+    value = str(value).strip()[:_MAX_LABEL]
     return value or None
 
 
@@ -54,10 +78,14 @@ def record_attempt(
     tool = (tool or "").strip().lower()
     if tool not in _VALID_TOOLS:
         raise ProgressError(f"Unknown tool {tool!r}; expected one of {', '.join(_VALID_TOOLS)}.")
-    total = int(total)
+    try:
+        total, correct = int(total), int(correct)
+    except (TypeError, ValueError) as exc:
+        raise ProgressError("`correct` and `total` must be integers.") from exc
     if total < 1:
         raise ProgressError("`total` must be at least 1.")
-    correct = max(0, min(int(correct), total))
+    total = min(total, _MAX_TOTAL)
+    correct = max(0, min(correct, total))
     subject = _clean(subject)
     topic = _clean(topic)
     label = subject or topic or _FALLBACK_LABEL
@@ -125,16 +153,18 @@ _ACTIVITY_TOOLS: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def _tool_activity(owner: str) -> list[dict]:
+def _activity_rows(owner: str, recent: dict) -> list[dict]:
     """Per-tool activity for the whole app: counts plus a performance metric
     where one exists (exam average score, teach-back average understanding).
 
     Pure aggregation over history summaries — no LLM. Tools with zero items
-    are included (count 0) so the dashboard shows the full app surface.
+    are included (count 0) so the dashboard shows the full app surface. ``recent`` is the
+    result of the single ``db.multi_recent`` round trip made by :func:`build_summary`.
     """
     activity = []
     for kind, label, route in _ACTIVITY_TOOLS:
-        items = db.list_items(kind, owner, limit=100)
+        slot = recent.get(kind) or {"n": 0, "rows": []}
+        items = slot["rows"]
         metric = None
         if kind == "exams":
             scores = [
@@ -157,7 +187,7 @@ def _tool_activity(owner: str) -> list[dict]:
                 metric = f"avg {round(sum(scores) / len(scores), 1)}/10"
         activity.append({
             "tool": kind, "label": label, "route": route,
-            "count": len(items), "metric": metric,
+            "count": slot["n"], "metric": metric,
         })
     return activity
 
@@ -174,42 +204,131 @@ def build_summary(owner: str) -> dict:
       }
     Accuracy values are fractions in [0, 1] (the SPA renders percentages).
     """
-    items = db.list_items("attempts", owner, limit=_SUMMARY_LIMIT)
+    ep = db.epoch(owner)
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(owner)
+        if hit and hit[0] > now and hit[1] == ep:
+            _cache.move_to_end(owner)
+            return copy.deepcopy(hit[2])
+    # Concurrent identical misses (a dashboard polled by many tabs) compute once; the rest read the L1 entry.
+    with cache.single_flight(("progress", owner)):
+        with _cache_lock:
+            hit = _cache.get(owner)
+            if hit and hit[0] > time.monotonic() and hit[1] == ep:
+                return copy.deepcopy(hit[2])
+        payload, l2_ep = cache.l2_get("progress", owner)      # shared across instances (epoch-validated)
+        if not isinstance(payload, dict):
+            payload = _compute_summary(owner)
+            cache.l2_put("progress", owner, "", payload, l2_ep, 120.0)
+        with _cache_lock:
+            _cache[owner] = (now + _CACHE_TTL_S, ep, payload)
+            _cache.move_to_end(owner)
+            while len(_cache) > _CACHE_MAX:
+                _cache.popitem(last=False)
+    return copy.deepcopy(payload)
 
+
+def _entries(item: dict) -> list[tuple[str | None, str | None, float, float, int]]:
+    """``[(subject, topic, earned, possible, questions)]`` for one stored attempt / exam row.
+
+    Unified rows (``backend.services.attempts``) carry per-topic ``topics`` (exams: ``topic_breakdown``) so ONE
+    exam feeds several topic cells. Legacy rows (``/api/progress/record``) are one ``correct/total`` cell.
+    Rows flagged ``verified: false`` (answer key could not be verified) are skipped; a missing flag = legacy = trusted.
+    """
+    if item.get("verified") is False:
+        return []
+    subject = _clean(item.get("subject"))
+    raw = item.get("topics") if isinstance(item.get("topics"), list) else item.get("topic_breakdown")
+    out = []
+    if isinstance(raw, list) and raw:
+        for t in raw:
+            if not isinstance(t, dict):
+                continue
+            try:
+                earned, possible = float(t.get("earned")), float(t.get("possible"))
+            except (TypeError, ValueError):
+                continue
+            if possible <= 0:
+                continue
+            q = t.get("questions")
+            out.append((subject, _clean(t.get("topic")), max(0.0, min(earned, possible)), possible,
+                        int(q) if isinstance(q, (int, float)) and q >= 1 else 1))
+        if out:
+            return out
+    try:
+        correct, total = float(item.get("correct", 0)), float(item.get("total", 0))
+    except (TypeError, ValueError):
+        return []
+    if total < 1 or (item.get("topics") is None and item.get("topic_breakdown") is None and "correct" not in item):
+        return []
+    return [(subject, _clean(item.get("topic")), max(0.0, min(correct, total)), total, 1)]
+
+
+def _recency(when: datetime | None, now: datetime) -> float:
+    """Weight in (0, 1]: an attempt loses half its weight every ``_HALF_LIFE_DAYS`` days."""
+    if when is None:
+        return 0.5
+    age = max(0.0, (now - when).total_seconds() / 86400.0)
+    return 0.5 ** (age / _HALF_LIFE_DAYS)
+
+
+def _compute_summary(owner: str) -> dict:
+    # ONE MongoDB round trip for attempts + every tool's activity (was 12 separate reads), and none at all
+    # when the owner snapshot (db.warm_owner, shared with the history lists) is already in memory.
+    try:
+        db.warm_owner(owner)
+    except Exception:  # noqa: BLE001 - the explicit query below is the fallback
+        pass
+    specs = [("attempts", _SUMMARY_LIMIT, ["subject", "topic", "correct", "total", "created_at", "topics", "verified"])]
+    for kind, _l, _r in _ACTIVITY_TOOLS:
+        if kind == "exams":
+            specs.append((kind, 100, ["total_score", "max_score", "topics", "topic_breakdown", "subject", "verified", "created_at"]))
+        elif kind == "teachbacks":
+            specs.append((kind, 100, ["evaluation.understanding_score_0_to_10"]))
+        else:
+            specs.append((kind, 100, None))
+    recent = db.multi_recent(owner, specs)
+    items = list(recent["attempts"]["rows"])
+    # Mock exams are graded attempts too: their per-topic marks feed the same mastery cells.
+    items += [r for r in (recent.get("exams") or {}).get("rows", []) if isinstance(r.get("topics"), list) or isinstance(r.get("topic_breakdown"), list)]
+    activity_rows = _activity_rows(owner, recent)
+
+    now = datetime.now(timezone.utc)
     total_attempts = 0
-    sum_correct = 0
-    sum_total = 0
+    sum_correct = 0.0
+    sum_total = 0.0
     dates: set = set()
-    # (subject, topic) -> {"attempts", "correct", "total", "last_seen": datetime}
+    # (subject, topic) -> raw + recency-weighted marks, attempts and question counts
     cells: dict[tuple[str, str], dict] = {}
 
     for item in items:
-        try:
-            correct = int(item.get("correct", 0))
-            total = int(item.get("total", 0))
-        except (TypeError, ValueError):
+        entries = _entries(item)
+        if not entries:
             continue
-        if total < 1:
-            continue
-        correct = max(0, min(correct, total))
-        total_attempts += 1
-        sum_correct += correct
-        sum_total += total
-
         when = _parse_dt(item.get("created_at"))
+        weight = _recency(when, now)
+        total_attempts += 1
         if when is not None:
             dates.add(when.astimezone(timezone.utc).date())
+        for subject, topic, earned, possible, questions in entries:
+            sum_correct += earned
+            sum_total += possible
+            cell = cells.setdefault(
+                (subject or _FALLBACK_LABEL, topic or _FALLBACK_LABEL),
+                {"attempts": 0, "correct": 0.0, "total": 0.0, "wc": 0.0, "wt": 0.0, "questions": 0, "last_seen": None},
+            )
+            cell["attempts"] += 1
+            cell["correct"] += earned
+            cell["total"] += possible
+            cell["wc"] += weight * earned
+            cell["wt"] += weight * possible
+            cell["questions"] += questions
+            if when is not None and (cell["last_seen"] is None or when > cell["last_seen"]):
+                cell["last_seen"] = when
 
-        subject = _clean(item.get("subject")) or _FALLBACK_LABEL
-        topic = _clean(item.get("topic")) or _FALLBACK_LABEL
-        cell = cells.setdefault(
-            (subject, topic), {"attempts": 0, "correct": 0, "total": 0, "last_seen": None}
-        )
-        cell["attempts"] += 1
-        cell["correct"] += correct
-        cell["total"] += total
-        if when is not None and (cell["last_seen"] is None or when > cell["last_seen"]):
-            cell["last_seen"] = when
+    def mastery(cell: dict) -> float:
+        return cell["wc"] / cell["wt"] if cell["wt"] else 0.0
 
     # Per-subject groups with per-topic cells.
     by_subject: dict[str, list[dict]] = {}
@@ -219,6 +338,8 @@ def build_summary(owner: str) -> dict:
             "topic": topic,
             "attempts": cell["attempts"],
             "accuracy": round(accuracy, 4),
+            "mastery": round(mastery(cell), 4),
+            "questions": cell["questions"],
             "last_seen": cell["last_seen"].isoformat() if cell["last_seen"] else None,
         })
 
@@ -238,11 +359,12 @@ def build_summary(owner: str) -> dict:
         (
             {"subject": subject, "topic": topic,
              "attempts": cell["attempts"],
-             "accuracy": round(cell["correct"] / cell["total"], 4) if cell["total"] else 0.0}
+             "accuracy": round(cell["correct"] / cell["total"], 4) if cell["total"] else 0.0,
+             "mastery": round(mastery(cell), 4)}
             for (subject, topic), cell in cells.items()
-            if cell["attempts"] >= _MIN_ATTEMPTS_FOR_WEAKNESS
+            if cell["attempts"] >= _MIN_ATTEMPTS_FOR_WEAKNESS or cell["questions"] >= _MIN_QUESTIONS_FOR_WEAKNESS
         ),
-        key=lambda w: (w["accuracy"], -w["attempts"]),
+        key=lambda w: (w["mastery"], -w["attempts"]),
     )[:_MAX_WEAKEST]
 
     return {
@@ -253,5 +375,5 @@ def build_summary(owner: str) -> dict:
         },
         "subjects": subjects,
         "weakest": weakest,
-        "activity": _tool_activity(owner),
+        "activity": activity_rows,
     }

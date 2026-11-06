@@ -12,6 +12,7 @@
   const { el, clear, esc, spinner, empty, toast } = window.ui;
 
   const MAX_FILES = 5;
+  const MAX_TOTAL_BYTES = 4 * 1000 * 1000;   // Vercel rejects request bodies above ~4.5 MB
   const LIKELIHOOD_ORDER = ["high", "medium", "low"];
   const LIKELIHOOD_LABEL = { high: "High likelihood", medium: "Medium likelihood", low: "Low likelihood" };
 
@@ -31,11 +32,11 @@
     for (const p of patterns) {
       const row = el(`
         <div class="panel-soft stack-sm">
-          <div class="row row-wrap between" style="gap:.5rem">
-            <strong style="font-family:var(--font-display)">${esc(p.topic)}</strong>
-            ${p.trend ? `<span class="badge badge-accent">${esc(p.trend)}</span>` : ""}
+          <div class="row row-wrap between" style="gap:.5rem;align-items:flex-start">
+            <strong style="font-family:var(--font-display);min-width:0;overflow-wrap:anywhere">${esc(p.topic)}</strong>
+            ${p.trend ? `<span class="badge badge-accent" style="flex:none">${esc(p.trend)}</span>` : ""}
           </div>
-          ${p.frequency_note ? `<p class="muted" style="font-size:.88rem">${esc(p.frequency_note)}</p>` : ""}
+          ${p.frequency_note ? `<p class="muted" style="font-size:.88rem;overflow-wrap:anywhere">${esc(p.frequency_note)}</p>` : ""}
         </div>`);
       wrap.append(row);
     }
@@ -58,13 +59,13 @@
         const card = el(`
           <div class="panel-soft stack-sm">
             <div class="row row-wrap between" style="gap:.5rem;align-items:flex-start">
-              <p style="flex:1;min-width:200px;font-weight:600">${esc(q.question)}</p>
+              <p style="flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere;margin:0">${esc(q.question)}</p>
               ${likelihoodBadge(level)}
             </div>
             ${q.topic ? `<div class="row row-wrap" style="gap:.35rem"><span class="badge">${esc(q.topic)}</span></div>` : ""}
           </div>`);
         if (q.reasoning) {
-          const toggle = el(`<button class="btn-ghost" type="button" aria-expanded="false" style="align-self:flex-start;padding:.3rem .6rem;font-size:.82rem">Why? ▸</button>`);
+          const toggle = el(`<button class="btn-ghost" type="button" aria-expanded="false" style="align-self:flex-start;padding:.3rem .6rem;font-size:var(--fs-sm)">Why? ▸</button>`);
           const reasonBox = el(`<div class="hint" hidden style="margin:0">${esc(q.reasoning)}</div>`);
           toggle.addEventListener("click", () => {
             const open = reasonBox.hidden;
@@ -84,6 +85,8 @@
   function renderResults(data, heading) {
     const wrap = el(`<div class="stack"></div>`);
     if (heading) wrap.append(el(`<div class="section-head" style="margin:0"><h3>${esc(heading)}</h3></div>`));
+    // "Model: …" at the top of the results (a heading means it was reopened from history -> stored label).
+    { const l = window.ui.renderModelLabel(data && data.llm, { stored: !!heading }); if (l) wrap.append(l); }
     wrap.append(renderPatterns(data.patterns || []));
     wrap.append(renderPredictions(data.predicted_questions || []));
     wrap.append(el(`<p class="hint">Predictions are pattern-based guidance from past papers — not a guarantee of what will appear. Study the whole syllabus.</p>`));
@@ -102,18 +105,18 @@
         <div class="layout-aside">
           <aside class="panel stack" id="pr-controls">
             <div class="between" style="align-items:center;gap:.4rem">
-              <span style="font-family:var(--font-display);font-weight:700;font-size:1.05rem;letter-spacing:-.01em;color:hsl(var(--ink))">Predictor</span>
-              <button id="pr-hist" class="btn" type="button" style="padding:.4rem .7rem;font-size:.82rem">≡ History</button>
+              <span style="font-family:var(--font-display);font-weight:700;font-size:1.05rem;letter-spacing:-.01em;color:hsl(var(--ink));min-width:0">Predictor</span>
+              <button id="pr-hist" class="icon-btn ib-outline" type="button" aria-label="Open prediction history" title="Open prediction history">${window.ui.iconHtml("history")}</button>
             </div>
 
             <div class="field" style="margin:0">
-              <span class="label">Past papers</span>
-              <div class="row row-wrap">
-                <label class="btn" for="pr-files" style="cursor:pointer">Choose PDF(s)…</label>
-                <span class="muted" id="pr-files-name">No files selected</span>
+              <label class="label" for="pr-files">Past papers</label>
+              <div class="row row-wrap" style="align-items:center">
+                <label class="btn" for="pr-files" style="cursor:pointer;flex:none">Choose PDF(s)…</label>
+                <span class="muted" id="pr-files-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">No files selected</span>
               </div>
-              <input id="pr-files" type="file" accept="application/pdf" multiple hidden />
-              <p class="hint">Upload 1–${MAX_FILES} past exam papers (PDF). More papers give better pattern detection.</p>
+              <input id="pr-files" type="file" accept="application/pdf" multiple hidden aria-label="Upload past paper PDFs" />
+              <p class="hint">Upload 1–${MAX_FILES} past exam papers (PDF, up to 4 MB in total). More papers give better pattern detection.</p>
             </div>
 
             <div class="field" style="margin:0">
@@ -166,9 +169,22 @@
           toast(`Using only the first ${MAX_FILES} PDFs.`, "info");
           pdfFiles = pdfFiles.slice(0, MAX_FILES);
         }
-        filesName.textContent = pdfFiles.length
+        let total = 0;
+        const fit = [];
+        for (const f of pdfFiles) {
+          if (total + f.size > MAX_TOTAL_BYTES) {
+            toast(`${f.name} (${(f.size / 1e6).toFixed(1)} MB) was left out: past papers can be up to 4 MB in total per analysis.`, "error");
+            continue;
+          }
+          total += f.size;
+          fit.push(f);
+        }
+        pdfFiles = fit;
+        const label = pdfFiles.length
           ? (pdfFiles.length === 1 ? pdfFiles[0].name : `${pdfFiles.length} files`)
           : "No files selected";
+        filesName.textContent = label;
+        filesName.title = pdfFiles.length === 1 ? pdfFiles[0].name : (pdfFiles.map((f) => f.name).join(", ") || "");
       });
 
       const setBusy = (on) => {
@@ -197,7 +213,7 @@
           const hp = document.querySelector('.history-panel[data-kind="predictions"]');
           if (hp && hp.refresh) hp.refresh();
         } catch (e) {
-          showResults(empty("Couldn’t analyze the papers.", "⚠"));
+          showResults(window.ui.errorBlock(e, e.retryable ? () => analyzeBtn.click() : null));
           toast("Analysis failed: " + e.message, "error");
         } finally {
           setBusy(false);

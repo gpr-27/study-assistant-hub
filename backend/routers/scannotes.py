@@ -1,29 +1,33 @@
 """Scan Handwritten Notes router — photos in, clean Markdown out.
 
 POST /api/scannotes/extract takes 1–6 photos (multipart field ``images``),
-runs each through Gemini vision OCR (see services/scannotes.py), joins the
+runs each through the provider chain's vision models (see services/scannotes.py), joins the
 per-image transcriptions with "## Page N" headers, and saves the result to the
 user's "scans" history (markdown + page count only — never the images).
 
-Error mapping: missing GEMINI_API_KEY → 503; HEIC / unsupported type / too
-large / too many → 422 with a friendly message; Gemini failures → 502.
+Error mapping: no provider key / no vision support, or every provider failing → 503 (with the
+"no model" llm label); HEIC / unsupported type / too large / too many → 422 with a friendly
+message; unusable model output → 502.
 """
+import asyncio
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from backend import db
+from backend import config, db
 from backend.auth import current_owner
 from backend.services.scannotes import (
-    MissingGeminiKeyError,
     ScanNotesError,
-    require_gemini_key,
-    transcribe_images,
+    ScanUnavailableError,
+    require_vision,
+    transcribe_pages,
 )
 
 router = APIRouter(prefix="/api/scannotes", tags=["scannotes"])
 
 _MAX_IMAGES = 6
 _MAX_BYTES = 8 * 1024 * 1024  # ~8 MB per photo
+_MAX_TOTAL_BYTES = config.MAX_BODY_BYTES   # ~4.4 MB: Vercel rejects bigger bodies with a non-JSON error
 _ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp"}
 _HEIC_MIME = {"image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"}
 _HEIC_EXT = (".heic", ".heif")
@@ -43,6 +47,9 @@ class ScanResponse(BaseModel):
     pages: int
     id: str | None = None  # None when persistence is off — tolerated everywhere
     title: str
+    llm: dict | None = None  # model that transcribed (llm_chain ChatResult.to_public())
+    failed_pages: list[int] = []  # 1-based pages that could not be transcribed (marked in the text)
+    partial: bool = False
 
 
 def _resolve_mime(upload: UploadFile) -> str:
@@ -80,14 +87,15 @@ async def extract_notes(
         )
     # Fail fast with a clear 503 before reading any bytes (mirrors require_groq_key).
     try:
-        require_gemini_key()
-    except MissingGeminiKeyError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        require_vision()
+    except ScanUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers=None) from exc
 
     pages: list[tuple[bytes, str]] = []
+    total = 0
     for upload in images:
         mime = _resolve_mime(upload)
-        blob = await upload.read()
+        blob = await upload.read(_MAX_BYTES + 1)
         if not blob:
             raise HTTPException(
                 status_code=422, detail=f"{upload.filename or 'photo'!r} is empty."
@@ -98,20 +106,26 @@ async def extract_notes(
                 detail=f"{upload.filename or 'photo'!r} is larger than 8 MB — "
                        "resize or recompress it and try again.",
             )
+        total += len(blob)
+        if total > _MAX_TOTAL_BYTES:
+            raise HTTPException(status_code=413, detail="The photos together are too large (about 4 MB max per request) — scan fewer pages at once.")
         pages.append((blob, mime))
 
     try:
-        markdown = transcribe_images(pages)
-    except MissingGeminiKeyError as exc:
+        outcome = await transcribe_pages(pages)
+    except ScanUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ScanNotesError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    markdown, llm_public = outcome.markdown, outcome.llm
 
-    title = f"Scan · {images[0].filename or 'photo'}"
+    title = f"Scan · {(images[0].filename or 'photo')[:120]}"
     # Markdown + page count only — the images themselves are never persisted.
-    saved_id = db.save("scans", owner, {
+    saved_id = await asyncio.to_thread(db.save, "scans", owner, {
         "title": title,
         "markdown": markdown,
         "pages": len(pages),
+        "llm": llm_public,
     })
-    return ScanResponse(markdown=markdown, pages=len(pages), id=saved_id, title=title)
+    return ScanResponse(markdown=markdown, pages=len(pages), id=saved_id, title=title, llm=llm_public,
+                        failed_pages=outcome.failed_pages, partial=outcome.partial)

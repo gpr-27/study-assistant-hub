@@ -7,7 +7,7 @@
    ============================================================ */
 (() => {
   "use strict";
-  const { el, esc, clear, toast, md, spinner } = window.ui;
+  const { el, esc, clear, toast, md, spinner, empty } = window.ui;
 
   let session = null;        // { id, concept }
   let source = "topic";      // "topic" | "subject" | "upload"
@@ -23,13 +23,25 @@
       const rect = shell.getBoundingClientRect();
       const offsetTop = rect.top + (window.scrollY || window.pageYOffset || 0);
       const viewportH = vp ? vp.height : window.innerHeight;
-      shell.style.height = Math.max(320, viewportH - offsetTop - 12) + "px";
+      // Leave the page shell's own bottom padding free so the page itself never scrolls
+      // (otherwise a second, page-level scrollbar appears next to the thread's).
+      const host = shell.closest(".shell");
+      const padB = host ? (parseFloat(getComputedStyle(host).paddingBottom) || 0) : 0;
+      shell.style.height = Math.max(320, viewportH - offsetTop - Math.max(12, padB)) + "px";
     };
     requestAnimationFrame(fit);
     window.addEventListener("resize", fit);
     window.addEventListener("orientationchange", fit);
     if (vp) vp.addEventListener("resize", fit);
+    // Re-measure when the chrome above the shell changes height after mount (guest banner etc.).
+    let ro = null;
+    if (typeof ResizeObserver === "function") {
+      let raf = 0;
+      ro = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(fit); });
+      ro.observe(document.body);
+    }
     teardownLayout = () => {
+      if (ro) ro.disconnect();
       window.removeEventListener("resize", fit);
       window.removeEventListener("orientationchange", fit);
       if (vp) vp.removeEventListener("resize", fit);
@@ -44,15 +56,16 @@
     if (source === "topic") {
       host.append(el(`
         <input id="tbTopic" class="input" type="text"
-          placeholder="e.g. TCP congestion control" autocomplete="off" style="max-width:280px" />`));
+          placeholder="e.g. TCP congestion control" autocomplete="off"
+          aria-label="Topic to teach back" style="max-width:280px;min-width:0;flex:1" />`));
       return;
     }
     if (source === "upload") {
       const wrap = el(`
-        <div class="row" style="gap:.5rem;align-items:center;flex-wrap:wrap">
-          <label class="btn" for="tbFile" style="cursor:pointer">Choose PDF…</label>
-          <span class="muted" id="tbFileName">No file selected</span>
-          <input id="tbFile" type="file" accept="application/pdf" hidden />
+        <div class="row" style="gap:.5rem;align-items:center;flex-wrap:wrap;min-width:0;flex:1">
+          <label class="btn" for="tbFile" style="cursor:pointer;flex:none">Choose PDF…</label>
+          <span class="muted" id="tbFileName" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">No file selected</span>
+          <input id="tbFile" type="file" accept="application/pdf" hidden aria-label="Upload PDF for teach-back" />
         </div>`);
       host.append(wrap);
       const input = wrap.querySelector("#tbFile");
@@ -60,11 +73,12 @@
       input.addEventListener("change", () => {
         pdfFile = input.files && input.files[0] ? input.files[0] : null;
         nameSlot.textContent = pdfFile ? pdfFile.name : "No file selected";
+        nameSlot.title = pdfFile ? pdfFile.name : "";
       });
       return;
     }
-    host.append(el(`<select id="tbSubject" class="select" style="max-width:200px"><option value="">Loading…</option></select>`));
-    host.append(el(`<select id="tbPdf" class="select" style="max-width:220px" disabled><option value="">Pick a subject first</option></select>`));
+    host.append(el(`<select id="tbSubject" class="select" aria-label="Subject" style="max-width:200px;min-width:0"><option value="">Loading…</option></select>`));
+    host.append(el(`<select id="tbPdf" class="select" aria-label="Document" style="max-width:220px;min-width:0" disabled><option value="">Pick a subject first</option></select>`));
     const subjectSel = host.querySelector("#tbSubject");
     const pdfSel = host.querySelector("#tbPdf");
 
@@ -101,7 +115,7 @@
   }
 
   // ── Messages ───────────────────────────────────────────────
-  function appendMessage(thread, role, content) {
+  function appendMessage(thread, role, content, llm, stored) {
     if (role === "user") {
       const me = el(`<div class="msg me"></div>`);
       me.textContent = content;
@@ -109,6 +123,7 @@
     } else {
       const ai = el(`<div class="msg ai"></div>`);
       ai.append(md(content));
+      { const l = window.ui.renderModelLabel(llm, { stored: !!stored }); if (l) ai.append(l); }   // "Model: …"
       thread.append(ai);
     }
     thread.scrollTop = thread.scrollHeight;
@@ -126,7 +141,12 @@
     if (!items || !items.length) return null;
     const block = el(`<div class="stack-sm"><span class="label">${esc(title)}</span></div>`);
     const ul = el(`<ul style="margin:0;padding-left:1.2rem"></ul>`);
-    items.forEach((s) => { const li = document.createElement("li"); li.textContent = s; ul.append(li); });
+    items.forEach((s) => {
+      const li = document.createElement("li");
+      li.textContent = s;
+      li.style.overflowWrap = "anywhere";
+      ul.append(li);
+    });
     block.append(ul);
     return block;
   }
@@ -195,7 +215,7 @@
     const thread = document.getElementById("tbThread");
     if (thread) {
       clear(thread);
-      thread.append(el(`<div class="empty"><div class="big">🗣</div><div>Pick a topic, a subject PDF, or upload a PDF, then teach the concept back in your own words.</div></div>`));
+      thread.append(empty("Pick a topic, a subject PDF, or upload a PDF, then teach the concept back in your own words.", "🗣"));
     }
   }
 
@@ -234,14 +254,14 @@
       const resp = await request();
       session = { id: resp.session_id, concept: resp.concept };
       clear(thread);
-      appendMessage(thread, "assistant", resp.opening);
+      appendMessage(thread, "assistant", resp.opening, resp.llm);
       setBadge("Teach-back · " + resp.concept);
       setComposer(true);
       setSetup(false);
       document.querySelector("#tbComposer .input")?.focus();
     } catch (e) {
       clear(thread);
-      thread.append(el(`<div class="empty"><div class="big">⚠</div><div>${esc(e.message || "Couldn’t start the session.")}</div></div>`));
+      thread.append(window.ui.errorBlock(e, e.retryable ? () => startBtn.click() : null));
       toast(e.message, "error");
     } finally {
       startBtn.disabled = false;
@@ -266,9 +286,9 @@
     try {
       const resp = await window.api.post("/teachback/message", { session_id: session.id, message: text });
       thinking.remove();
-      appendMessage(thread, "assistant", resp.reply);
+      appendMessage(thread, "assistant", resp.reply, resp.llm);
       if (resp.done && resp.evaluation) {
-        thread.append(evaluationCard(resp.evaluation));
+        thread.append(evaluationCard(resp.evaluation));     // the tutor message just above carries this evaluation's model label
         thread.scrollTop = thread.scrollHeight;
         session = null;
         const hp = document.querySelector('.history-panel[data-kind="teachbacks"]');
@@ -281,6 +301,7 @@
       thinking.remove();
       const errMsg = el(`<div class="msg ai"></div>`);
       errMsg.textContent = "⚠ " + e.message;
+      { const l = window.ui.renderModelLabel(e.llm); if (l) errMsg.append(l); }
       thread.append(errMsg);
       toast(e.message, "error");
       if (e.status === 403 || e.status === 404) { session = null; setSetup(true); }
@@ -297,8 +318,16 @@
     setSetup(false);
     setBadge(saved.title || "Teach-back");
     clear(thread);
-    (saved.messages || []).forEach((m) => appendMessage(thread, m.role, m.content || ""));
-    if (saved.evaluation) thread.append(evaluationCard(saved.evaluation, { readonly: true }));
+    const msgs = saved.messages || [];
+    // Transcripts saved after per-turn tracking carry a label on every tutor message; older ones only
+    // have the session-level `llm` (the model that wrote the final evaluation), shown once below.
+    const perTurn = msgs.some((m) => m.role === "assistant" && m.llm);
+    msgs.forEach((m) => appendMessage(thread, m.role, m.content || "", m.llm, perTurn));
+    if (!perTurn) { const l = window.ui.renderModelLabel(saved.llm, { stored: true }); if (l) thread.append(l); }
+    if (saved.evaluation) {
+      const card = evaluationCard(saved.evaluation, { readonly: true });
+      thread.append(card);
+    }
     const again = el(`<button class="btn btn-block" type="button" style="align-self:stretch">Start another</button>`);
     again.addEventListener("click", resetView);
     thread.append(again);
@@ -316,35 +345,33 @@
         <div class="chat-shell stack">
 
           <div class="chat-minibar panel">
-            <button id="tbOptionsBtn" class="btn" type="button" aria-expanded="true" aria-controls="tbSetup" title="Show or hide setup" style="padding:.42rem .8rem;font-size:.85rem">⚙ Options</button>
+            <button id="tbOptionsBtn" class="btn tb-btn" type="button" aria-expanded="true" aria-controls="tbSetup" title="Show or hide setup" aria-label="Setup options">${window.ui.iconHtml("options")}</button>
             <span id="tbBadge"></span>
             <span style="flex:1"></span>
-            <button id="tbHistBtn" class="btn" type="button" title="Past teach-backs" style="padding:.42rem .8rem;font-size:.85rem">≡ History</button>
-            <button id="tbNewBtn" class="btn-accent" type="button" style="padding:.42rem .85rem;font-size:.85rem">+ New</button>
+            <button id="tbHistBtn" class="btn tb-btn" type="button" title="Past teach-backs" aria-label="Open teach-back history">${window.ui.iconHtml("history")}</button>
+            <button id="tbNewBtn" class="btn-accent tb-btn" type="button" aria-label="Start a new teach-back" title="Start a new teach-back">${window.ui.iconHtml("plus")}<span class="tb-text">New</span></button>
           </div>
 
           <div id="tbSetup" class="chat-src-bar panel">
             <div class="row" style="gap:.75rem;flex-wrap:wrap;align-items:center">
-              <div class="seg" role="tablist" id="tbSrcSeg" aria-label="Teach-back source">
+              <div class="seg" role="tablist" id="tbSrcSeg" aria-label="Teach-back source" style="flex-wrap:wrap">
                 <button type="button" data-src="topic" aria-pressed="true">Topic</button>
                 <button type="button" data-src="subject" aria-pressed="false">Subject</button>
                 <button type="button" data-src="upload" aria-pressed="false">Upload PDF</button>
               </div>
-              <div id="tbSrcRow" class="row" style="flex:1;gap:.6rem;flex-wrap:wrap"></div>
+              <div id="tbSrcRow" class="row chat-src-row" style="gap:.6rem;flex-wrap:wrap;min-width:0"></div>
               <div id="tbModelCtl"></div>
               <button id="tbStart" class="btn-accent" type="button">Start</button>
             </div>
             <p class="hint" style="margin:.5rem 0 0">The tutor picks a concept — you explain it in your own words. It only asks questions; say “done” (or hit Evaluate me now) for your score.</p>
           </div>
 
-          <div class="panel" style="flex:1;display:flex;flex-direction:column;padding:0;overflow:hidden">
-            <div class="thread" id="tbThread">
-              <div class="empty"><div class="big">🗣</div><div>Pick a topic, a subject PDF, or upload a PDF, then teach the concept back in your own words.</div></div>
-            </div>
+          <div class="panel" style="flex:1;display:flex;flex-direction:column;padding:0;overflow:hidden;min-height:0">
+            <div class="thread" id="tbThread" aria-live="polite"></div>
             <div class="composer" id="tbComposer">
               <input class="input" type="text" placeholder="Explain it in your own words…" aria-label="Your explanation" disabled />
               <button id="tbEval" class="btn" type="button" disabled title="Finish and get your evaluation">Evaluate me now</button>
-              <button id="tbSend" class="btn-accent" type="button" disabled>Send</button>
+              <button id="tbSend" class="btn-accent icon-btn has-text send-btn" type="button" disabled aria-label="Send" title="Send">${window.ui.iconHtml("send")}<span class="icon-btn-text">Send</span></button>
             </div>
           </div>
 
@@ -352,6 +379,9 @@
 
       installShellSizing(root.querySelector(".chat-shell"));
       document.getElementById("tbModelCtl").append(window.ui.modelSelect());
+      document.getElementById("tbThread").append(
+        empty("Pick a topic, a subject PDF, or upload a PDF, then teach the concept back in your own words.", "🗣")
+      );
 
       const seg = document.getElementById("tbSrcSeg");
       const srcRow = document.getElementById("tbSrcRow");
@@ -382,6 +412,8 @@
       composer.querySelector(".input").addEventListener("keydown", (e) => {
         if (e.key === "Enter") { e.preventDefault(); send(); }
       });
+      const _art = window.ui.takeArtifact(["teachbacks"]);   // Library deep-link
+      if (_art) window.api.get(`/history/${_art.kind}/${encodeURIComponent(_art.id)}`).then(openSaved).catch(() => {});
     },
 
     unmount() {

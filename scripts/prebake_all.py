@@ -1,79 +1,19 @@
 #!/usr/bin/env python3
-"""Pre-bake FAISS indexes for all bundled subjects.
+"""Pre-bake the retrieval indexes for every bundled subject.
 
-Run once locally (needs GEMINI_API_KEY in .env for hosted embeddings):
+Thin wrapper kept for muscle memory — the real implementation is ``scripts/build_index.py``
+(numpy vectors + chunks written to ``data/index/<subject>/``; no FAISS, no langchain).
 
-    python scripts/prebake_all.py
+    python scripts/prebake_all.py          # == python scripts/build_index.py
 
-Each subject's PDFs are embedded and indexed into faiss_index/<subject>/, which is
-committed and baked into the Docker image. At runtime the content-hash manifest
-matches, so the index is merely LOADED — no re-embedding, no Gemini call, no key
-needed on the server for bundled subjects.
-
-After running:
-    git add faiss_index/
-    git commit -m 'chore: pre-bake FAISS indexes'
-    git push    # Render auto-deploys
-
-New subjects added via the UI go through the same pipeline automatically on upload.
+Then commit ``data/index/`` so the deployment ships the indexes read-only.
 """
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from dotenv import load_dotenv
-load_dotenv(ROOT / ".env")
-
-from backend.config import validate_config
-from backend.documents import list_subjects
-from backend.vector_store import build_subject_fallback_index, build_subject_index
-
-
-def main() -> None:
-    validate_config()
-    subjects = list_subjects()
-
-    print("=" * 60)
-    print(" Pre-baking FAISS indexes (primary + fallback model)")
-    print(f" Subjects: {', '.join(subjects)}")
-    print("=" * 60)
-    print()
-
-    ok = err = 0
-    for subject in subjects:
-        try:
-            chunks = build_subject_index(subject)
-            ok += 1
-            print(f"  ✓  {subject}  →  {chunks} chunks indexed (primary)")
-        except Exception as exc:
-            err += 1
-            print(f"  ✗  {subject}  →  {exc}")
-
-    # Fallback-model indexes (quota resilience: per-model quota buckets — when
-    # the primary embedding model's quota is spent, retrieval switches to these).
-    print()
-    for subject in subjects:
-        try:
-            chunks = build_subject_fallback_index(subject)
-            ok += 1
-            print(f"  ✓  {subject}  →  {chunks} chunks indexed (fallback model)")
-        except Exception as exc:
-            err += 1
-            print(f"  ✗  {subject} (fallback)  →  {exc}")
-
-    print()
-    print("=" * 60)
-    print(f"  FAISS indexes: {ok} built, {err} failed")
-    print("=" * 60)
-
-    if ok:
-        print("\nNext steps:")
-        print("  git add faiss_index/")
-        print("  git commit -m 'chore: pre-bake FAISS indexes'")
-        print("  git push")
-
+from build_index import main  # noqa: E402
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main(sys.argv[1:]))

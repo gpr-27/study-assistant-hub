@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"  # matches .python-version / the Vercel runtime
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
@@ -25,6 +25,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+
+      - name: Build static frontend (what Vercel runs)
+        run: python scripts/build_frontend.py --out dist
+
+      - name: Import the serverless entrypoint
+        run: python -c "import api.index"
 
       - name: Run tests
         # The suite is hermetic — env is seeded in tests/__init__.py (no secrets,

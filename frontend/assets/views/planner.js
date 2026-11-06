@@ -40,7 +40,7 @@
     for (const name of names) {
       const parts = splitSummary(summaries[name]);
       const card = el(`<article class="panel-soft stack-sm"></article>`);
-      card.append(el(`<h3 style="font-family:var(--font-display);font-weight:700">${esc(name)}</h3>`));
+      card.append(el(`<h3 style="font-family:var(--font-display);font-weight:700;overflow-wrap:anywhere">${esc(name)}</h3>`));
       if (parts.topics !== undefined) {
         card.append(el(`<div class="label">Topics &amp; concepts</div>`));
         card.append(md(parts.topics));
@@ -67,15 +67,15 @@
         <div class="layout-aside">
           <aside class="panel stack" id="pl-controls">
             <div class="between" style="align-items:center;gap:.4rem">
-              <span style="font-family:var(--font-display);font-weight:700;font-size:1.05rem;letter-spacing:-.01em;color:hsl(var(--ink))">Planner</span>
-              <span class="row" style="gap:.35rem;flex:none">
-                <button id="pl-hist-plans" class="btn" type="button" style="padding:.4rem .7rem;font-size:.82rem">≡ Plans</button>
-                <button id="pl-hist-summaries" class="btn" type="button" style="padding:.4rem .7rem;font-size:.82rem">≡ Summaries</button>
+              <span style="font-family:var(--font-display);font-weight:700;font-size:1.05rem;letter-spacing:-.01em;color:hsl(var(--ink));min-width:0">Planner</span>
+              <span class="row row-wrap" style="gap:.35rem;flex:none;justify-content:flex-end">
+                <button id="pl-hist-plans" class="icon-btn ib-outline" type="button" aria-label="Open saved plans" title="Open saved plans">${window.ui.iconHtml("history")}</button>
+                <button id="pl-hist-summaries" class="icon-btn ib-outline" type="button" aria-label="Open saved summaries" title="Open saved summaries">${window.ui.iconHtml("history")}</button>
               </span>
             </div>
             <div class="field" style="margin:0">
-              <span class="label">Source</span>
-              <div class="seg" id="pl-src" role="tablist" aria-label="Plan source">
+              <span class="label" id="pl-src-label">Source</span>
+              <div class="seg" id="pl-src" role="tablist" aria-labelledby="pl-src-label" style="flex-wrap:wrap">
                 <button type="button" data-src="subject" aria-pressed="true">Subject</button>
                 <button type="button" data-src="topic" aria-pressed="false">Topic</button>
                 <button type="button" data-src="upload" aria-pressed="false">Upload PDF</button>
@@ -114,11 +114,14 @@
         wrap.append(el(`<div class="section-head" style="margin:0"><h3>${esc((saved && saved.title) || "Study plan")}</h3></div>`));
         const planBox = md((saved && saved.plan) || "");
         planBox.classList.add("panel", "day");
+        { const l = window.ui.renderModelLabel(saved && saved.llm, { stored: true }); if (l) wrap.append(l); }   // stored label, under the title
         wrap.append(planBox);
         showResults(wrap);
       }
       function openSavedSummary(saved) {
-        showResults(renderSummaries((saved && saved.summaries) || {}, (saved && saved.title) || "Summary"));
+        const w = renderSummaries((saved && saved.summaries) || {}, (saved && saved.title) || "Summary");
+        { const l = window.ui.renderModelLabel(saved && saved.llm, { stored: true }); if (l) w.insertBefore(l, w.children[1] || null); }
+        showResults(w);
       }
       root.querySelector("#pl-hist-plans").addEventListener("click", (e) =>
         window.ui.openHistoryDrawer("plans", { title: "Saved plans", anchor: e.currentTarget, onOpen: openSavedPlan }));
@@ -195,12 +198,12 @@
             clear(pdfList);
             for (const p of pdfs) {
               const row = el(`
-                <label class="row between" style="cursor:pointer;gap:.6rem">
-                  <span class="row" style="gap:.55rem">
-                    <input type="checkbox" value="${esc(p.name)}" />
-                    <span class="soft">${esc(p.name)}</span>
+                <label class="row between" style="cursor:pointer;gap:.6rem;min-width:0">
+                  <span class="row" style="gap:.55rem;min-width:0;flex:1">
+                    <input type="checkbox" value="${esc(p.name)}" aria-label="${esc(p.name)}" />
+                    <span class="soft" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.name)}">${esc(p.name)}</span>
                   </span>
-                  <span class="badge">${esc(p.pages)} pg</span>
+                  <span class="badge" style="flex:none">${esc(p.pages)} pg</span>
                 </label>
               `);
               row.querySelector("input").addEventListener("change", refreshCount);
@@ -243,12 +246,12 @@
       function buildUploadMode() {
         const wrap = el(`
           <div class="field" style="margin:0">
-            <label class="label">PDFs</label>
-            <div class="row row-wrap">
-              <label class="btn" for="pl-files" style="cursor:pointer">Choose PDF(s)…</label>
-              <span class="muted" id="pl-files-name">No files selected</span>
+            <label class="label" for="pl-files">PDFs</label>
+            <div class="row row-wrap" style="align-items:center">
+              <label class="btn" for="pl-files" style="cursor:pointer;flex:none">Choose PDF(s)…</label>
+              <span class="muted" id="pl-files-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">No files selected</span>
             </div>
-            <input id="pl-files" type="file" accept="application/pdf" multiple hidden />
+            <input id="pl-files" type="file" accept="application/pdf" multiple hidden aria-label="Upload PDFs for study plan" />
             <p class="hint">Upload one or more PDFs to plan around.</p>
           </div>`);
         srcCtl.append(wrap);
@@ -256,9 +259,11 @@
         const nameSlot = wrap.querySelector("#pl-files-name");
         input.addEventListener("change", () => {
           pdfFiles = input.files ? [...input.files] : [];
-          nameSlot.textContent = pdfFiles.length
+          const label = pdfFiles.length
             ? (pdfFiles.length === 1 ? pdfFiles[0].name : `${pdfFiles.length} files`)
             : "No files selected";
+          nameSlot.textContent = label;
+          nameSlot.title = pdfFiles.length === 1 ? pdfFiles[0].name : (pdfFiles.map((f) => f.name).join(", ") || "");
         });
       }
 
@@ -294,12 +299,14 @@
           const data = await window.api.post("/planner/summaries", { subject, pdfs, model: window.ui.selectedModel(root) });
           const summaries = data.summaries || {};
           if (!Object.keys(summaries).length) { showResults(empty("No summaries were produced.")); return; }
-          showResults(renderSummaries(summaries));
+          const sw = renderSummaries(summaries);
+          { const l = window.ui.renderModelLabel(data.llm); if (l) sw.insertBefore(l, sw.children[1] || null); }   // "Model: …" under the heading
+          showResults(sw);
           if (data.id) toast("Summary saved to history.", "ok");
           const __hp = document.querySelector('.history-panel[data-kind="summaries"]');
           if (__hp && __hp.refresh) __hp.refresh();
         } catch (e) {
-          showResults(empty("Couldn’t generate summaries.", "⚠"));
+          showResults(window.ui.errorBlock(e, e.retryable ? () => previewBtn.click() : null));
           toast("Summaries failed: " + e.message, "error");
         } finally {
           setBusy(false);
@@ -347,9 +354,10 @@
 
           const wrap = el(`<div class="stack"></div>`);
           const head = el(`<div class="between"><div class="section-head" style="margin:0"><h3>Your study plan</h3></div></div>`);
-          const dl = el(`<button class="btn-ghost" type="button">Download .md</button>`);
+          const dl = window.ui.iconBtn({ icon: "download", label: "Download as Markdown (.md)", cls: "ib-outline" });
+          const planModel = data.llm && data.llm.label ? "\n\n---\n*" + data.llm.label + "*\n" : "";
           dl.addEventListener("click", () => {
-            const blob = new Blob([plan], { type: "text/markdown" });
+            const blob = new Blob([plan + planModel], { type: "text/markdown" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
@@ -360,6 +368,7 @@
           });
           head.append(dl);
           wrap.append(head);
+          { const l = window.ui.renderModelLabel(data.llm); if (l) wrap.append(l); }   // "Model: …" directly under the title
           const planBox = md(plan);
           planBox.classList.add("panel", "day");
           wrap.append(planBox);
@@ -367,7 +376,7 @@
           const __hp = document.querySelector('.history-panel[data-kind="plans"]');
           if (__hp && __hp.refresh) __hp.refresh();
         } catch (e) {
-          showResults(empty("Couldn’t generate the plan.", "⚠"));
+          showResults(window.ui.errorBlock(e, e.retryable ? () => generateBtn.click() : null));
           toast("Plan failed: " + e.message, "error");
         } finally {
           setBusy(false);
