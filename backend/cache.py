@@ -226,6 +226,8 @@ _fails = 0
 _open_until = 0.0
 _resolved = False
 stats = {"ok": 0, "fail": 0, "skipped_open": 0, "opened": 0}
+_last_ms = 0.0                   # duration of the most recent successful shared-cache call
+_last_error = ""                 # exception type / short Upstash error text of the most recent failure (no secrets)
 
 
 def _timeout_s() -> float:
@@ -233,7 +235,11 @@ def _timeout_s() -> float:
         ms = float(os.environ.get("CACHE_TIMEOUT_MS", "120"))
     except ValueError:
         ms = 120.0
-    return max(20.0, min(ms, 150.0)) / 1000.0
+    try:
+        cap = float(os.environ.get("CACHE_TIMEOUT_MAX_MS", "150"))   # product cap; raise only to diagnose a far-away Redis
+    except ValueError:
+        cap = 150.0
+    return max(20.0, min(ms, max(20.0, min(cap, 1000.0)))) / 1000.0
 
 
 def _resolve() -> None:
@@ -262,6 +268,8 @@ def configure(backend: Any, shared: bool) -> None:
     with _lock:
         _backend, _shared, _resolved = backend, shared, True
         _fails, _open_until = 0, 0.0
+    global _last_error, _last_ms
+    _last_error, _last_ms = "", 0.0
     for k in stats:
         stats[k] = 0
     _maps.clear()
@@ -291,7 +299,8 @@ def backend_name() -> str:
 def status() -> dict:
     if not _resolved:
         _resolve()
-    return {"backend": backend_name(), "shared": _shared, "breaker_open": time.monotonic() < _open_until, **stats}
+    return {"backend": backend_name(), "shared": _shared, "breaker_open": time.monotonic() < _open_until,
+            "last_error": _last_error, "last_ms": _last_ms, "timeout_ms": int(_timeout_s() * 1000), **stats}
 
 
 def _run(commands: list[list]) -> list | None:
@@ -301,10 +310,14 @@ def _run(commands: list[list]) -> list | None:
         if _shared:
             stats["skipped_open"] += 1
         return None
+    global _last_ms
+    t0 = time.monotonic()
     try:
         res = _backend.execute(commands)
     except Exception as exc:  # noqa: BLE001
         stats["fail"] += 1
+        global _last_error
+        _last_error = (str(exc) or type(exc).__name__)[:80]
         with _lock:
             _fails += 1
             if _fails >= _FAIL_THRESHOLD:
@@ -315,6 +328,7 @@ def _run(commands: list[list]) -> list | None:
                 _fails = _FAIL_THRESHOLD - 1          # one failed probe re-opens immediately
         return None
     stats["ok"] += 1
+    _last_ms = round((time.monotonic() - t0) * 1000.0, 1)
     with _lock:
         _fails = 0
     return res

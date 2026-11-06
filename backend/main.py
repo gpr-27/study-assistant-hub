@@ -347,6 +347,12 @@ def health_deep() -> JSONResponse:
                                                 "anthropic_skipped_today", "warn", "exhausted", "store")}
     except Exception as exc:  # noqa: BLE001
         checks["budgets"] = {"ok": False, "error": type(exc).__name__}
+    try:   # informational: which cache backend is live (memory vs shared Redis), breaker state and counters only
+        from backend import cache as _cache
+        cs = _cache.status()
+        checks["cache"] = {k: v for k, v in cs.items() if isinstance(v, (bool, int, float)) or k in ("backend", "last_error")}
+    except Exception as exc:  # noqa: BLE001
+        checks["cache"] = {"ok": False, "error": type(exc).__name__}
     return JSONResponse(status_code=200 if ok else 503, content={"status": "ok" if ok else "degraded", "checks": checks})
 
 
